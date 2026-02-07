@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#6366f1"/>
+    </marker>
+    <linearGradient id="headerGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <marker id="arrow-refine" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#d97706"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="520" rx="12" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="450" y="36" text-anchor="middle" font-size="18" font-weight="700" fill="#1e293b">Consensus Pipeline</text>
+
+  <!-- Step 1: Agent box -->
+  <rect x="30" y="70" width="130" height="60" rx="8" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="95" y="96" text-anchor="middle" font-size="11" font-weight="600" fill="#334155">Agent</text>
+  <text x="95" y="114" text-anchor="middle" font-size="10" fill="#64748b">needs decision</text>
+
+  <!-- Arrow to prompt building -->
+  <line x1="160" y1="100" x2="195" y2="100" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Step 2: Prompt Building -->
+  <rect x="200" y="60" width="140" height="80" rx="8" fill="#eef2ff" stroke="#a5b4fc" stroke-width="1.5"/>
+  <text x="270" y="88" text-anchor="middle" font-size="11" font-weight="600" fill="#3730a3">Prompt Building</text>
+  <text x="270" y="104" text-anchor="middle" font-size="9" fill="#6366f1">prompt fields</text>
+  <text x="270" y="118" text-anchor="middle" font-size="9" fill="#6366f1">+ action schema</text>
+  <text x="270" y="132" text-anchor="middle" font-size="9" fill="#6366f1">+ capability filter</text>
+
+  <!-- Fan-out arrows -->
+  <line x1="340" y1="82" x2="415" y2="195" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="340" y1="100" x2="415" y2="275" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="340" y1="118" x2="415" y2="355" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- "parallel queries" label - centered on right edge of Prompt Building box -->
+  <text x="340" y="248" text-anchor="middle" font-size="9" fill="#94a3b8" font-style="italic">parallel queries</text>
+
+  <!-- Model boxes -->
+  <!-- Model A -->
+  <rect x="420" y="175" width="130" height="50" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="485" y="198" text-anchor="middle" font-size="11" font-weight="600" fill="#92400e">Model A</text>
+  <text x="485" y="214" text-anchor="middle" font-size="9" fill="#b45309">spawn_child "DevOps"</text>
+
+  <!-- Model B -->
+  <rect x="420" y="255" width="130" height="50" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="485" y="278" text-anchor="middle" font-size="11" font-weight="600" fill="#1e3a8a">Model B</text>
+  <text x="485" y="294" text-anchor="middle" font-size="9" fill="#1d4ed8">spawn_child "DevOps"</text>
+
+  <!-- Model C -->
+  <rect x="420" y="335" width="130" height="50" rx="8" fill="#dcfce7" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="485" y="358" text-anchor="middle" font-size="11" font-weight="600" fill="#14532d">Model C</text>
+  <text x="485" y="374" text-anchor="middle" font-size="9" fill="#15803d">call_api "/deploy"</text>
+
+  <!-- Arrows to clustering -->
+  <line x1="550" y1="200" x2="605" y2="265" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="550" y1="280" x2="605" y2="280" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="550" y1="360" x2="605" y2="295" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Step 4: Fingerprint Clustering -->
+  <rect x="610" y="245" width="130" height="70" rx="8" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="675" y="268" text-anchor="middle" font-size="11" font-weight="600" fill="#334155">Clustering</text>
+
+  <!-- Cluster visualization -->
+  <rect x="622" y="278" width="55" height="28" rx="4" fill="#eef2ff" stroke="#a5b4fc" stroke-width="1"/>
+  <text x="649" y="296" text-anchor="middle" font-size="9" font-weight="600" fill="#4338ca">A + B</text>
+
+  <rect x="684" y="278" width="45" height="28" rx="4" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1"/>
+  <text x="706" y="296" text-anchor="middle" font-size="9" fill="#64748b">C</text>
+
+  <!-- Refinement arrow: Clustering back to right side of Prompt Building, above fan-out arrows -->
+  <path d="M 675,245 L 675,79 Q 675,72 668,72 L 348,72"
+        fill="none" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-refine)"/>
+  <text x="507" y="66" text-anchor="middle" font-size="9" fill="#d97706" font-style="italic">no consensus → refine</text>
+
+  <!-- Arrow to winner -->
+  <line x1="740" y1="280" x2="775" y2="280" stroke="#6366f1" stroke-width="2" marker-end="url(#arrow-accent)"/>
+
+  <!-- Step 5: Winner -->
+  <rect x="780" y="250" width="100" height="60" rx="8" fill="url(#headerGrad)" stroke="none"/>
+  <text x="830" y="276" text-anchor="middle" font-size="11" font-weight="700" fill="white">Winner</text>
+  <text x="830" y="296" text-anchor="middle" font-size="9" fill="#e0e7ff">spawn_child</text>
+
+  <!-- Arrow down to execution -->
+  <line x1="830" y1="310" x2="830" y2="350" stroke="#6366f1" stroke-width="2" marker-end="url(#arrow-accent)"/>
+
+  <!-- Step 6: Execution -->
+  <rect x="770" y="355" width="120" height="50" rx="8" fill="#ecfdf5" stroke="#34d399" stroke-width="1.5"/>
+  <text x="830" y="378" text-anchor="middle" font-size="11" font-weight="600" fill="#065f46">Execute</text>
+  <text x="830" y="394" text-anchor="middle" font-size="9" fill="#047857">ephemeral Router</text>
+
+  <!-- Loop arrow back to agent - routed below all content -->
+  <path d="M 830,405 L 830,470 Q 830,490 810,490 L 70,490 Q 50,490 50,470 L 50,140"
+        fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arrow)"/>
+  <text x="430" y="485" text-anchor="middle" font-size="9" fill="#94a3b8" font-style="italic">result flows back as message; next consensus cycle</text>
+
+  <!-- Legend -->
+  <rect x="560" y="427" width="320" height="58" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="575" y="446" font-size="10" font-weight="600" fill="#475569">2/3 agree on spawn_child → execute</text>
+  <text x="575" y="462" font-size="9" fill="#d97706">No majority → refine prompts, re-query models</text>
+  <text x="575" y="478" font-size="9" fill="#64748b">Ties broken by multi-level scoring.</text>
+</svg>

@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+env:
+  MIX_ENV: prod
+  ELIXIR_VERSION: "1.18.3"
+  OTP_VERSION: "27"
+
+jobs:
+  build:
+    name: Build Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify version matches tag
+        run: |
+          MIX_VERSION=$(grep -oP 'version: "\K[^"]+' mix.exs)
+          TAG="${GITHUB_REF_NAME}"
+          if [ "v$MIX_VERSION" != "$TAG" ]; then
+            echo "::error::mix.exs version ($MIX_VERSION) doesn't match tag ($TAG)"
+            exit 1
+          fi
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Install dependencies
+        run: mix deps.get --only prod
+
+      - name: Compile
+        run: mix compile
+
+      - name: Build assets
+        run: mix assets.deploy
+
+      - name: Bundle .env.example into release
+        run: cp .env.example rel/overlays/.env.example
+
+      - name: Build release
+        run: mix release
+
+      - name: Upload release tarball
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(grep -oP 'version: "\K[^"]+' mix.exs)
+          TARBALL="_build/prod/quoracle-${VERSION}.tar.gz"
+          gh release upload "$GITHUB_REF_NAME" "$TARBALL" --clobber

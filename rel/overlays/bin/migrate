@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+cd -P -- "$(dirname -- "$0")/.."
+
+# Load environment from .env if present
+if [ -f .env ]; then
+  set -a
+  . ./.env
+  set +a
+fi
+
+exec ./bin/quoracle eval "Quoracle.Release.create(); Quoracle.Release.migrate()"

@@ -1,0 +1,119 @@
+{
+  "interactions": [
+    {
+      "recorded_at": "2025-12-02T22:27:27.206744Z",
+      "request": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "accept": [
+            "application/json"
+          ],
+          "accept-encoding": [
+            "gzip"
+          ],
+          "user-agent": [
+            "req/0.5.15"
+          ]
+        },
+        "method": "GET",
+        "query_string": "",
+        "uri": "https://httpbin.org/redirect/2"
+      },
+      "response": {
+        "body_json": {
+          "args": {},
+          "headers": {
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "Host": "httpbin.org",
+            "User-Agent": "req/0.5.15",
+            "X-Amzn-Trace-Id": "Root=1-692f67cf-228bdadd257283bf7cb748b6"
+          },
+          "origin": "203.0.113.1",
+          "url": "https://httpbin.org/get"
+        },
+        "body_type": "json",
+        "headers": {
+          "access-control-allow-credentials": [
+            "true"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "date": [
+            "Tue, 02 Dec 2025 22:27:27 GMT"
+          ],
+          "server": [
+            "gunicorn/19.9.0"
+          ]
+        },
+        "status": 200
+      }
+    },
+    {
+      "recorded_at": "2026-01-17T02:12:50.542211Z",
+      "request": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "accept": [
+            "application/json"
+          ],
+          "accept-encoding": [
+            "gzip"
+          ],
+          "user-agent": [
+            "req/0.5.17"
+          ]
+        },
+        "method": "GET",
+        "query_string": "",
+        "uri": "https://httpbin.org/redirect/2"
+      },
+      "response": {
+        "body_json": {
+          "args": {},
+          "headers": {
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "Host": "httpbin.org",
+            "User-Agent": "req/0.5.17",
+            "X-Amzn-Trace-Id": "Root=1-696af022-7cfac5a94be705af0223083e"
+          },
+          "origin": "203.0.113.1",
+          "url": "https://httpbin.org/get"
+        },
+        "body_type": "json",
+        "headers": {
+          "access-control-allow-credentials": [
+            "true"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "date": [
+            "Sat, 17 Jan 2026 02:12:50 GMT"
+          ],
+          "server": [
+            "gunicorn/19.9.0"
+          ]
+        },
+        "status": 200
+      }
+    }
+  ],
+  "version": "1.0"
+}

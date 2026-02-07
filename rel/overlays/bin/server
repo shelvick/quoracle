@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+cd -P -- "$(dirname -- "$0")/.."
+
+# Load environment from .env if present
+if [ -f .env ]; then
+  set -a
+  . ./.env
+  set +a
+fi
+
+./bin/migrate
+exec ./bin/quoracle start
