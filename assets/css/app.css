@@ -1,0 +1,52 @@
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+
+/* This file is for your main application CSS */
+
+/* Secret Management page styles */
+.tab {
+  @apply py-2 px-4 border-b-2 border-transparent text-gray-600 hover:text-gray-800 cursor-pointer;
+}
+.tab-active {
+  @apply border-blue-500 text-blue-600 font-medium;
+}
+.btn-primary {
+  @apply bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 font-medium;
+}
+.btn-secondary {
+  @apply bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300 font-medium;
+}
+.badge {
+  @apply inline-block px-2 py-1 text-xs font-semibold rounded mr-2;
+}
+.badge-blue {
+  @apply bg-blue-100 text-blue-800;
+}
+.badge-green {
+  @apply bg-green-100 text-green-800;
+}
+.item {
+  @apply p-3 border rounded-lg bg-white shadow-sm hover:shadow-md transition-shadow;
+}
+.modal {
+  @apply fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white p-6 rounded-lg shadow-xl z-50 min-w-96 space-y-3;
+}
+.modal input:not([type="checkbox"]), .modal select {
+  @apply w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500;
+}
+.modal button {
+  @apply px-4 py-2 rounded font-medium mr-2;
+}
+.modal button[type="submit"] {
+  @apply bg-blue-600 text-white hover:bg-blue-700;
+}
+.modal button[type="button"] {
+  @apply bg-gray-200 text-gray-700 hover:bg-gray-300;
+}
+.modal-backdrop {
+  @apply fixed inset-0 bg-black bg-opacity-50 z-40;
+}
+.error-message {
+  @apply text-red-600 text-sm;
+}

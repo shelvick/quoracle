@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 480" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#64748b"/>
+    </marker>
+    <marker id="arr-bidir-l" markerWidth="8" markerHeight="6" refX="0" refY="3" orient="auto">
+      <path d="M8,0 L0,3 L8,6 Z" fill="#6366f1"/>
+    </marker>
+    <marker id="arr-bidir-r" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#6366f1"/>
+    </marker>
+    <linearGradient id="rootGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#4f46e5"/>
+    </linearGradient>
+    <linearGradient id="childGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="grandGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#a78bfa"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="480" rx="12" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="450" y="36" text-anchor="middle" font-size="18" font-weight="700" fill="#1e293b">Recursive Agent Hierarchy</text>
+
+  <!-- ============================================================ -->
+  <!-- USER                                                         -->
+  <!-- ============================================================ -->
+  <rect x="375" y="58" width="150" height="44" rx="8" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="450" y="78" text-anchor="middle" font-size="11" font-weight="600" fill="#334155">User</text>
+  <text x="450" y="93" text-anchor="middle" font-size="9" fill="#64748b">creates task via dashboard</text>
+
+  <!-- Arrow user to root -->
+  <line x1="450" y1="102" x2="450" y2="132" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ============================================================ -->
+  <!-- ROOT AGENT                                                   -->
+  <!-- ============================================================ -->
+  <rect x="310" y="137" width="280" height="70" rx="10" fill="url(#rootGrad)"/>
+  <text x="450" y="161" text-anchor="middle" font-size="13" font-weight="700" fill="white">Root Agent</text>
+  <text x="450" y="178" text-anchor="middle" font-size="10" fill="#c7d2fe">"Project Manager"</text>
+  <text x="450" y="196" text-anchor="middle" font-size="9" fill="#a5b4fc">budget: $5.00 | profile: Full Access</text>
+
+  <!-- ============================================================ -->
+  <!-- SPAWN ARROWS: root -> children (solid, unidirectional)       -->
+  <!-- ============================================================ -->
+  <path d="M 380,207 L 230,262" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <path d="M 520,207 L 670,262" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ============================================================ -->
+  <!-- MESSAGE ARROWS: root <-> children (dashed, bidirectional)    -->
+  <!-- ============================================================ -->
+  <path d="M 400,207 Q 330,240 270,262" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="5,3"
+        marker-start="url(#arr-bidir-l)" marker-end="url(#arr-bidir-r)"/>
+  <path d="M 500,207 Q 570,240 630,262" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="5,3"
+        marker-start="url(#arr-bidir-l)" marker-end="url(#arr-bidir-r)"/>
+
+  <!-- ============================================================ -->
+  <!-- CHILD AGENTS                                                 -->
+  <!-- ============================================================ -->
+
+  <!-- Child A: Backend -->
+  <rect x="100" y="267" width="260" height="70" rx="10" fill="url(#childGrad)"/>
+  <text x="230" y="291" text-anchor="middle" font-size="12" font-weight="700" fill="white">Child Agent</text>
+  <text x="230" y="308" text-anchor="middle" font-size="10" fill="#ddd6fe">"Backend Engineer"</text>
+  <text x="230" y="325" text-anchor="middle" font-size="9" fill="#c4b5fd">budget: $2.00 | profile: Builder</text>
+
+  <!-- Child B: Frontend -->
+  <rect x="540" y="267" width="260" height="70" rx="10" fill="url(#childGrad)"/>
+  <text x="670" y="291" text-anchor="middle" font-size="12" font-weight="700" fill="white">Child Agent</text>
+  <text x="670" y="308" text-anchor="middle" font-size="10" fill="#ddd6fe">"Frontend Engineer"</text>
+  <text x="670" y="325" text-anchor="middle" font-size="9" fill="#c4b5fd">budget: $2.00 | profile: Builder</text>
+
+  <!-- ============================================================ -->
+  <!-- GRANDCHILD SPAWNS + MESSAGES                                 -->
+  <!-- ============================================================ -->
+  <path d="M 175,337 L 105,375" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <path d="M 285,337 L 335,375" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <path d="M 195,337 Q 165,357 125,375" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="5,3"
+        marker-start="url(#arr-bidir-l)" marker-end="url(#arr-bidir-r)"/>
+  <path d="M 265,337 Q 290,357 315,375" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="5,3"
+        marker-start="url(#arr-bidir-l)" marker-end="url(#arr-bidir-r)"/>
+
+  <!-- ============================================================ -->
+  <!-- GRANDCHILD AGENTS                                            -->
+  <!-- ============================================================ -->
+
+  <!-- Grandchild A1: DB Specialist -->
+  <rect x="15" y="380" width="190" height="60" rx="8" fill="url(#grandGrad)"/>
+  <text x="110" y="403" text-anchor="middle" font-size="11" font-weight="600" fill="white">Grandchild</text>
+  <text x="110" y="420" text-anchor="middle" font-size="9" fill="#ede9fe">"Database Specialist"</text>
+  <text x="110" y="434" text-anchor="middle" font-size="9" fill="#ddd6fe">budget: $0.50 | profile: Builder</text>
+
+  <!-- Grandchild A2: API Designer -->
+  <rect x="235" y="380" width="190" height="60" rx="8" fill="url(#grandGrad)"/>
+  <text x="330" y="403" text-anchor="middle" font-size="11" font-weight="600" fill="white">Grandchild</text>
+  <text x="330" y="420" text-anchor="middle" font-size="9" fill="#ede9fe">"API Designer"</text>
+  <text x="330" y="434" text-anchor="middle" font-size="9" fill="#ddd6fe">budget: $0.50 | profile: Researcher</text>
+
+  <!-- ============================================================ -->
+  <!-- LEGEND                                                       -->
+  <!-- ============================================================ -->
+  <rect x="540" y="370" width="340" height="90" rx="8" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- Solid arrow legend -->
+  <line x1="557" y1="394" x2="597" y2="394" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="607" y="398" font-size="10" fill="#475569">spawn_child (sets budget, inherits context)</text>
+
+  <!-- Dashed bidirectional legend -->
+  <line x1="557" y1="418" x2="597" y2="418" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="5,3"
+        marker-start="url(#arr-bidir-l)" marker-end="url(#arr-bidir-r)"/>
+  <text x="607" y="422" font-size="10" fill="#475569">send_message (parent and child, bidirectional)</text>
+
+  <text x="557" y="448" font-size="9" fill="#64748b">Global context and constraints propagate down.</text>
+</svg>

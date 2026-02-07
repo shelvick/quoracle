@@ -1,0 +1,95 @@
+{
+  "interactions": [
+    {
+      "recorded_at": "2025-12-02T16:05:32.956698Z",
+      "request": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "accept-encoding": [
+            "gzip"
+          ],
+          "user-agent": [
+            "CustomBot/2.0"
+          ]
+        },
+        "method": "GET",
+        "query_string": "",
+        "uri": "http://httpbin.org/user-agent"
+      },
+      "response": {
+        "body_json": {
+          "user-agent": "CustomBot/2.0"
+        },
+        "body_type": "json",
+        "headers": {
+          "access-control-allow-credentials": [
+            "true"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "date": [
+            "Tue, 02 Dec 2025 16:05:33 GMT"
+          ],
+          "server": [
+            "gunicorn/19.9.0"
+          ]
+        },
+        "status": 200
+      }
+    },
+    {
+      "recorded_at": "2026-02-07T01:43:35.515642Z",
+      "request": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "accept-encoding": [
+            "gzip"
+          ],
+          "user-agent": [
+            "req/0.5.17"
+          ]
+        },
+        "method": "GET",
+        "query_string": "",
+        "uri": "http://httpbin.org/user-agent"
+      },
+      "response": {
+        "body_json": {
+          "user-agent": "req/0.5.17"
+        },
+        "body_type": "json",
+        "headers": {
+          "access-control-allow-credentials": [
+            "true"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "date": [
+            "Sat, 07 Feb 2026 01:43:35 GMT"
+          ],
+          "server": [
+            "gunicorn/19.9.0"
+          ]
+        },
+        "status": 200
+      }
+    }
+  ],
+  "version": "1.0"
+}

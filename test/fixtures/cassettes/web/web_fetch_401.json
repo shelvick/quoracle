@@ -1,0 +1,97 @@
+{
+  "interactions": [
+    {
+      "recorded_at": "2025-12-02T16:05:16.800220Z",
+      "request": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "accept-encoding": [
+            "gzip"
+          ],
+          "user-agent": [
+            "Quoracle/1.0"
+          ]
+        },
+        "method": "GET",
+        "query_string": "",
+        "uri": "http://httpbin.org/status/401"
+      },
+      "response": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "access-control-allow-credentials": [
+            "true"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-length": [
+            "0"
+          ],
+          "date": [
+            "Tue, 02 Dec 2025 16:05:16 GMT"
+          ],
+          "server": [
+            "gunicorn/19.9.0"
+          ],
+          "www-authenticate": [
+            "Basic realm=\"Fake Realm\""
+          ]
+        },
+        "status": 401
+      }
+    },
+    {
+      "recorded_at": "2026-02-07T01:43:43.248462Z",
+      "request": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "accept-encoding": [
+            "gzip"
+          ],
+          "user-agent": [
+            "req/0.5.17"
+          ]
+        },
+        "method": "GET",
+        "query_string": "",
+        "uri": "http://httpbin.org/status/401"
+      },
+      "response": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "access-control-allow-credentials": [
+            "true"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-length": [
+            "0"
+          ],
+          "date": [
+            "Sat, 07 Feb 2026 01:43:43 GMT"
+          ],
+          "server": [
+            "gunicorn/19.9.0"
+          ],
+          "www-authenticate": [
+            "Basic realm=\"Fake Realm\""
+          ]
+        },
+        "status": 401
+      }
+    }
+  ],
+  "version": "1.0"
+}

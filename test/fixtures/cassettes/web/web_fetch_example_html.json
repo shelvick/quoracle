@@ -1,0 +1,112 @@
+{
+  "interactions": [
+    {
+      "recorded_at": "2025-12-02T16:05:31.099950Z",
+      "request": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "accept-encoding": [
+            "gzip"
+          ],
+          "user-agent": [
+            "Quoracle/1.0"
+          ]
+        },
+        "method": "GET",
+        "query_string": "",
+        "uri": "https://example.com"
+      },
+      "response": {
+        "body": "<!doctype html><html lang=\"en\"><head><title>Example Domain</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><style>body{background:#eee;width:60vw;margin:15vh auto;font-family:system-ui,sans-serif}h1{font-size:1.5em}div{opacity:0.8}a:link,a:visited{color:#348}</style><body><div><h1>Example Domain</h1><p>This domain is for use in documentation examples without needing permission. Avoid use in operations.<p><a href=\"https://iana.org/domains/example\">Learn more</a></div></body></html>\n",
+        "body_type": "text",
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "alt-svc": [
+            "h3=\":443\"; ma=93600"
+          ],
+          "cache-control": [
+            "max-age=86000"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-type": [
+            "text/html"
+          ],
+          "date": [
+            "Tue, 02 Dec 2025 16:05:31 GMT"
+          ],
+          "etag": [
+            "\"bc2473a18e003bdb249eba5ce893033f:1760028122.592274\""
+          ],
+          "last-modified": [
+            "Thu, 09 Oct 2025 16:42:02 GMT"
+          ]
+        },
+        "status": 200
+      }
+    },
+    {
+      "recorded_at": "2026-02-07T01:43:43.403673Z",
+      "request": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "accept-encoding": [
+            "gzip"
+          ],
+          "user-agent": [
+            "req/0.5.17"
+          ]
+        },
+        "method": "GET",
+        "query_string": "",
+        "uri": "https://example.com"
+      },
+      "response": {
+        "body": "<!doctype html><html lang=\"en\"><head><title>Example Domain</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><style>body{background:#eee;width:60vw;margin:15vh auto;font-family:system-ui,sans-serif}h1{font-size:1.5em}div{opacity:0.8}a:link,a:visited{color:#348}</style><body><div><h1>Example Domain</h1><p>This domain is for use in documentation examples without needing permission. Avoid use in operations.<p><a href=\"https://iana.org/domains/example\">Learn more</a></div></body></html>\n",
+        "body_type": "text",
+        "headers": {
+          "age": [
+            "6827"
+          ],
+          "allow": [
+            "GET, HEAD"
+          ],
+          "cf-cache-status": [
+            "HIT"
+          ],
+          "cf-ray": [
+            "9c9f32b078b18815-EWR"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-type": [
+            "text/html"
+          ],
+          "date": [
+            "Sat, 07 Feb 2026 01:43:43 GMT"
+          ],
+          "last-modified": [
+            "Wed, 04 Feb 2026 05:22:19 GMT"
+          ],
+          "server": [
+            "cloudflare"
+          ],
+          "transfer-encoding": [
+            "chunked"
+          ],
+          "vary": [
+            "Accept-Encoding"
+          ]
+        },
+        "status": 200
+      }
+    }
+  ],
+  "version": "1.0"
+}

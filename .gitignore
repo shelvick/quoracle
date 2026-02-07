@@ -1,0 +1,57 @@
+# The directory Mix will write compiled artifacts to.
+/_build/
+
+# If you run "mix test --cover", coverage assets end up here.
+/cover/
+
+# The directory Mix downloads your dependencies sources to.
+/deps/
+
+# Where third-party dependencies like ExDoc output generated docs.
+/doc/
+
+# If the VM crashes, it generates a dump, let's ignore it too.
+erl_crash.dump
+
+# Also ignore archive artifacts (built via "mix archive.build").
+*.ez
+
+# Ignore package tarball (built via "mix hex.build").
+quoracle-*.tar
+
+# Temporary files, for example, from tests.
+/tmp/
+
+# Claude Code local settings overrides
+.claude/settings.local.json
+
+# Claude phase-review temporary files
+.claude/.diffs
+.claude/.commit_approved
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Elixir Language Server
+.elixir_ls/
+
+# Dialyzer PLT files
+priv/plts/
+
+# Since we are building assets from assets/,
+# we ignore priv/static/assets. You may want to
+# comment this depending on your deployment strategy.
+/priv/static/assets/
+/priv/static/cache_manifest.json
+/priv/static/uploads/
+
+# npm dependencies (if you ever add them)
+/assets/node_modules/
+
+# Docker environment (contains secrets)
+.env

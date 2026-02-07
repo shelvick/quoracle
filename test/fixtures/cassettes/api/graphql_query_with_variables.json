@@ -1,0 +1,229 @@
+{
+  "interactions": [
+    {
+      "recorded_at": "2025-12-02T22:28:08.415155Z",
+      "request": {
+        "body_json": {
+          "query": "query GetCountry($code: ID!) {\n  country(code: $code) {\n    name\n    capital\n  }\n}\n",
+          "variables": {
+            "code": "CA"
+          }
+        },
+        "body_type": "json",
+        "headers": {
+          "accept": [
+            "application/json"
+          ],
+          "accept-encoding": [
+            "gzip"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "user-agent": [
+            "req/0.5.15"
+          ]
+        },
+        "method": "POST",
+        "query_string": "",
+        "uri": "https://countries.trevorblades.com/graphql"
+      },
+      "response": {
+        "body_json": {
+          "data": {
+            "country": {
+              "capital": "Ottawa",
+              "name": "Canada"
+            }
+          }
+        },
+        "body_type": "json",
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "access-control-allow-credentials": [
+            "true"
+          ],
+          "access-control-allow-headers": [
+            "*"
+          ],
+          "access-control-allow-methods": [
+            "POST, GET, HEAD, OPTIONS"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "*"
+          ],
+          "access-control-max-age": [
+            "600"
+          ],
+          "age": [
+            "25601"
+          ],
+          "alt-svc": [
+            "h3=\":443\"; ma=86400"
+          ],
+          "cache-control": [
+            "public, s-maxage=2628000, stale-while-revalidate=2628000"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Tue, 02 Dec 2025 15:21:28 GMT"
+          ],
+          "gcdn-cache": [
+            "HIT"
+          ],
+          "stellate-rate-limit-budget-remaining": [
+            "48"
+          ],
+          "stellate-rate-limit-budget-required": [
+            "6"
+          ],
+          "stellate-rate-limit-decision": [
+            "pass"
+          ],
+          "stellate-rate-limit-rules": [
+            "\"IP limit\";type=\"RequestCount\";budget=50;limited=?0;remaining=48;refill=42"
+          ],
+          "vary": [
+            "accept-encoding"
+          ],
+          "x-cache": [
+            "HIT"
+          ],
+          "x-cache-hits": [
+            "1"
+          ],
+          "x-powered-by": [
+            "Stellate"
+          ],
+          "x-served-by": [
+            "cache-ewr-kewr1740088-EWR"
+          ]
+        },
+        "status": 200
+      }
+    },
+    {
+      "recorded_at": "2026-01-17T02:12:42.124192Z",
+      "request": {
+        "body_json": {
+          "query": "query GetCountry($code: ID!) {\n  country(code: $code) {\n    name\n    capital\n  }\n}\n",
+          "variables": {
+            "code": "CA"
+          }
+        },
+        "body_type": "json",
+        "headers": {
+          "accept": [
+            "application/json"
+          ],
+          "accept-encoding": [
+            "gzip"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "user-agent": [
+            "req/0.5.17"
+          ]
+        },
+        "method": "POST",
+        "query_string": "",
+        "uri": "https://countries.trevorblades.com/graphql"
+      },
+      "response": {
+        "body_json": {
+          "data": {
+            "country": {
+              "capital": "Ottawa",
+              "name": "Canada"
+            }
+          }
+        },
+        "body_type": "json",
+        "headers": {
+          "accept-ranges": [
+            "bytes"
+          ],
+          "access-control-allow-credentials": [
+            "true"
+          ],
+          "access-control-allow-headers": [
+            "*"
+          ],
+          "access-control-allow-methods": [
+            "POST, GET, HEAD, OPTIONS"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "*"
+          ],
+          "access-control-max-age": [
+            "600"
+          ],
+          "age": [
+            "1"
+          ],
+          "alt-svc": [
+            "h3=\":443\"; ma=86400"
+          ],
+          "cache-control": [
+            "public, s-maxage=2628000, stale-while-revalidate=2628000"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Sat, 17 Jan 2026 02:12:42 GMT"
+          ],
+          "gcdn-cache": [
+            "MISS"
+          ],
+          "stellate-rate-limit-budget-remaining": [
+            "49"
+          ],
+          "stellate-rate-limit-budget-required": [
+            "6"
+          ],
+          "stellate-rate-limit-decision": [
+            "pass"
+          ],
+          "stellate-rate-limit-rules": [
+            "\"IP limit\";type=\"RequestCount\";budget=50;limited=?0;remaining=49;refill=60"
+          ],
+          "vary": [
+            "accept-encoding"
+          ],
+          "x-cache": [
+            "MISS"
+          ],
+          "x-cache-hits": [
+            "0"
+          ],
+          "x-powered-by": [
+            "Stellate"
+          ],
+          "x-served-by": [
+            "cache-ewr-kewr1740039-EWR"
+          ]
+        },
+        "status": 200
+      }
+    }
+  ],
+  "version": "1.0"
+}

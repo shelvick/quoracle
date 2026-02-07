@@ -1,0 +1,23 @@
+<header class="px-4 sm:px-6 lg:px-8">
+  <div class="flex items-center justify-between border-b border-zinc-100 py-3 text-sm">
+    <div class="flex items-center gap-4">
+      <a href="/">
+        <p class="bg-brand/5 text-brand rounded-full px-2 font-medium leading-6">
+          Quoracle
+        </p>
+      </a>
+    </div>
+    <div class="flex items-center gap-4">
+      <a href="/settings" class="text-zinc-500 hover:text-zinc-700 flex items-center gap-1">
+        <.icon name="hero-cog-6-tooth" class="h-5 w-5" />
+        <span class="text-sm">Settings</span>
+      </a>
+    </div>
+  </div>
+</header>
+<main class="px-4 py-4 sm:px-6 lg:px-8">
+  <div class="w-full">
+    <.flash_group flash={@flash} />
+    <%= @inner_content %>
+  </div>
+</main>

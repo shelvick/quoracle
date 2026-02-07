@@ -1,0 +1,189 @@
+{
+  "interactions": [
+    {
+      "recorded_at": "2025-12-02T22:27:27.271376Z",
+      "request": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "accept": [
+            "application/json"
+          ],
+          "accept-encoding": [
+            "gzip"
+          ],
+          "nil": [
+            "Bearer test-token-12345"
+          ],
+          "user-agent": [
+            "req/0.5.15"
+          ]
+        },
+        "method": "GET",
+        "query_string": "",
+        "uri": "https://api.github.com/user"
+      },
+      "response": {
+        "body_json": {
+          "documentation_url": "https://docs.github.com/rest",
+          "message": "Requires authentication",
+          "status": "401"
+        },
+        "body_type": "json",
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Tue, 02 Dec 2025 22:27:27 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-media-type": [
+            "github.v3; format=json"
+          ],
+          "x-github-request-id": [
+            "B566:5D20A:638C53:1BC260A:692F67CF"
+          ],
+          "x-ratelimit-limit": [
+            "60"
+          ],
+          "x-ratelimit-remaining": [
+            "59"
+          ],
+          "x-ratelimit-reset": [
+            "1764718047"
+          ],
+          "x-ratelimit-resource": [
+            "core"
+          ],
+          "x-ratelimit-used": [
+            "1"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "status": 401
+      }
+    },
+    {
+      "recorded_at": "2026-01-17T02:12:42.236900Z",
+      "request": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "accept": [
+            "application/json"
+          ],
+          "accept-encoding": [
+            "gzip"
+          ],
+          "nil": [
+            "Bearer test-token-12345"
+          ],
+          "user-agent": [
+            "req/0.5.17"
+          ]
+        },
+        "method": "GET",
+        "query_string": "",
+        "uri": "https://api.github.com/user"
+      },
+      "response": {
+        "body_json": {
+          "documentation_url": "https://docs.github.com/rest",
+          "message": "Requires authentication",
+          "status": "401"
+        },
+        "body_type": "json",
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Sat, 17 Jan 2026 02:12:41 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-media-type": [
+            "github.v3; format=json"
+          ],
+          "x-github-request-id": [
+            "8D76:2CB529:75D5:20238:696AF019"
+          ],
+          "x-ratelimit-limit": [
+            "60"
+          ],
+          "x-ratelimit-remaining": [
+            "58"
+          ],
+          "x-ratelimit-reset": [
+            "1768619561"
+          ],
+          "x-ratelimit-resource": [
+            "core"
+          ],
+          "x-ratelimit-used": [
+            "2"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "status": 401
+      }
+    }
+  ],
+  "version": "1.0"
+}

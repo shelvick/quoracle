@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:17
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: quoracle
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    ports:
+      - "${PORT:-4000}:${PORT:-4000}"
+    env_file: .env
+    environment:
+      DATABASE_URL: "ecto://postgres:postgres@db/quoracle"
+      PHX_BIND_ADDRESS: "0.0.0.0"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
