@@ -19,11 +19,13 @@ Profile system for agent permissions and model pool configuration. Uses selectab
 **Resolver** (103 lines): Profile lookup service with snapshot semantics
 - Functions: `resolve/1`, `resolve!/1`, `exists?/1`, `list_names/0`
 - Returns `capability_groups` as atoms (converted from DB strings)
+- v3.0: Includes `max_refinement_rounds` in profile snapshot
 
 **TableProfiles** (93 lines): Ecto schema for profiles table
-- Fields: `name`, `description`, `model_pool`, `capability_groups`
+- Fields: `name`, `description`, `model_pool`, `capability_groups`, `max_refinement_rounds`
 - v2.0: `capability_groups` as `{:array, :string}`, converted to atoms via `capability_groups_as_atoms/1`
-- Validations: name format, model_pool min length, capability_groups values
+- v3.0: `max_refinement_rounds` integer (0-9, default 4), validate_inclusion
+- Validations: name format, model_pool min length, capability_groups values, max_refinement_rounds range
 
 **Error Modules**:
 - `ActionNotAllowedError` - raised when action blocked (includes capability_groups in message)

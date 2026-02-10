@@ -10,11 +10,10 @@ defmodule Quoracle.Consensus.Manager do
 
   # Simple majority
   @default_threshold 0.5
-  @max_refinement_rounds 4
   # For refinement history
   @sliding_window_size 2
 
-  # Default model pool for tests (avoids DB access from spawned processes)
+  # Default model pool for tests (avoids requiring profile injection)
   @test_model_pool [
     "mock:consensus-model-1",
     "mock:consensus-model-2",
@@ -30,9 +29,10 @@ defmodule Quoracle.Consensus.Manager do
   @doc """
   Get the model pool for consensus.
 
-  If opts[:model_pool] is provided, uses that (for test isolation).
-  Otherwise, queries CONFIG_ModelSettings from DB.
-  Raises RuntimeError if not configured and no override provided.
+  Resolution order:
+  1. opts[:model_pool] - explicit injection (from profile, required in production)
+  2. opts[:test_mode] - returns mock test pool for test isolation
+  3. Raises RuntimeError if neither provided (model_pool must come from profile)
   """
   @spec get_model_pool(keyword()) :: [String.t()]
   def get_model_pool(opts \\ []) do
@@ -63,15 +63,6 @@ defmodule Quoracle.Consensus.Manager do
   end
 
   @doc """
-  Get maximum refinement rounds before forcing decision.
-  Returns the hard stop limit for refinement rounds.
-  """
-  @spec get_max_refinement_rounds() :: integer()
-  def get_max_refinement_rounds do
-    @max_refinement_rounds
-  end
-
-  @doc """
   Get sliding window size for refinement history.
   Returns the number of rounds to keep in history.
   """
@@ -83,9 +74,12 @@ defmodule Quoracle.Consensus.Manager do
   @doc """
   Build initial consensus context.
   Creates a new context map with prompt, history, and metadata.
+
+  Accepts optional `opts` keyword list:
+  - `:max_refinement_rounds` - max rounds for consensus (default: 4)
   """
-  @spec build_context(String.t(), list()) :: map()
-  def build_context(prompt, conversation_history) do
+  @spec build_context(String.t(), list(), keyword()) :: map()
+  def build_context(prompt, conversation_history, opts \\ []) do
     %{
       prompt: prompt,
       conversation_history: conversation_history,
@@ -93,17 +87,20 @@ defmodule Quoracle.Consensus.Manager do
       reasoning_history: [],
       # Track proposals from each round
       round_proposals: [],
-      start_time: System.monotonic_time(:millisecond)
+      start_time: System.monotonic_time(:millisecond),
+      max_refinement_rounds: Keyword.get(opts, :max_refinement_rounds, 4)
     }
   end
 
   @doc """
   Build consensus context with ACE lessons and state.
   Used when querying models with accumulated knowledge.
+
+  Accepts optional `opts` keyword list, propagated to `build_context/3`.
   """
-  @spec build_context_with_ace(String.t(), list(), [map()], map() | nil) :: map()
-  def build_context_with_ace(prompt, model_history, lessons, model_state) do
-    base_context = build_context(prompt, model_history)
+  @spec build_context_with_ace(String.t(), list(), [map()], map() | nil, keyword()) :: map()
+  def build_context_with_ace(prompt, model_history, lessons, model_state, opts \\ []) do
+    base_context = build_context(prompt, model_history, opts)
 
     base_context
     |> Map.put(:lessons, lessons)

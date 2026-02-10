@@ -504,6 +504,194 @@ defmodule QuoracleWeb.ProfileManagementLiveTest do
   # Acceptance Test (R13)
   # =============================================================================
 
+  describe "Max refinement rounds UI (R14-R19)" do
+    @tag :integration
+    test "profile form shows max_refinement_rounds number input", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      {:ok, view, _html} = mount_profile_management(conn, sandbox_owner, pubsub)
+      switch_to_profiles_tab(view)
+
+      view
+      |> element("button", "New Profile")
+      |> render_click()
+
+      html = render(view)
+      assert has_element?(view, "#profile-modal")
+      assert html =~ "Max Refinement Rounds"
+      assert has_element?(view, "input[name='profile[max_refinement_rounds]'][type='number']")
+    end
+
+    @tag :integration
+    test "new profile form defaults max_refinement_rounds to 4", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      {:ok, view, _html} = mount_profile_management(conn, sandbox_owner, pubsub)
+      switch_to_profiles_tab(view)
+
+      view
+      |> element("button", "New Profile")
+      |> render_click()
+
+      html = render(view)
+
+      assert html =~ ~r/name="profile\[max_refinement_rounds\]"[^>]*value="4"/s
+    end
+
+    @tag :integration
+    test "edit form loads current max_refinement_rounds value", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      {:ok, profile} =
+        %TableProfiles{}
+        |> TableProfiles.changeset(%{
+          name: "rounds_edit_profile",
+          model_pool: ["azure:o1"],
+          capability_groups: ["file_read"],
+          max_refinement_rounds: 7
+        })
+        |> Repo.insert()
+
+      {:ok, view, _html} = mount_profile_management(conn, sandbox_owner, pubsub)
+      switch_to_profiles_tab(view)
+
+      view
+      |> element("[phx-click='edit_profile'][phx-value-id='#{profile.id}']")
+      |> render_click()
+
+      html = render(view)
+
+      assert html =~ ~r/name="profile\[max_refinement_rounds\]"[^>]*value="7"/s
+    end
+
+    @tag :integration
+    test "save profile shows updated max_refinement_rounds in card", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      {:ok, profile} =
+        %TableProfiles{}
+        |> TableProfiles.changeset(%{
+          name: "rounds_save_profile",
+          model_pool: ["azure:o1"],
+          capability_groups: ["file_read"],
+          max_refinement_rounds: 4
+        })
+        |> Repo.insert()
+
+      {:ok, view, _html} = mount_profile_management(conn, sandbox_owner, pubsub)
+      switch_to_profiles_tab(view)
+
+      view
+      |> element("[phx-click='edit_profile'][phx-value-id='#{profile.id}']")
+      |> render_click()
+
+      view
+      |> form("#profile-form", %{
+        profile: %{
+          name: "rounds_save_profile",
+          model_pool: ["azure:o1"],
+          capability_groups: ["file_read"],
+          max_refinement_rounds: 6
+        }
+      })
+      |> render_submit()
+
+      html = render(view)
+      assert html =~ "Rounds: 6"
+
+      updated = Repo.get!(TableProfiles, profile.id)
+      assert updated.max_refinement_rounds == 6
+    end
+
+    @tag :integration
+    test "profile card displays max_refinement_rounds", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      {:ok, _profile} =
+        %TableProfiles{}
+        |> TableProfiles.changeset(%{
+          name: "rounds_display_profile",
+          model_pool: ["azure:o1"],
+          capability_groups: ["file_read"],
+          max_refinement_rounds: 8
+        })
+        |> Repo.insert()
+
+      {:ok, view, _html} = mount_profile_management(conn, sandbox_owner, pubsub)
+      switch_to_profiles_tab(view)
+
+      html = render(view)
+
+      assert html =~ "rounds_display_profile"
+      assert html =~ "Rounds: 8"
+    end
+
+    @tag :acceptance
+    test "user creates and edits profile max_refinement_rounds end-to-end", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/settings")
+
+      view
+      |> element("[phx-click='switch_tab'][phx-value-tab='profiles']")
+      |> render_click()
+
+      view |> element("button", "New Profile") |> render_click()
+
+      view
+      |> form("#profile-form", %{
+        profile: %{
+          name: "acceptance_rounds_profile",
+          description: "Max rounds acceptance",
+          model_pool: ["azure:o1"],
+          capability_groups: ["file_read"],
+          max_refinement_rounds: 2
+        }
+      })
+      |> render_submit()
+
+      html = render(view)
+      assert html =~ "acceptance_rounds_profile"
+      assert html =~ "Rounds: 2"
+      refute html =~ "Rounds: N/A"
+      refute html =~ "has already been taken"
+
+      profile = Repo.get_by!(TableProfiles, name: "acceptance_rounds_profile")
+
+      view
+      |> element("[phx-click='edit_profile'][phx-value-id='#{profile.id}']")
+      |> render_click()
+
+      view
+      |> form("#profile-form", %{
+        profile: %{
+          name: "acceptance_rounds_profile",
+          description: "Max rounds acceptance updated",
+          model_pool: ["azure:o1"],
+          capability_groups: ["file_read"],
+          max_refinement_rounds: 7
+        }
+      })
+      |> render_submit()
+
+      updated_html = render(view)
+      assert updated_html =~ "Rounds: 7"
+      refute updated_html =~ "Rounds: N/A"
+      refute updated_html =~ "has already been taken"
+
+      updated = Repo.get!(TableProfiles, profile.id)
+      assert updated.max_refinement_rounds == 7
+    end
+  end
+
   describe "Full CRUD flow (R13)" do
     # R13: Acceptance - Full CRUD Flow [SYSTEM]
     # Uses real route for acceptance test (not live_isolated)

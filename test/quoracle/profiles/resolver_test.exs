@@ -49,6 +49,7 @@ defmodule Quoracle.Profiles.ResolverTest do
       assert data.description == "Test profile for resolver"
       assert data.model_pool == ["gpt-4o", "claude-opus"]
       assert is_list(data.capability_groups)
+      assert data.max_refinement_rounds == 4
     end
 
     # R2: Resolve Returns Capability Groups as Atoms
@@ -85,6 +86,32 @@ defmodule Quoracle.Profiles.ResolverTest do
       assert data.name == "no-description-profile"
       assert data.description == nil
       assert :external_api in data.capability_groups
+      assert data.max_refinement_rounds == 4
+    end
+
+    test "resolve includes max_refinement_rounds in profile data" do
+      create_profile(%{
+        name: "rounds-included-profile",
+        model_pool: ["model-1"],
+        capability_groups: [],
+        max_refinement_rounds: 6
+      })
+
+      assert {:ok, data} = Resolver.resolve("rounds-included-profile")
+      assert Map.has_key?(data, :max_refinement_rounds)
+      assert data.max_refinement_rounds == 6
+    end
+
+    test "resolve returns correct max_refinement_rounds value" do
+      create_profile(%{
+        name: "rounds-value-profile",
+        model_pool: ["model-1"],
+        capability_groups: [],
+        max_refinement_rounds: 7
+      })
+
+      assert {:ok, data} = Resolver.resolve("rounds-value-profile")
+      assert data.max_refinement_rounds == 7
     end
   end
 
@@ -242,6 +269,7 @@ defmodule Quoracle.Profiles.ResolverTest do
       assert Map.keys(data) |> Enum.sort() == [
                :capability_groups,
                :description,
+               :max_refinement_rounds,
                :model_pool,
                :name
              ]

@@ -15,12 +15,13 @@
 - MessageHandlers: agent_spawned/terminated, log_entry, task_message, agent_message, todos_updated (2025-12), send_direct_message (2025-11), link_orphaned_children (2025-12)
 - TestHelpers: Test-specific handlers
 
-## SecretManagementLive (3-module architecture, 2025-10-24)
+## SecretManagementLive (5-module architecture, 2025-10-24)
 
-**Main Module:** SecretManagementLive (499 lines)
-**Helpers:** DataHelpers (113 lines), ValidationHelpers (52 lines)
-**Template:** secret_management_live.html.heex (146 lines)
-**Purpose:** Unified CRUD interface for secrets and model credentials with real-time PubSub updates
+**Main Module:** SecretManagementLive (487 lines)
+**Helpers:** DataHelpers (116 lines), ValidationHelpers (139 lines), ModelConfigHelpers (228 lines), ProfileHelpers (119 lines)
+**Template:** secret_management_live.html.heex
+**Purpose:** Unified CRUD interface for secrets, credentials, model config, profiles, and system settings
+**v5.0:** System tab with skills_path configuration (feat-20260208-210722)
 
 ## Key Functions
 - mount/3: Extract pubsub/registry/sandbox_owner from session, load tasks, subscribe to agents:lifecycle + task messages (tracked in MapSet)

@@ -110,6 +110,29 @@ defmodule Quoracle.Agent.ConfigManagerProfileTest do
       assert normalized.profile_name == "keyword-profile"
       assert normalized.capability_groups == [:external_api]
     end
+
+    test "normalize_config extracts max_refinement_rounds" do
+      config = %{
+        agent_id: "test-profile-rounds-1",
+        test_mode: true,
+        max_refinement_rounds: 7
+      }
+
+      normalized = ConfigManager.normalize_config(config)
+
+      assert normalized.max_refinement_rounds == 7
+    end
+
+    test "normalize_config defaults max_refinement_rounds to 4" do
+      config = %{
+        agent_id: "test-profile-rounds-2",
+        test_mode: true
+      }
+
+      normalized = ConfigManager.normalize_config(config)
+
+      assert normalized.max_refinement_rounds == 4
+    end
   end
 
   # ==========================================================================

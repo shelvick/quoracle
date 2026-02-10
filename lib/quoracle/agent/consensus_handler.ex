@@ -76,7 +76,7 @@ defmodule Quoracle.Agent.ConsensusHandler do
         Map.get(state, :test_mode, false) ->
           [:mock_model_1, :mock_model_2, :mock_model_3]
 
-        # 3. Production - query DB via Manager
+        # 3. Production fallback - raises if model_pool not in profile
         true ->
           Quoracle.Consensus.Manager.get_model_pool()
       end
@@ -85,7 +85,7 @@ defmodule Quoracle.Agent.ConsensusHandler do
       Keyword.merge(
         Map.get(state, :test_opts, []),
         models: models_list,
-        # Pass model_pool for consensus.ex to use (avoids second DB query)
+        # Pass model_pool for consensus.ex to use (avoids redundant resolution)
         model_pool: models_list,
         test_mode: Map.get(state, :test_mode, false),
         # Pass simulate_failure for test error scenarios

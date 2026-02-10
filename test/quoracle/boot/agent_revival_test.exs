@@ -392,7 +392,8 @@ defmodule Quoracle.Boot.AgentRevivalTest do
           pubsub: pubsub
         )
 
-      GenServer.stop(task_pid, :normal, :infinity)
+      root_agent_id = "root-#{task.id}"
+      stop_and_wait_for_unregister(task_pid, registry, root_agent_id)
       {:ok, _} = TaskManager.update_task_status(task.id, "pausing")
 
       AgentRevival.restore_running_tasks(
@@ -402,7 +403,6 @@ defmodule Quoracle.Boot.AgentRevivalTest do
       )
 
       # No agent should be alive — task was pausing, not running
-      root_agent_id = "root-#{task.id}"
       assert Registry.lookup(registry, {:agent, root_agent_id}) == []
     end
   end

@@ -21,11 +21,24 @@ defmodule Quoracle.Skills.Loader do
 
   @doc """
   Returns the skills directory path.
-  Uses injectable path for test isolation.
+  Fallback chain: opts :skills_path > DB config > hardcoded default.
   """
   @spec skills_dir(keyword()) :: String.t()
   def skills_dir(opts \\ []) do
-    Keyword.get(opts, :skills_path) || Path.expand("~/.quoracle/skills")
+    case Keyword.get(opts, :skills_path) do
+      nil -> db_skills_path_or_default()
+      path -> path
+    end
+  end
+
+  defp db_skills_path_or_default do
+    case Quoracle.Models.ConfigModelSettings.get_skills_path() do
+      {:ok, path} -> Path.expand(path)
+      {:error, _} -> Path.expand("~/.quoracle/skills")
+    end
+  rescue
+    # Repo may not be started during compilation or test setup
+    _ -> Path.expand("~/.quoracle/skills")
   end
 
   @doc """

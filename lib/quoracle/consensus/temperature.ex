@@ -8,23 +8,21 @@ defmodule Quoracle.Consensus.Temperature do
 
   ## Temperature Tables
 
-  **max=1.0 models (Anthropic, Bedrock, Llama, etc.):**
+  **max=1.0 models (Anthropic, Bedrock, Llama, etc.) (default 4 rounds):**
   | Round | Temperature |
   |-------|-------------|
   | 1     | 1.0         |
-  | 2     | 0.8         |
-  | 3     | 0.6         |
-  | 4     | 0.4         |
-  | 5     | 0.2         |
+  | 2     | 0.7         |
+  | 3     | 0.5         |
+  | 4     | 0.2         |
 
-  **max=2.0 models (GPT, O-series, Gemini):**
+  **max=2.0 models (GPT, O-series, Gemini) (default 4 rounds):**
   | Round | Temperature |
   |-------|-------------|
   | 1     | 2.0         |
-  | 2     | 1.6         |
-  | 3     | 1.2         |
-  | 4     | 0.8         |
-  | 5     | 0.4         |
+  | 2     | 1.5         |
+  | 3     | 0.9         |
+  | 4     | 0.4         |
   """
 
   @high_temp_families ["gpt", "o1", "o3", "o4", "gemini"]
@@ -72,27 +70,34 @@ defmodule Quoracle.Consensus.Temperature do
   @doc """
   Calculate temperature for a specific consensus round.
 
-  Temperature descends by 20% of max per round:
-  - Round 1: max_temp
-  - Round 2: max_temp - (max_temp * 0.2)
-  - Round 3: max_temp - (max_temp * 0.4)
-  - etc.
+  Temperature descends from max to floor over the configured number of rounds.
+  The descent rate adapts to `max_refinement_rounds` (default 4):
+  - With 2 rounds: reaches floor by round 2
+  - With 9 rounds: spreads descent across all 9 rounds
+
+  ## Options
+  - `:max_refinement_rounds` - total rounds for descent (default: 4)
 
   Clamped to floor (0.4 for max=2.0, 0.2 for max=1.0).
   """
-  @spec calculate_round_temperature(String.t() | nil, integer()) :: float()
-  def calculate_round_temperature(model_spec, round)
+  @spec calculate_round_temperature(String.t() | nil, integer(), keyword()) :: float()
+  def calculate_round_temperature(model_spec, round, opts \\ [])
+
+  def calculate_round_temperature(model_spec, round, opts)
       when is_integer(round) and round >= 1 do
+    max_rounds = Keyword.get(opts, :max_refinement_rounds, 4)
     max_temp = get_max_temperature(model_spec)
     min_temp = if max_temp == @max_temp_high, do: @min_temp_high, else: @min_temp_low
-    step = max_temp * 0.2
+
+    # Adaptive step: spread descent across max_rounds
+    step = if max_rounds > 1, do: (max_temp - min_temp) / (max_rounds - 1), else: 0.0
 
     calculated = max_temp - (round - 1) * step
     # Round to 1 decimal place to avoid floating point precision issues
     Float.round(max(min_temp, calculated), 1)
   end
 
-  def calculate_round_temperature(model_spec, _round) do
+  def calculate_round_temperature(model_spec, _round, _opts) do
     # Invalid round - return max temp as safe default
     get_max_temperature(model_spec)
   end

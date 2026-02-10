@@ -665,8 +665,8 @@ defmodule Quoracle.Agent.ConsensusPerModelTest do
 
       # Query options should have temperature calculated based on round
       assert is_float(query_opts.temperature)
-      # Round 3 for claude (max=1.0): 1.0 - (2 * 0.2) = 0.6
-      assert query_opts.temperature == 0.6
+      # Round 3 for claude (max=1.0, default 4 rounds): 1.0 - (2 * 0.267) = 0.5
+      assert query_opts.temperature == 0.5
     end
   end
 
@@ -675,17 +675,17 @@ defmodule Quoracle.Agent.ConsensusPerModelTest do
       # Test that build_query_options uses Temperature module
       opts = [round: 2]
 
-      # Claude (max=1.0): round 2 = 1.0 - 0.2 = 0.8
+      # Claude (max=1.0, default 4 rounds): round 2 = 1.0 - 0.267 = 0.7
       claude_opts = Consensus.build_query_options("anthropic:claude-sonnet-4", opts)
-      assert claude_opts.temperature == 0.8
+      assert claude_opts.temperature == 0.7
 
-      # GPT (max=2.0): round 2 = 2.0 - 0.4 = 1.6
+      # GPT (max=2.0, default 4 rounds): round 2 = 2.0 - 0.533 = 1.5
       gpt_opts = Consensus.build_query_options("openai:gpt-4o", opts)
-      assert gpt_opts.temperature == 1.6
+      assert gpt_opts.temperature == 1.5
 
-      # Gemini (max=2.0): round 2 = 2.0 - 0.4 = 1.6
+      # Gemini (max=2.0, default 4 rounds): round 2 = 2.0 - 0.533 = 1.5
       gemini_opts = Consensus.build_query_options("google:gemini-2.0-flash", opts)
-      assert gemini_opts.temperature == 1.6
+      assert gemini_opts.temperature == 1.5
     end
   end
 
@@ -738,18 +738,18 @@ defmodule Quoracle.Agent.ConsensusPerModelTest do
       claude_r5 = Consensus.build_query_options("anthropic:claude-sonnet-4", opts_r5)
       gpt_r5 = Consensus.build_query_options("openai:gpt-4o", opts_r5)
 
-      # Claude: 1.0 → 0.6 → 0.2
+      # Claude (default 4 rounds): 1.0 → 0.5 → 0.2 (floor)
       assert claude_r1.temperature > claude_r3.temperature
       assert claude_r3.temperature > claude_r5.temperature
       assert claude_r1.temperature == 1.0
-      assert claude_r3.temperature == 0.6
+      assert claude_r3.temperature == 0.5
       assert claude_r5.temperature == 0.2
 
-      # GPT: 2.0 → 1.2 → 0.4
+      # GPT (default 4 rounds): 2.0 → 0.9 → 0.4 (floor)
       assert gpt_r1.temperature > gpt_r3.temperature
       assert gpt_r3.temperature > gpt_r5.temperature
       assert gpt_r1.temperature == 2.0
-      assert gpt_r3.temperature == 1.2
+      assert gpt_r3.temperature == 0.9
       assert gpt_r5.temperature == 0.4
     end
   end
@@ -768,7 +768,9 @@ defmodule Quoracle.Agent.ConsensusPerModelTest do
             %{type: :user, content: "Task", timestamp: DateTime.utc_now()}
           ]
         },
-        test_mode: true
+        test_mode: true,
+        # Adaptive descent: old hardcoded 20% step was equivalent to max_rounds=5
+        max_refinement_rounds: 5
       }
 
       model_pool = ["anthropic:claude-sonnet-4", "openai:gpt-4o", "google:gemini-2.0-flash"]
@@ -813,8 +815,8 @@ defmodule Quoracle.Agent.ConsensusPerModelTest do
       # Temperature should still be calculated (for logging/debugging)
       query_opts = Consensus.build_query_options("anthropic:claude-sonnet-4", opts)
 
-      # Should have calculated temperature
-      assert query_opts.temperature == 0.6
+      # Should have calculated temperature (default 4 rounds, round 3: 0.5)
+      assert query_opts.temperature == 0.5
 
       # In test mode, the mock response generator doesn't actually use temperature
       # but the calculation should still happen for verification
@@ -831,12 +833,188 @@ defmodule Quoracle.Agent.ConsensusPerModelTest do
   end
 
   # ============================================================================
+  # INTEGRATION AUDIT: Default max_refinement_rounds alignment
+  # WorkGroupID: feat-20260208-210722, Audit Finding
+  #
+  # Audit finding: PerModelQuery.build_query_options/2 defaults
+  # max_refinement_rounds to 5, but Manager.build_context and the rest of the
+  # consensus system default to 4. When no explicit max_refinement_rounds is
+  # passed in opts, temperature calculation uses a 5-round curve while the
+  # consensus system operates on a 4-round assumption.
+  # ============================================================================
+
+  alias Quoracle.Agent.Consensus.PerModelQuery
+  alias Quoracle.Costs.Accumulator
+
+  describe "PerModelQuery default alignment" do
+    test "build_query_options defaults to system max_rounds=4" do
+      # When opts does not contain max_refinement_rounds, build_query_options should
+      # use the system default of 4 (matching Manager.build_context default)
+      # At round 4 (system's last round), temperature should reach floor
+
+      # High-temp model: floor = 0.4
+      # With max_rounds=4: step = (2.0-0.4)/(4-1) = 0.533, round 4 = 0.4 (floor)
+      # With max_rounds=5 (bug): step = (2.0-0.4)/(5-1) = 0.4, round 4 = 0.8
+      query_opts = PerModelQuery.build_query_options("openai:gpt-4o", round: 4)
+      assert query_opts.temperature == 0.4
+    end
+
+    test "default matches explicit max_refinement_rounds: 4" do
+      # The default behavior should be identical to explicitly passing max_refinement_rounds: 4
+      for round <- 1..4 do
+        default_opts = PerModelQuery.build_query_options("openai:gpt-4o", round: round)
+
+        explicit_opts =
+          PerModelQuery.build_query_options("openai:gpt-4o",
+            round: round,
+            max_refinement_rounds: 4
+          )
+
+        assert default_opts.temperature == explicit_opts.temperature,
+               "Round #{round}: default temp #{default_opts.temperature} != " <>
+                 "explicit(4) temp #{explicit_opts.temperature}"
+      end
+    end
+  end
+
+  # ============================================================================
+  # INTEGRATION AUDIT: handle_refinement_responses cost_opts threading
+  # WorkGroupID: feat-20260208-210722, Audit Finding
+  #
+  # Audit finding: handle_refinement_responses/5 fallback path constructs
+  # cost_opts by taking only [:agent_id, :task_id, :pubsub] from original_opts.
+  # This omits both :cost_accumulator and :max_refinement_rounds. When all
+  # refinement responses are nil/invalid, the fallback calls Result.format_result
+  # with incomplete cost_opts, causing:
+  # 1. Confidence calculation uses wrong max_refinement_rounds (default 4 instead
+  #    of context's value)
+  # 2. Cost accumulator is lost (embedding costs not tracked)
+  # ============================================================================
+
+  describe "refinement fallback max_rounds" do
+    test "threads max_refinement_rounds to confidence" do
+      # Context with max_refinement_rounds=2; we'll use round=4 (well past max=2)
+      # This ensures the confidence penalty is visible in the result
+      context = %{
+        max_refinement_rounds: 2,
+        model_pool: ["m1", "m2", "m3"],
+        original_opts: [max_refinement_rounds: 2]
+      }
+
+      # 2 orient + 1 wait: orient wins with 2/3 majority
+      original_responses = [
+        %{action: :orient, params: %{current_situation: "analyzing"}, reasoning: "r1"},
+        %{action: :orient, params: %{current_situation: "analyzing"}, reasoning: "r2"},
+        %{action: :wait, params: %{wait: 1000}, reasoning: "r3"}
+      ]
+
+      # Empty refined_responses triggers fallback path
+      consensus_fn = fn _, _, _ -> raise "should not be called" end
+
+      {:ok, result} =
+        PerModelQuery.handle_refinement_responses(
+          [],
+          original_responses,
+          context,
+          4,
+          consensus_fn
+        )
+
+      {_type, _action, meta} = result
+      confidence = Keyword.get(meta, :confidence)
+
+      # With max_refinement_rounds=2 properly threaded, round 4 > max 2:
+      #   penalty = (4-2) * 0.1 = 0.2
+      #   base = 2/3 ≈ 0.667, bonus = 0.10 (>60%), conf = 0.667 + 0.10 - 0.2 ≈ 0.567
+      #
+      # WITHOUT threading (bug): default max=4, round 4 = max 4, NO penalty
+      #   base = 0.667, bonus = 0.10, conf = 0.667 + 0.10 ≈ 0.767
+      #
+      # Difference: 0.2 (significant)
+      expected_with_penalty = 2 / 3 + 0.10 - 0.2
+      assert_in_delta confidence, expected_with_penalty, 0.01
+    end
+
+    test "no penalty when round within max_rounds" do
+      # Verify confidence is correct when round is within max_refinement_rounds
+      context = %{
+        max_refinement_rounds: 5,
+        model_pool: ["m1", "m2", "m3"],
+        original_opts: [max_refinement_rounds: 5]
+      }
+
+      original_responses = [
+        %{action: :orient, params: %{current_situation: "test"}, reasoning: "r1"},
+        %{action: :orient, params: %{current_situation: "test"}, reasoning: "r2"},
+        %{action: :wait, params: %{wait: 1000}, reasoning: "r3"}
+      ]
+
+      consensus_fn = fn _, _, _ -> raise "should not be called" end
+
+      {:ok, result} =
+        PerModelQuery.handle_refinement_responses(
+          [],
+          original_responses,
+          context,
+          3,
+          consensus_fn
+        )
+
+      {_type, _action, meta} = result
+      confidence = Keyword.get(meta, :confidence)
+
+      # Round 3 <= max 5: no penalty regardless of threading
+      # base = 2/3, bonus = 0.10, conf ≈ 0.767
+      expected_no_penalty = 2 / 3 + 0.10
+      assert_in_delta confidence, expected_no_penalty, 0.01
+    end
+  end
+
+  describe "refinement fallback cost_accumulator" do
+    test "threads cost_accumulator from original_opts" do
+      # When cost_accumulator is in original_opts, it should be passed through
+      # to Result.format_result so merge_cluster_params can thread it
+      acc = Accumulator.new()
+
+      context = %{
+        max_refinement_rounds: 4,
+        model_pool: ["m1", "m2", "m3"],
+        original_opts: [cost_accumulator: acc]
+      }
+
+      # All same action so they cluster together (unanimous)
+      original_responses = [
+        %{action: :orient, params: %{current_situation: "test"}, reasoning: "r1"},
+        %{action: :orient, params: %{current_situation: "test"}, reasoning: "r2"},
+        %{action: :orient, params: %{current_situation: "test"}, reasoning: "r3"}
+      ]
+
+      consensus_fn = fn _, _, _ -> raise "should not be called" end
+
+      {:ok, result} =
+        PerModelQuery.handle_refinement_responses(
+          [],
+          original_responses,
+          context,
+          2,
+          consensus_fn
+        )
+
+      {_type, _action, meta} = result
+
+      # When cost_accumulator is properly threaded, meta should include :accumulator
+      # Currently, cost_opts only takes [:agent_id, :task_id, :pubsub], NOT :cost_accumulator
+      # So accumulator is nil and NOT included in meta
+      assert Keyword.has_key?(meta, :accumulator),
+             "Expected :accumulator in result meta when cost_accumulator provided in original_opts"
+    end
+  end
+
+  # ============================================================================
   # Production Path Temperature Tests (R25-R27) - feat-20251208-165509
   # These tests verify that the ACTUAL production path uses Temperature module.
   # The previous tests (R19-R24) only tested the public API, not the production path.
   # ============================================================================
-
-  alias Quoracle.Agent.Consensus.PerModelQuery
 
   describe "R25: PerModelQuery Uses Temperature" do
     test "PerModelQuery.build_query_options/2 accepts model_id and uses Temperature" do
@@ -845,13 +1023,13 @@ defmodule Quoracle.Agent.ConsensusPerModelTest do
 
       opts = [round: 3]
 
-      # Claude (max=1.0): round 3 = 0.6
+      # Claude (max=1.0, default 4 rounds): round 3 = 0.5
       claude_opts = PerModelQuery.build_query_options("anthropic:claude-sonnet-4", opts)
-      assert claude_opts.temperature == 0.6
+      assert claude_opts.temperature == 0.5
 
-      # GPT (max=2.0): round 3 = 1.2
+      # GPT (max=2.0, default 4 rounds): round 3 = 0.9
       gpt_opts = PerModelQuery.build_query_options("openai:gpt-4o", opts)
-      assert gpt_opts.temperature == 1.2
+      assert gpt_opts.temperature == 0.9
     end
 
     test "PerModelQuery defaults to round 1 when not specified" do
@@ -900,8 +1078,9 @@ defmodule Quoracle.Agent.ConsensusPerModelTest do
         PerModelQuery.query_single_model_with_retry(state, "anthropic:claude-sonnet-4", opts)
 
       # Verify the temperature sent to ModelQuery was calculated for Claude at round 3
+      # (default 4 rounds: 1.0 - 2*0.267 = 0.5)
       assert_receive {:query_opts_received, received_opts}
-      assert received_opts.temperature == 0.6
+      assert received_opts.temperature == 0.5
     end
 
     test "different models get different temperatures in same round" do
@@ -930,13 +1109,13 @@ defmodule Quoracle.Agent.ConsensusPerModelTest do
       # Query GPT
       _result2 = PerModelQuery.query_single_model_with_retry(state, "openai:gpt-4o", opts)
 
-      # Claude at round 2: 1.0 - 0.2 = 0.8
+      # Claude at round 2 (default 4 rounds): 1.0 - 0.267 = 0.7
       assert_receive {:query_for_model, "anthropic:claude-sonnet-4", claude_temp}
-      assert claude_temp == 0.8
+      assert claude_temp == 0.7
 
-      # GPT at round 2: 2.0 - 0.4 = 1.6
+      # GPT at round 2 (default 4 rounds): 2.0 - 0.533 = 1.5
       assert_receive {:query_for_model, "openai:gpt-4o", gpt_temp}
-      assert gpt_temp == 1.6
+      assert gpt_temp == 1.5
     end
   end
 
@@ -974,15 +1153,15 @@ defmodule Quoracle.Agent.ConsensusPerModelTest do
       {:ok, _results, _updated_state} =
         PerModelQuery.query_models_with_per_model_histories(state, model_pool, opts)
 
-      # Round 4 temperatures:
-      # Claude (max=1.0): 1.0 - (3 * 0.2) = 0.4
-      assert_receive {:production_query, "anthropic:claude-sonnet-4", 0.4}
+      # Round 4 temperatures (default 4 rounds = last round, reaches floor):
+      # Claude (max=1.0): floor = 0.2
+      assert_receive {:production_query, "anthropic:claude-sonnet-4", 0.2}
 
-      # GPT (max=2.0): 2.0 - (3 * 0.4) = 0.8
-      assert_receive {:production_query, "openai:gpt-4o", 0.8}
+      # GPT (max=2.0): floor = 0.4
+      assert_receive {:production_query, "openai:gpt-4o", 0.4}
 
-      # Gemini (max=2.0): 2.0 - (3 * 0.4) = 0.8
-      assert_receive {:production_query, "google:gemini-2.0-flash", 0.8}
+      # Gemini (max=2.0): floor = 0.4
+      assert_receive {:production_query, "google:gemini-2.0-flash", 0.4}
     end
   end
 end

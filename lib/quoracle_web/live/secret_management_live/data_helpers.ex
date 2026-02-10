@@ -5,6 +5,7 @@ defmodule QuoracleWeb.SecretManagementLive.DataHelpers do
   """
 
   alias Quoracle.Models.{TableSecrets, TableCredentials}
+  alias QuoracleWeb.SecretManagementLive.ModelConfigHelpers
 
   @doc """
   Loads all secrets and credentials, applies filtering, search, sorting, and pagination.
@@ -94,6 +95,51 @@ defmodule QuoracleWeb.SecretManagementLive.DataHelpers do
     socket
     |> Phoenix.Component.assign(:items, paginated_items)
     |> Phoenix.Component.assign(:total_items, total_items)
+  end
+
+  @doc """
+  Prepare socket assigns for the edit modal based on item type.
+  Finds the item by ID, loads the appropriate record from DB, and assigns modal state.
+  """
+  @spec prepare_edit_modal(Phoenix.LiveView.Socket.t(), String.t()) ::
+          Phoenix.LiveView.Socket.t()
+  def prepare_edit_modal(socket, id) do
+    item =
+      Enum.find(socket.assigns.items, fn i ->
+        to_string(i.id) == to_string(id)
+      end)
+
+    case item do
+      nil ->
+        socket
+
+      item ->
+        {modal_type, changeset, provider, selected_item} =
+          case item.type do
+            :secret ->
+              case TableSecrets.get_by_name(item.name) do
+                {:ok, _secret} -> {:edit_secret, nil, nil, item}
+                {:error, _} -> {:edit_secret, nil, nil, item}
+              end
+
+            :credential ->
+              case TableCredentials.get_by_id(id) do
+                {:ok, cred} ->
+                  provider = ModelConfigHelpers.extract_provider(cred.model_spec)
+                  cred_item = build_credential_item(cred)
+                  {:edit_credential, TableCredentials.changeset(cred, %{}), provider, cred_item}
+
+                {:error, _} ->
+                  {:edit_credential, nil, nil, item}
+              end
+          end
+
+        socket
+        |> Phoenix.Component.assign(:show_modal, modal_type)
+        |> Phoenix.Component.assign(:modal_changeset, changeset)
+        |> Phoenix.Component.assign(:selected_item, selected_item)
+        |> Phoenix.Component.assign(:selected_provider, provider)
+    end
   end
 
   @doc """

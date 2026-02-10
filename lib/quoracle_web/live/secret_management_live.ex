@@ -69,7 +69,8 @@ defmodule QuoracleWeb.SecretManagementLive do
         delete_warning: nil,
         profiles: Repo.all(TableProfiles),
         profile_changeset: TableProfiles.changeset(%TableProfiles{}, %{}),
-        selected_profile: nil
+        selected_profile: nil,
+        skills_path: model_settings.skills_path
       )
       |> DataHelpers.load_items()
 
@@ -86,6 +87,7 @@ defmodule QuoracleWeb.SecretManagementLive do
         "credentials" -> :credentials
         "model_config" -> :model_config
         "profiles" -> :profiles
+        "system" -> :system
         _ -> :secrets
       end
 
@@ -116,48 +118,7 @@ defmodule QuoracleWeb.SecretManagementLive do
   end
 
   def handle_event("edit", %{"id" => id}, socket) do
-    item =
-      Enum.find(socket.assigns.items, fn i ->
-        to_string(i.id) == to_string(id)
-      end)
-
-    case item do
-      nil ->
-        {:noreply, socket}
-
-      item ->
-        {modal_type, changeset, provider, selected_item} =
-          case item.type do
-            :secret ->
-              case TableSecrets.get_by_name(item.name) do
-                {:ok, _secret} ->
-                  {:edit_secret, nil, nil, item}
-
-                {:error, _} ->
-                  {:edit_secret, nil, nil, item}
-              end
-
-            :credential ->
-              case TableCredentials.get_by_id(id) do
-                {:ok, cred} ->
-                  provider = ModelConfigHelpers.extract_provider(cred.model_spec)
-                  cred_item = DataHelpers.build_credential_item(cred)
-                  {:edit_credential, TableCredentials.changeset(cred, %{}), provider, cred_item}
-
-                {:error, _} ->
-                  {:edit_credential, nil, nil, item}
-              end
-          end
-
-        socket =
-          socket
-          |> assign(:show_modal, modal_type)
-          |> assign(:modal_changeset, changeset)
-          |> assign(:selected_item, selected_item)
-          |> assign(:selected_provider, provider)
-
-        {:noreply, socket}
-    end
+    {:noreply, DataHelpers.prepare_edit_modal(socket, id)}
   end
 
   def handle_event("delete", %{"id" => id}, socket) do
@@ -403,6 +364,33 @@ defmodule QuoracleWeb.SecretManagementLive do
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Error saving config: #{inspect(reason)}")}
     end
+  end
+
+  def handle_event("save_system_config", %{"system_config" => params}, socket) do
+    skills_path = Map.get(params, "skills_path", "")
+
+    socket =
+      case String.trim(skills_path) do
+        "" ->
+          ConfigModelSettings.delete_skills_path()
+
+          socket
+          |> assign(:skills_path, nil)
+          |> put_flash(:info, "System configuration saved")
+
+        path ->
+          case ConfigModelSettings.set_skills_path(path) do
+            {:ok, saved_path} ->
+              socket
+              |> assign(:skills_path, saved_path)
+              |> put_flash(:info, "System configuration saved")
+
+            {:error, reason} ->
+              put_flash(socket, :error, "Error saving config: #{inspect(reason)}")
+          end
+      end
+
+    {:noreply, socket}
   end
 
   def handle_event("new_profile", _params, socket) do

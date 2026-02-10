@@ -103,7 +103,7 @@ defmodule QuoracleWeb.SecretManagementLive.ProfileHelpers do
 
     socket
     |> assign(:show_modal, :none)
-    |> assign(:profile_changeset, TableProfiles.changeset(%TableProfiles{}, %{}))
+    |> assign(:profile_changeset, new_profile_changeset())
     |> assign(:selected_profile, nil)
     |> assign(:profiles, list_profiles())
   end

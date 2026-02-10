@@ -48,8 +48,9 @@ EmbeddingCache owns ETS table (process-owned)
   - get_embedding_model/0,!/0, set_embedding_model/1
   - get_answer_engine_model/0,!/0, set_answer_engine_model/1
   - get_image_generation_models/0,!/0, set_image_generation_models/1 (v3.0)
+  - get_skills_path/0, set_skills_path/1 (v5.0): System-wide skills directory path
   - validate_model_pool/1 (v4.0): Validates model IDs against credentials for runtime switching
-  - get_all/0, configured?/0
+  - get_all/0 (includes skills_path), configured?/0
 - **LLMDBModelLoader** (130 lines): LLMDB model queries for UI dropdowns
   - all_models/0,1, chat_models/0,1, embedding_models/0,1
   - models_by_provider/0,1, available?/0,1, format_model/1

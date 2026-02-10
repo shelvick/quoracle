@@ -6,7 +6,6 @@ defmodule Quoracle.Consensus.AggregatorTest do
   # Uses Task.async (not Task.async_stream) which works fine with DataCase shared mode
   use Quoracle.DataCase, async: true
   alias Quoracle.Consensus.Aggregator
-  alias Quoracle.Consensus.Manager
 
   # DataCase already handles sandbox setup with shared mode
 
@@ -338,14 +337,45 @@ defmodule Quoracle.Consensus.AggregatorTest do
       refute prompt =~ "percentage"
     end
 
-    test "indicates final round at max refinement rounds" do
+    test "uses context max_refinement_rounds for final hint" do
       responses = [%{action: :wait, params: %{}, reasoning: ""}]
-      context = %{prompt: "test", reasoning_history: []}
-      max_rounds = Manager.get_max_refinement_rounds()
+      context = %{prompt: "test", reasoning_history: [], max_refinement_rounds: 2}
 
-      prompt = Aggregator.build_refinement_prompt(responses, max_rounds, context)
+      prompt = Aggregator.build_refinement_prompt(responses, 2, context)
 
       assert prompt =~ "final round"
+    end
+
+    test "does not mark final round before context limit" do
+      responses = [%{action: :wait, params: %{}, reasoning: ""}]
+      context = %{prompt: "test", reasoning_history: [], max_refinement_rounds: 5}
+
+      prompt = Aggregator.build_refinement_prompt(responses, 4, context)
+
+      refute prompt =~ "final round"
+    end
+
+    test "final prompt uses context max_refinement_rounds" do
+      responses = [%{action: :wait, params: %{}, reasoning: ""}]
+      context = %{prompt: "test", reasoning_history: [], max_refinement_rounds: 7}
+
+      prompt = Aggregator.build_final_round_prompt(responses, context)
+
+      assert prompt =~ "after 6 rounds of discussion"
+    end
+
+    test "defaults to 4 when context missing max_refinement_rounds" do
+      responses = [%{action: :wait, params: %{}, reasoning: ""}]
+
+      # Context WITH max=2: round 2 should be final
+      context_with = %{prompt: "test", reasoning_history: [], max_refinement_rounds: 2}
+      prompt_with = Aggregator.build_refinement_prompt(responses, 2, context_with)
+      assert prompt_with =~ "final round"
+
+      # Context WITHOUT max (default 4): round 2 should NOT be final
+      context_without = %{prompt: "test", reasoning_history: []}
+      prompt_without = Aggregator.build_refinement_prompt(responses, 2, context_without)
+      refute prompt_without =~ "final round"
     end
   end
 
@@ -782,8 +812,7 @@ defmodule Quoracle.Consensus.AggregatorTest do
       assert similarity > 0.99
     end
 
-    test "clusters semantically similar tasks using embeddings" do
-      # For now, test clustering with exact matches until embedding mocking is in place
+    test "clusters identical semantic params into one cluster" do
       responses = [
         %{action: :spawn_child, params: %{task: "analyze data"}, reasoning: "Need data"},
         %{action: :spawn_child, params: %{task: "analyze data"}, reasoning: "Get data"},
@@ -792,15 +821,22 @@ defmodule Quoracle.Consensus.AggregatorTest do
 
       clusters = Aggregator.cluster_responses(responses)
 
-      # All should cluster together with exact params
       assert length(clusters) == 1
       assert hd(clusters).count == 3
     end
 
-    test "caches embeddings to avoid recomputation" do
-      # Skip this test for now as it requires database setup
-      # Will be fixed with proper embedding mocking
-      :ok
+    test "get_cached_embedding returns metadata with injected fn" do
+      test_pid = self()
+
+      embedding_fn = fn text ->
+        send(test_pid, {:embedding_called, text})
+        {:ok, [0.1, 0.2, 0.3]}
+      end
+
+      assert {:ok, %{embedding: [0.1, 0.2, 0.3], cached: false, chunks: 1}} =
+               Aggregator.get_cached_embedding("cache-test", embedding_fn: embedding_fn)
+
+      assert_receive {:embedding_called, "cache-test"}
     end
 
     test "computes cosine similarity between embeddings" do

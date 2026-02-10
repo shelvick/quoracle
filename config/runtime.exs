@@ -63,11 +63,31 @@ if config_env() == :prod do
         export CLOAK_ENCRYPTION_KEY="your-generated-key"
       """
 
+  cloak_key_decoded =
+    case Base.decode64(cloak_key) do
+      {:ok, key} ->
+        key
+
+      :error ->
+        raise """
+        CLOAK_ENCRYPTION_KEY is not valid Base64.
+
+        The current value contains non-Base64 characters. This usually means the
+        .env file contains the generation *command* instead of its *output*.
+
+        To fix, run this in your terminal:
+          openssl rand -base64 32
+
+        Then paste the output (e.g. "x4F7gR2...=") as the value in your .env file:
+          CLOAK_ENCRYPTION_KEY=<paste the output here>
+        """
+    end
+
   config :quoracle, Quoracle.Vault,
     ciphers: [
       default: {
         Cloak.Ciphers.AES.GCM,
-        tag: "AES.GCM.V1", key: Base.decode64!(cloak_key), iv_length: 12
+        tag: "AES.GCM.V1", key: cloak_key_decoded, iv_length: 12
       }
     ]
 end
@@ -112,11 +132,31 @@ if config_env() == :dev do
       :ok
 
     cloak_key ->
+      cloak_key_decoded =
+        case Base.decode64(cloak_key) do
+          {:ok, key} ->
+            key
+
+          :error ->
+            raise """
+            CLOAK_ENCRYPTION_KEY is not valid Base64.
+
+            The current value contains non-Base64 characters. This usually means the
+            .env file contains the generation *command* instead of its *output*.
+
+            To fix, run this in your terminal:
+              openssl rand -base64 32
+
+            Then paste the output (e.g. "x4F7gR2...=") as the value in your .env file:
+              CLOAK_ENCRYPTION_KEY=<paste the output here>
+            """
+        end
+
       config :quoracle, Quoracle.Vault,
         ciphers: [
           default: {
             Cloak.Ciphers.AES.GCM,
-            tag: "AES.GCM.V1", key: Base.decode64!(cloak_key), iv_length: 12
+            tag: "AES.GCM.V1", key: cloak_key_decoded, iv_length: 12
           }
         ]
   end

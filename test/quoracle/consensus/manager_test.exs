@@ -33,25 +33,6 @@ defmodule Quoracle.Consensus.ManagerTest do
     end
   end
 
-  describe "get_max_refinement_rounds/0" do
-    test "returns a positive integer for max refinement rounds" do
-      rounds = Manager.get_max_refinement_rounds()
-      assert is_integer(rounds)
-      assert rounds > 0
-    end
-
-    test "returns an integer value" do
-      rounds = Manager.get_max_refinement_rounds()
-      assert is_integer(rounds)
-    end
-
-    test "returns consistent value across calls" do
-      rounds1 = Manager.get_max_refinement_rounds()
-      rounds2 = Manager.get_max_refinement_rounds()
-      assert rounds1 == rounds2
-    end
-  end
-
   describe "get_sliding_window_size/0" do
     test "returns 2 for sliding window size" do
       size = Manager.get_sliding_window_size()
@@ -232,7 +213,6 @@ defmodule Quoracle.Consensus.ManagerTest do
       # Call methods multiple times and ensure no state changes
       # NOTE: get_model_pool requires DB config, tested separately in R1-R4
       threshold1 = Manager.get_consensus_threshold()
-      Manager.get_max_refinement_rounds()
       Manager.get_sliding_window_size()
 
       # Call again and verify same results
@@ -243,10 +223,8 @@ defmodule Quoracle.Consensus.ManagerTest do
     test "configuration values are reasonable" do
       assert Manager.get_consensus_threshold() > 0
       assert Manager.get_consensus_threshold() <= 1.0
-      assert Manager.get_max_refinement_rounds() > 0
-      assert Manager.get_max_refinement_rounds() <= 10
       assert Manager.get_sliding_window_size() > 0
-      assert Manager.get_sliding_window_size() <= Manager.get_max_refinement_rounds()
+      assert Manager.get_sliding_window_size() <= 10
     end
   end
 
@@ -291,17 +269,10 @@ defmodule Quoracle.Consensus.ManagerTest do
     # No runtime test needed (function_exported? discouraged by Credo)
   end
 
-  describe "[UNIT] consensus parameters unchanged (R5-R7)" do
+  describe "[UNIT] consensus parameters unchanged (R5, R7)" do
     test "get_consensus_threshold returns 0.5 (R5)" do
       # R5: WHEN get_consensus_threshold called THEN returns 0.5
       assert Manager.get_consensus_threshold() == 0.5
-    end
-
-    test "get_max_refinement_rounds returns positive integer (R6)" do
-      # R6: WHEN get_max_refinement_rounds called THEN returns a positive integer
-      max_rounds = Manager.get_max_refinement_rounds()
-      assert is_integer(max_rounds)
-      assert max_rounds > 0
     end
 
     test "get_sliding_window_size returns 2 (R7)" do
@@ -362,6 +333,72 @@ defmodule Quoracle.Consensus.ManagerTest do
       # v7.0: reasoning_history now stores maps with action+params+reasoning
       assert hd(Enum.at(context3.reasoning_history, 0)).reasoning == "R2"
       assert hd(Enum.at(context3.reasoning_history, 1)).reasoning == "R3"
+    end
+  end
+
+  # =============================================================
+  # INTEGRATION AUDIT: build_context opts for max_refinement_rounds
+  # WorkGroupID: feat-20260208-210722, Audit Fix
+  #
+  # Audit finding: Manager.build_context/2 doesn't include max_refinement_rounds.
+  # Consensus module manually adds via Map.put after calling build_context.
+  # This is fragile — build_context should accept opts and include it natively.
+  # =============================================================
+
+  describe "[UNIT] build_context with max_refinement_rounds opt (audit fix)" do
+    test "build_context/3 includes max_refinement_rounds in context" do
+      # WHEN build_context called with max_refinement_rounds opt
+      # THEN context map includes max_refinement_rounds key with that value
+      context = Manager.build_context("goal", [], max_refinement_rounds: 3)
+
+      assert context.max_refinement_rounds == 3
+    end
+
+    test "build_context/3 defaults max_refinement_rounds to 4 when not in opts" do
+      # WHEN build_context called with empty opts
+      # THEN context map includes max_refinement_rounds with default 4
+      context = Manager.build_context("goal", [], [])
+
+      assert context.max_refinement_rounds == 4
+    end
+
+    test "build_context/3 preserves all existing fields with opts" do
+      # WHEN build_context/3 called with opts
+      # THEN all existing context fields (prompt, history, etc.) are preserved
+      history = [%{role: :user, content: "hello"}]
+      context = Manager.build_context("analyze data", history, max_refinement_rounds: 7)
+
+      assert context.prompt == "analyze data"
+      assert context.conversation_history == history
+      assert context.reasoning_history == []
+      assert context.round_proposals == []
+      assert is_integer(context.start_time)
+      assert context.max_refinement_rounds == 7
+    end
+  end
+
+  describe "[UNIT] build_context_with_ace opts propagation (audit fix)" do
+    test "build_context_with_ace/5 includes max_refinement_rounds from opts" do
+      # WHEN build_context_with_ace called with opts containing max_refinement_rounds
+      # THEN context includes max_refinement_rounds from opts
+      context =
+        Manager.build_context_with_ace("goal", [], [], nil, max_refinement_rounds: 5)
+
+      assert context.max_refinement_rounds == 5
+    end
+
+    test "build_context_with_ace/5 preserves lessons and model_state with opts" do
+      # WHEN build_context_with_ace called with opts
+      # THEN ACE fields (lessons, model_state) are still present alongside opts
+      lessons = [%{type: :factual, content: "test", confidence: 1}]
+      model_state = %{summary: "state"}
+
+      context =
+        Manager.build_context_with_ace("goal", [], lessons, model_state, max_refinement_rounds: 3)
+
+      assert context.lessons == lessons
+      assert context.model_state == model_state
+      assert context.max_refinement_rounds == 3
     end
   end
 
