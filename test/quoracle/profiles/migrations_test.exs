@@ -31,6 +31,48 @@ defmodule Quoracle.Profiles.MigrationsTest do
   defp new_profile, do: struct(table_profiles_module())
   defp profile_changeset(profile, attrs), do: table_profiles_module().changeset(profile, attrs)
 
+  describe "profiles table max_refinement_rounds" do
+    test "migration adds max_refinement_rounds column to profiles" do
+      result =
+        Ecto.Adapters.SQL.query!(
+          Repo,
+          """
+          SELECT column_name, data_type, column_default, is_nullable
+          FROM information_schema.columns
+          WHERE table_name = 'profiles' AND column_name = 'max_refinement_rounds'
+          """
+        )
+
+      assert length(result.rows) == 1
+      [[column_name, data_type, column_default, is_nullable]] = result.rows
+      assert column_name == "max_refinement_rounds"
+      assert data_type == "integer"
+      assert is_binary(column_default)
+      assert column_default =~ "4"
+      assert is_nullable == "NO"
+    end
+
+    test "inserting profile without max_refinement_rounds gets DB default 4" do
+      {:ok, profile} =
+        new_profile()
+        |> profile_changeset(%{
+          name: "migration-default-insert",
+          model_pool: ["gpt-4o"],
+          capability_groups: []
+        })
+        |> Repo.insert()
+
+      result =
+        Ecto.Adapters.SQL.query!(
+          Repo,
+          "SELECT max_refinement_rounds FROM profiles WHERE id = $1",
+          [Ecto.UUID.dump!(profile.id)]
+        )
+
+      assert [[4]] = result.rows
+    end
+  end
+
   describe "profiles table v2.0 capability_groups" do
     # R1: Migration Adds capability_groups Column
     test "migration adds capability_groups column" do

@@ -1,7 +1,6 @@
 defmodule Quoracle.Consensus.ResultTest do
   # Uses Task.async (not Task.async_stream) which works fine with DataCase shared mode
   use Quoracle.DataCase, async: true
-  alias Quoracle.Consensus.Manager
   alias Quoracle.Consensus.Result
 
   # =============================================================================
@@ -821,15 +820,41 @@ defmodule Quoracle.Consensus.ResultTest do
       assert confidence > 0.9
     end
 
-    test "applies penalty for late rounds" do
+    test "applies penalty after max_refinement_rounds" do
       cluster = %{count: 3}
-      max_rounds = Manager.get_max_refinement_rounds()
-      conf_round1 = Result.calculate_confidence(cluster, max_rounds, 1)
-      conf_max_round = Result.calculate_confidence(cluster, max_rounds, max_rounds)
 
-      assert conf_round1 > conf_max_round
-      # Never below 0.1
-      assert conf_max_round >= 0.1
+      conf_at_max = Result.calculate_confidence(cluster, 5, 2, max_refinement_rounds: 2)
+      conf_over_max = Result.calculate_confidence(cluster, 5, 3, max_refinement_rounds: 2)
+
+      assert conf_at_max > conf_over_max
+    end
+
+    test "uses round-minus-max penalty amount" do
+      cluster = %{count: 3}
+
+      conf_round_4 = Result.calculate_confidence(cluster, 5, 4, max_refinement_rounds: 2)
+      conf_round_5 = Result.calculate_confidence(cluster, 5, 5, max_refinement_rounds: 2)
+
+      assert_in_delta conf_round_4 - conf_round_5, 0.1, 1.0e-6
+    end
+
+    test "defaults max_refinement_rounds to 4" do
+      cluster = %{count: 3}
+
+      # With default max=4, round 4 should have NO penalty (4 <= 4)
+      conf_round_1 = Result.calculate_confidence(cluster, 5, 1)
+      conf_round_4 = Result.calculate_confidence(cluster, 5, 4)
+
+      assert conf_round_1 == conf_round_4
+    end
+
+    test "max_refinement_rounds 0 penalizes from round 1" do
+      cluster = %{count: 3}
+
+      conf_max_0 = Result.calculate_confidence(cluster, 5, 1, max_refinement_rounds: 0)
+      conf_max_4 = Result.calculate_confidence(cluster, 5, 1, max_refinement_rounds: 4)
+
+      assert conf_max_0 < conf_max_4
     end
 
     test "returns value between 0.1 and 1.0" do

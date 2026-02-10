@@ -697,19 +697,19 @@ defmodule Quoracle.Agent.MessageBatchingTest do
       state = %{state | skip_auto_consensus: false, consensus_scheduled: false}
 
       # Action: Call handle_agent_message, measure time
-      # With current impl, this BLOCKS on consensus - test will FAIL
-      # After fix, should return in < 10ms with consensus_scheduled=true
+      # Should defer consensus (not block) - returns in < 100ms even under CI load
       {elapsed_microseconds, {:noreply, new_state}} =
         :timer.tc(fn ->
           MessageHandler.handle_agent_message(state, :parent, "timing test")
         end)
 
-      # Assert: Returns in < 10ms (10_000 microseconds)
-      # This will FAIL because current impl calls consensus synchronously
-      assert elapsed_microseconds < 10_000,
+      # Assert: Returns in < 100ms (100_000 microseconds)
+      # Proves non-blocking: synchronous consensus takes multiple seconds.
+      # Threshold accounts for CI load (observed 72ms on run 9/10 with 16 parallel suites).
+      assert elapsed_microseconds < 100_000,
              "handle_agent_message should return immediately (#{elapsed_microseconds}µs), not block on consensus"
 
-      # After fix: should have set consensus_scheduled and sent :trigger_consensus
+      # Assert: Deferred consensus (behavioral proof of non-blocking return)
       assert new_state.consensus_scheduled == true
       assert_receive :trigger_consensus, 100
     end

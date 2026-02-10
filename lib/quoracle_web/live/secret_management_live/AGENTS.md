@@ -30,15 +30,18 @@
 
 ## State
 ```elixir
-active_tab: :secrets | :credentials | :model_config | :profiles
+active_tab: :secrets | :credentials | :model_config | :profiles | :system
 profiles: [TableProfiles.t()], profile_changeset: Ecto.Changeset.t()
 selected_profile: TableProfiles.t() | nil
+skills_path: String.t() | nil
 ```
 
 ## Patterns
-- Four-tab interface (Secrets | Credentials | Model Config | Profiles)
+- Five-tab interface (Secrets | Credentials | Model Config | Profiles | System)
+- System tab: skills_path configuration (v5.0), empty clears DB setting
 - Helper module extraction for 500-line limit compliance
 - Direct delete (no confirmation modal) for profiles
+- DataHelpers: prepare_edit_modal/2 extracted for profile edit modal prep
 
 ## Template
 - secret_management_live.html.heex (~420 lines, includes profile modal)

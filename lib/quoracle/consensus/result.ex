@@ -23,6 +23,9 @@ defmodule Quoracle.Consensus.Result do
 
   When cost_opts includes :cost_accumulator, the returned opts will include
   :accumulator with all embedding costs from semantic_similarity merging.
+
+  When cost_opts includes :max_refinement_rounds, that value is used for
+  the round penalty threshold in confidence scoring (default: 4).
   """
   @spec format_result([map()], integer(), integer(), keyword()) ::
           {:consensus, map(), keyword()} | {:forced_decision, map(), keyword()}
@@ -30,12 +33,12 @@ defmodule Quoracle.Consensus.Result do
     case find_winner(clusters, total_count) do
       {:majority, cluster} ->
         {action, accumulator} = merge_cluster_params(cluster, cost_opts)
-        confidence = calculate_confidence(cluster, total_count, round_num)
+        confidence = calculate_confidence(cluster, total_count, round_num, cost_opts)
         {:consensus, action, build_result_opts(confidence, accumulator)}
 
       {:plurality, cluster} ->
         {action, accumulator} = merge_cluster_params(cluster, cost_opts)
-        confidence = calculate_confidence(cluster, total_count, round_num)
+        confidence = calculate_confidence(cluster, total_count, round_num, cost_opts)
         {:forced_decision, action, build_result_opts(confidence, accumulator)}
     end
   end
@@ -272,9 +275,17 @@ defmodule Quoracle.Consensus.Result do
   @doc """
   Calculates confidence score based on cluster size and round number.
   Returns a value between 0.1 and 1.0.
+
+  Options:
+    - `:max_refinement_rounds` - Round penalty threshold (default: 4).
+      Rounds beyond this value incur a 0.1 penalty per extra round.
   """
-  @spec calculate_confidence(map(), integer(), integer()) :: float()
-  def calculate_confidence(%{count: cluster_count}, total_count, round_num) do
+  @spec calculate_confidence(map(), integer(), integer(), keyword()) :: float()
+  def calculate_confidence(cluster, total_count, round_num, opts \\ [])
+
+  def calculate_confidence(%{count: cluster_count}, total_count, round_num, opts) do
+    max_rounds = Keyword.get(opts, :max_refinement_rounds, 4)
+
     # Base confidence from cluster proportion
     base_confidence = cluster_count / total_count
 
@@ -287,8 +298,8 @@ defmodule Quoracle.Consensus.Result do
         true -> 0.0
       end
 
-    # Penalty for later rounds (diminishing confidence)
-    round_penalty = if round_num > 3, do: (round_num - 3) * 0.1, else: 0.0
+    # Penalty for rounds beyond max_refinement_rounds (diminishing confidence)
+    round_penalty = if round_num > max_rounds, do: (round_num - max_rounds) * 0.1, else: 0.0
 
     # Calculate final confidence
     confidence = base_confidence + majority_bonus - round_penalty

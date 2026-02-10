@@ -78,15 +78,9 @@ defmodule Quoracle.Consensus.Packet3ReqLLMMigrationTest do
     end
   end
 
-  describe "CONSENSUS_Manager configuration (R4-R6)" do
+  describe "CONSENSUS_Manager configuration (R4, R6)" do
     test "R4: get_consensus_threshold returns 0.5" do
       assert Manager.get_consensus_threshold() == 0.5
-    end
-
-    test "R5: get_max_refinement_rounds returns positive integer" do
-      max_rounds = Manager.get_max_refinement_rounds()
-      assert is_integer(max_rounds)
-      assert max_rounds > 0
     end
 
     test "R6: get_sliding_window_size returns 2" do

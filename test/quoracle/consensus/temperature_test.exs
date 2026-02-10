@@ -132,15 +132,15 @@ defmodule Quoracle.Consensus.TemperatureTest do
 
     # R14: Descending Temperature
     test "temperature descends by 20% of max per round" do
-      # High-temp model (max=2.0, step=0.4)
+      # High-temp model (max=2.0, default 4 rounds, step=1.6/3≈0.533)
       assert Temperature.calculate_round_temperature("openai:gpt-4o", 1) == 2.0
-      assert Temperature.calculate_round_temperature("openai:gpt-4o", 2) == 1.6
-      assert Temperature.calculate_round_temperature("openai:gpt-4o", 3) == 1.2
+      assert Temperature.calculate_round_temperature("openai:gpt-4o", 2) == 1.5
+      assert Temperature.calculate_round_temperature("openai:gpt-4o", 3) == 0.9
 
-      # Low-temp model (max=1.0, step=0.2)
+      # Low-temp model (max=1.0, default 4 rounds, step=0.8/3≈0.267)
       assert Temperature.calculate_round_temperature("anthropic:claude-sonnet-4", 1) == 1.0
-      assert Temperature.calculate_round_temperature("anthropic:claude-sonnet-4", 2) == 0.8
-      assert Temperature.calculate_round_temperature("anthropic:claude-sonnet-4", 3) == 0.6
+      assert Temperature.calculate_round_temperature("anthropic:claude-sonnet-4", 2) == 0.7
+      assert Temperature.calculate_round_temperature("anthropic:claude-sonnet-4", 3) == 0.5
     end
 
     # R15: Min Temp Floor (Low)
@@ -164,15 +164,17 @@ defmodule Quoracle.Consensus.TemperatureTest do
     # R17: Full Descent Low-Temp Model
     test "full temperature descent for low-temp model" do
       model = "anthropic:claude-sonnet-4"
+      # Default 4 rounds: reaches floor at round 4, round 5 stays at floor
       temps = for round <- 1..5, do: Temperature.calculate_round_temperature(model, round)
-      assert temps == [1.0, 0.8, 0.6, 0.4, 0.2]
+      assert temps == [1.0, 0.7, 0.5, 0.2, 0.2]
     end
 
     # R18: Full Descent High-Temp Model
     test "full temperature descent for high-temp model" do
       model = "openai:gpt-4o"
+      # Default 4 rounds: reaches floor at round 4, round 5 stays at floor
       temps = for round <- 1..5, do: Temperature.calculate_round_temperature(model, round)
-      assert temps == [2.0, 1.6, 1.2, 0.8, 0.4]
+      assert temps == [2.0, 1.5, 0.9, 0.4, 0.4]
     end
 
     # R19: Invalid Round
@@ -208,6 +210,139 @@ defmodule Quoracle.Consensus.TemperatureTest do
   end
 
   # =============================================================================
+  # INTEGRATION AUDIT: Temperature descent adapted to max_refinement_rounds
+  # WorkGroupID: feat-20260208-210722, Audit Fix
+  #
+  # Audit finding: Temperature descent is hardcoded at 20% per round (reaches
+  # floor at round 5 regardless of profile's max_refinement_rounds). With max=2,
+  # temperature barely descends. With max=9, temperature flatlines at floor for
+  # rounds 6-9. The descent rate should scale to the configured max.
+  # =============================================================================
+
+  describe "calculate_round_temperature/3 opts" do
+    test "adapts descent rate to max_refinement_rounds=2 for high-temp model" do
+      # WHEN max_refinement_rounds=2, round 2 is the LAST round
+      # THEN temperature should reach floor (0.4) by round 2
+      # Currently: round 2 of gpt-4o = 1.6 (hardcoded 20% step, barely descends)
+      temp =
+        Temperature.calculate_round_temperature("openai:gpt-4o", 2, max_refinement_rounds: 2)
+
+      assert temp == 0.4
+    end
+
+    test "adapts descent rate to max_refinement_rounds=9 for high-temp model" do
+      # WHEN max_refinement_rounds=9, temperature should spread across all 9 rounds
+      # THEN round 5 (middle) should NOT be at floor
+      # Currently: round 5 = 0.4 (floor) due to hardcoded 20% step
+      temp =
+        Temperature.calculate_round_temperature("openai:gpt-4o", 5, max_refinement_rounds: 9)
+
+      # With 9 rounds, round 5 is ~halfway, should be well above 0.4 floor
+      assert temp > 0.4
+    end
+
+    test "adapts descent rate to max_refinement_rounds=3 for low-temp model" do
+      # WHEN max_refinement_rounds=3, round 3 is the LAST round
+      # THEN temperature should reach floor (0.2) by round 3
+      # Currently: round 3 of claude = 0.6 (hardcoded 20% step)
+      temp =
+        Temperature.calculate_round_temperature("anthropic:claude-sonnet-4", 3,
+          max_refinement_rounds: 3
+        )
+
+      assert temp == 0.2
+    end
+
+    test "round 1 is always max temperature regardless of max_refinement_rounds" do
+      # WHEN round=1, THEN always returns max temperature
+      temp =
+        Temperature.calculate_round_temperature("openai:gpt-4o", 1, max_refinement_rounds: 2)
+
+      assert temp == 2.0
+    end
+
+    test "reaches floor at exactly max_refinement_rounds" do
+      # WHEN round equals max_refinement_rounds
+      # THEN temperature should be at or near floor
+      temp_high =
+        Temperature.calculate_round_temperature("openai:gpt-4o", 5, max_refinement_rounds: 5)
+
+      temp_low =
+        Temperature.calculate_round_temperature("anthropic:claude-sonnet-4", 5,
+          max_refinement_rounds: 5
+        )
+
+      assert temp_high == 0.4
+      assert temp_low == 0.2
+    end
+  end
+
+  # =============================================================================
+  # INTEGRATION AUDIT: Default max_refinement_rounds alignment
+  # WorkGroupID: feat-20260208-210722, Audit Finding
+  #
+  # Audit finding: Temperature.calculate_round_temperature/2 defaults
+  # max_refinement_rounds to 5, but the rest of the system (Manager.build_context,
+  # Result.calculate_confidence, Aggregator.build_refinement_prompt) all default
+  # to 4. This means when no explicit max_refinement_rounds is passed, temperature
+  # descent follows a 5-round curve while the consensus system expects a 4-round
+  # curve. The defaults must be aligned.
+  # =============================================================================
+
+  describe "default max_rounds alignment" do
+    test "2-arity reaches floor at round 4 (high-temp)" do
+      # The system default is max_refinement_rounds=4 (Manager.build_context, Result, etc.)
+      # Temperature's 2-arity (no opts) should also use 4, reaching floor at round 4
+      # Currently: defaults to 5, so round 4 = 0.8 (NOT floor)
+      temp = Temperature.calculate_round_temperature("openai:gpt-4o", 4)
+
+      # With max_rounds=4: step = (2.0-0.4)/(4-1) = 0.533..., round 4 = floor = 0.4
+      # With max_rounds=5 (bug): step = (2.0-0.4)/(5-1) = 0.4, round 4 = 2.0-3*0.4 = 0.8
+      assert temp == 0.4
+    end
+
+    test "2-arity reaches floor at round 4 (low-temp)" do
+      # Same check for low-temp model (floor = 0.2)
+      temp = Temperature.calculate_round_temperature("anthropic:claude-sonnet-4", 4)
+
+      # With max_rounds=4: step = (1.0-0.2)/(4-1) = 0.267..., round 4 = floor = 0.2
+      # With max_rounds=5 (bug): step = (1.0-0.2)/(5-1) = 0.2, round 4 = 1.0-3*0.2 = 0.4
+      assert temp == 0.2
+    end
+
+    test "2-arity matches explicit max_rounds: 4 (high-temp)" do
+      # The 2-arity (default) should behave identically to max_refinement_rounds: 4
+      for round <- 1..4 do
+        default_temp = Temperature.calculate_round_temperature("openai:gpt-4o", round)
+
+        explicit_temp =
+          Temperature.calculate_round_temperature("openai:gpt-4o", round,
+            max_refinement_rounds: 4
+          )
+
+        assert default_temp == explicit_temp,
+               "Round #{round}: default #{default_temp} != explicit(4) #{explicit_temp}"
+      end
+    end
+
+    test "2-arity matches explicit max_rounds: 4 (low-temp)" do
+      # Same verification for low-temp model
+      for round <- 1..4 do
+        default_temp =
+          Temperature.calculate_round_temperature("anthropic:claude-sonnet-4", round)
+
+        explicit_temp =
+          Temperature.calculate_round_temperature("anthropic:claude-sonnet-4", round,
+            max_refinement_rounds: 4
+          )
+
+        assert default_temp == explicit_temp,
+               "Round #{round}: default #{default_temp} != explicit(4) #{explicit_temp}"
+      end
+    end
+  end
+
+  # =============================================================================
   # Additional Edge Cases
   # =============================================================================
 
@@ -228,15 +363,15 @@ defmodule Quoracle.Consensus.TemperatureTest do
     end
 
     test "mixed model pool would get different temperatures" do
-      # Simulating a mixed model pool at round 3
+      # Simulating a mixed model pool at round 3 (default 4 rounds)
       round = 3
       gpt_temp = Temperature.calculate_round_temperature("azure:gpt-4o", round)
       claude_temp = Temperature.calculate_round_temperature("anthropic:claude-sonnet-4", round)
 
-      # GPT at round 3: 2.0 - (2 * 0.4) = 1.2
-      assert gpt_temp == 1.2
-      # Claude at round 3: 1.0 - (2 * 0.2) = 0.6
-      assert claude_temp == 0.6
+      # GPT at round 3 (4 rounds): 2.0 - (2 * 0.533) = 0.9
+      assert gpt_temp == 0.9
+      # Claude at round 3 (4 rounds): 1.0 - (2 * 0.267) = 0.5
+      assert claude_temp == 0.5
 
       # They should be different
       refute gpt_temp == claude_temp

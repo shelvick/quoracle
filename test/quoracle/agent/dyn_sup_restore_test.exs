@@ -21,7 +21,6 @@ defmodule Quoracle.Agent.DynSupRestoreTest do
   end
 
   describe "restore_agent/3 - Packet 5 (Restoration Logic)" do
-    # TODO: Requires Core.get_state/1 to verify restoration_mode flag in agent config
     test "ARC_RESTORE_01: spawns agent with restoration_mode = true", %{
       deps: deps,
       sandbox_owner: sandbox_owner
@@ -65,9 +64,6 @@ defmodule Quoracle.Agent.DynSupRestoreTest do
       # Verify agent registered
       assert [{^restored_pid, _}] =
                Registry.lookup(deps.registry, {:agent, "restored-agent"})
-
-      # TODO: Verify restoration_mode flag set in agent config
-      # This requires Core.get_state/1 or similar
     end
 
     test "ARC_RESTORE_02: agent skips persist_agent when restoration_mode true", %{
@@ -234,9 +230,7 @@ defmodule Quoracle.Agent.DynSupRestoreTest do
         |> TaskSchema.changeset(%{prompt: "Test task", status: "running"})
         |> Repo.insert()
 
-      # Create agent with invalid config (not a map - would require Ecto schema change)
-      # Since config field is :map type, we test with actual persisted configs
-      # Empty maps are valid (agents with no test_mode or initial_prompt)
+      # Config field is :map type; empty maps are valid persisted configs
       {:ok, valid_empty_db} =
         Repo.insert(%AgentSchema{
           agent_id: "empty-config",
@@ -309,7 +303,6 @@ defmodule Quoracle.Agent.DynSupRestoreTest do
              )
     end
 
-    # TODO: DB unique constraint prevents test setup - testing Registry duplicate instead
     test "ARC_RESTORE_08: handles duplicate agent_id by returning error", %{
       deps: deps,
       sandbox_owner: sandbox_owner
@@ -1143,6 +1136,115 @@ defmodule Quoracle.Agent.DynSupRestoreTest do
 
       assert {:ok, _result} = action_result,
              "Restored agent should be able to execute actions, got: #{inspect(action_result)}"
+    end
+  end
+
+  # ========== max_refinement_rounds Restoration (feat-20260208-210722) ==========
+  # Medium issue: max_refinement_rounds not restored from profile during pause/resume.
+  # DynSup.restore_agent re-resolves profile for capability_groups but omits
+  # max_refinement_rounds from restoration_config. Since persist_agent also does not
+  # save max_refinement_rounds in config JSONB, the value is lost on restoration
+  # and falls back to default 4 regardless of the profile setting.
+
+  describe "max_refinement_rounds Restoration" do
+    @tag :acceptance
+    test "R24: restored agent has max_refinement_rounds from profile", %{
+      deps: deps,
+      sandbox_owner: sandbox_owner
+    } do
+      alias Quoracle.Tasks.Task, as: TaskSchema
+      alias Quoracle.Tasks.TaskRestorer
+      alias Quoracle.Profiles.TableProfiles
+
+      # Step 1: Create a profile with non-default max_refinement_rounds
+      profile_name = "max-rounds-profile-#{System.unique_integer([:positive])}"
+
+      {:ok, _profile} =
+        %TableProfiles{}
+        |> TableProfiles.changeset(%{
+          name: profile_name,
+          description: "Test profile with custom max_refinement_rounds",
+          model_pool: ["test-model"],
+          capability_groups: ["file_read"],
+          max_refinement_rounds: 7
+        })
+        |> Repo.insert()
+
+      # Step 2: Create task
+      {:ok, task} =
+        %TaskSchema{}
+        |> TaskSchema.changeset(%{
+          prompt: "Test max_refinement_rounds restoration",
+          status: "running"
+        })
+        |> Repo.insert()
+
+      agent_id = "max-rounds-restore-#{System.unique_integer([:positive])}"
+
+      # Step 3: Spawn agent with profile's max_refinement_rounds
+      {:ok, agent_pid} =
+        DynSup.start_agent(deps.dynsup, %{
+          agent_id: agent_id,
+          task_id: task.id,
+          profile_name: profile_name,
+          capability_groups: [:file_read],
+          max_refinement_rounds: 7,
+          model_pool: ["test-model"],
+          registry: deps.registry,
+          pubsub: deps.pubsub,
+          test_mode: true,
+          test_opts: [skip_initial_consultation: true],
+          sandbox_owner: sandbox_owner
+        })
+
+      # Verify initial max_refinement_rounds
+      {:ok, initial_state} = Quoracle.Agent.Core.get_state(agent_pid)
+
+      assert initial_state.max_refinement_rounds == 7,
+             "Initial agent should have max_refinement_rounds=7, got: #{initial_state.max_refinement_rounds}"
+
+      # Step 4: Pause task
+      ref = Process.monitor(agent_pid)
+
+      :ok =
+        TaskRestorer.pause_task(task.id,
+          registry: deps.registry,
+          dynsup: deps.dynsup
+        )
+
+      receive do
+        {:DOWN, ^ref, :process, ^agent_pid, _} -> :ok
+      after
+        5000 -> flunk("Agent did not terminate within 5 seconds")
+      end
+
+      # Step 5: Resume task
+      {:ok, restored_pid} =
+        TaskRestorer.restore_task(task.id, deps.registry, deps.pubsub,
+          dynsup: deps.dynsup,
+          sandbox_owner: sandbox_owner
+        )
+
+      on_exit(fn ->
+        if Process.alive?(restored_pid) do
+          GenServer.stop(restored_pid, :normal, :infinity)
+        end
+      end)
+
+      # Step 6: Verify max_refinement_rounds restored from profile
+      {:ok, restored_state} = Quoracle.Agent.Core.get_state(restored_pid)
+
+      # Positive: profile value preserved through pause/resume
+      assert restored_state.max_refinement_rounds == 7,
+             "Restored agent should have max_refinement_rounds=7 from profile, " <>
+               "got: #{restored_state.max_refinement_rounds}. " <>
+               "DynSup.restore_agent must re-resolve max_refinement_rounds from profile " <>
+               "(same pattern as capability_groups)."
+
+      # Negative: must NOT fall back to the hardcoded default of 4
+      refute restored_state.max_refinement_rounds == 4,
+             "Restored agent fell back to default max_refinement_rounds=4, " <>
+               "profile value of 7 was lost during pause/resume."
     end
   end
 end

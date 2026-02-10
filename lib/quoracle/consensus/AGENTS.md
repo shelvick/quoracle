@@ -30,7 +30,7 @@
   - wait_score/1, auto_complete_score/1: Tuple scoring {true_count, finite_sum}
   - cluster_wait_score/1, cluster_auto_complete_score/1: Aggregate cluster scores
   - merge_cluster_params/1: Schema-specific parameter merging
-  - calculate_confidence/3: Confidence scoring with round penalty
+  - calculate_confidence/4: Confidence scoring with round penalty relative to max_refinement_rounds (v8.0)
 - calculate_cluster_priority/1: Batch-aware priority (max for batch_sync)
 **Result.Scoring** (110 lines, extracted): Scoring and tiebreaking functions
   - break_tie/1, wait_score/1, auto_complete_score/1
@@ -39,9 +39,10 @@
 **ActionParser**: JSON action parsing from LLM responses (154 lines, v2.0: auto_complete_todo extraction)
 **Temperature** (117 lines): Round-based temperature calculation for consensus queries
   - get_max_temperature/1: Model family → max temp (2.0 for gpt/o1/o3/o4/gemini, 1.0 for others)
-  - calculate_round_temperature/2: Descends 20% of max per round, clamped to floor
+  - calculate_round_temperature/3: Adaptive descent based on max_refinement_rounds (v2.0), clamped to floor
   - high_temp_family?/1: Prefix-based family detection (case-insensitive)
   - get_model_name/1: Extracts model from "provider:model" spec
+  - v2.0: Step = (max_temp - min_temp) / (max_rounds - 1), default max_rounds=4
 
 ## Key Functions
 
@@ -87,6 +88,13 @@ ActionParser:
 - All tests passing with module extraction
 
 ## Recent Changes
+
+**v9.0/v8.0/v2.0 - Per-Profile Max Refinement Rounds (Feb 8, 2026, WorkGroupID: feat-20260208-210722)**:
+- Aggregator v9.0: Final round hint from context[:max_refinement_rounds] (replaces Manager call)
+- Result v8.0: Relative round_penalty based on context max_refinement_rounds (default 4)
+- Temperature v2.0: Adaptive descent step = (max - min) / (max_rounds - 1)
+- Manager: build_context/2 threads max_refinement_rounds into context
+- All defaults changed from 3/5 to 4 (matching profile DB default)
 
 **v6.0/v5.0 - Batch Async Consensus (Jan 26, 2026, WorkGroupID: feat-20260126-batch-async)**:
 - Aggregator v6.0: batch_async sorted fingerprinting (order-independent clustering)

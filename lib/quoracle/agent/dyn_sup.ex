@@ -226,6 +226,8 @@ defmodule Quoracle.Agent.DynSup do
         system_prompt: rederive_system_prompt(db_agent.prompt_fields),
         # Restore capability_groups from re-resolved profile (not persisted in config)
         capability_groups: profile_data[:capability_groups] || [],
+        # Restore max_refinement_rounds from re-resolved profile (not persisted in config)
+        max_refinement_rounds: profile_data[:max_refinement_rounds] || 4,
         # Set restoration_mode flag
         restoration_mode: true
       }

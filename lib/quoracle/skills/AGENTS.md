@@ -7,7 +7,8 @@ File-based knowledge management system. Skills are markdown files stored in `~/.
 ## Modules
 
 **Loader** (234 lines):
-- `skills_dir/1` - Returns skills directory (injectable for tests)
+- `skills_dir/1` - Returns skills directory with 3-tier fallback: opts > ConfigModelSettings DB > hardcoded default (v2.0)
+  - Tilde expansion via Path.expand/1 on DB-configured paths
 - `list_skills/1` - Lists all skills (metadata only, no content)
 - `load_skill/2` - Loads single skill by name with full content
 - `load_skills/2` - Loads multiple skills, fails if any missing

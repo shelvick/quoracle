@@ -111,6 +111,7 @@ defmodule Quoracle.Agent.ConfigManager do
       # Profile fields (v6.0)
       profile_name: Map.get(config, :profile_name),
       profile_description: Map.get(config, :profile_description),
+      max_refinement_rounds: Map.get(config, :max_refinement_rounds, 4),
       # v8.0: Capability groups for profile-based action filtering
       capability_groups: Map.get(config, :capability_groups, []),
       # v9.0: Skills system - skill names requested for spawn, active skill metadata
@@ -361,6 +362,11 @@ defmodule Quoracle.Agent.ConfigManager do
       # Profile fields (v6.0, v9.0 added capability_groups)
       profile_name: config[:profile_name],
       profile_description: config[:profile_description],
+      max_refinement_rounds:
+        case config[:max_refinement_rounds] do
+          nil -> 4
+          value -> value
+        end,
       capability_groups: config[:capability_groups] || [],
       # Skills system (v9.0)
       active_skills: config[:active_skills] || []

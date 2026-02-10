@@ -70,6 +70,9 @@ defmodule Quoracle.Agent.Consensus do
       model_histories when is_map(model_histories) ->
         # Get model pool from opts or derive from histories
         model_pool = Keyword.get(opts, :model_pool, Map.keys(model_histories))
+        # Thread max_refinement_rounds from state into opts for temperature calculation
+        max_rounds = Map.get(state, :max_refinement_rounds, 4)
+        opts = Keyword.put_new(opts, :max_refinement_rounds, max_rounds)
 
         # Query each model with its own history
         case query_models_with_per_model_histories(state, model_pool, opts) do
@@ -108,7 +111,9 @@ defmodule Quoracle.Agent.Consensus do
               true ->
                 # Build context for consensus - extract actual last user message
                 prompt = extract_last_user_content(model_histories)
-                context = Manager.build_context(prompt, [])
+                # v19.0: Thread max_refinement_rounds from agent state into context via opts
+                max_rounds = Keyword.get(opts, :max_refinement_rounds, 4)
+                context = Manager.build_context(prompt, [], max_refinement_rounds: max_rounds)
                 context = Map.put(context, :model_pool, model_pool)
                 context = Map.put(context, :original_opts, opts)
                 # Include updated state for per-model refinement access (v10.0)
@@ -125,10 +130,12 @@ defmodule Quoracle.Agent.Consensus do
                 updated_meta =
                   if Keyword.get(opts, :track_temperatures, false) do
                     round = Keyword.get(opts, :round, 1)
+                    temp_opts = [max_refinement_rounds: max_rounds]
 
                     temperatures =
                       Map.new(model_pool, fn model_id ->
-                        {model_id, Temperature.calculate_round_temperature(model_id, round)}
+                        {model_id,
+                         Temperature.calculate_round_temperature(model_id, round, temp_opts)}
                       end)
 
                     Keyword.put(updated_meta, :temperatures, temperatures)
@@ -251,15 +258,16 @@ defmodule Quoracle.Agent.Consensus do
   defp execute_consensus_process(responses, context, round) do
     clusters = Aggregator.cluster_responses(responses)
     total = length(context.model_pool)
-    max_rounds = Manager.get_max_refinement_rounds()
-    cost_opts = extract_cost_opts(context)
+    # v19.0: Use per-agent max from context (threaded from state)
+    max_rounds = Map.get(context, :max_refinement_rounds, 4)
+    cost_opts = extract_cost_opts(context) ++ [max_refinement_rounds: max_rounds]
 
     case Aggregator.find_majority_cluster(clusters, total, round) do
       {:majority, _cluster} ->
         result = Result.format_result(clusters, total, round, cost_opts)
         {:ok, result}
 
-      {:no_majority, _clusters} when round >= max_rounds ->
+      {:no_majority, _clusters} when round > max_rounds ->
         result = Result.format_result(clusters, total, round, cost_opts)
         {:ok, result}
 
@@ -350,7 +358,7 @@ defmodule Quoracle.Agent.Consensus do
   # v24.0: Added :cost_accumulator for embedding cost batching (feat-20260203-194408)
   defp extract_cost_opts(context) do
     opts = Map.get(context, :original_opts, [])
-    Keyword.take(opts, [:agent_id, :task_id, :pubsub, :cost_accumulator])
+    Keyword.take(opts, [:agent_id, :task_id, :pubsub, :cost_accumulator, :max_refinement_rounds])
   end
 
   @doc "Ensures messages array has both action schema and field-based prompts."

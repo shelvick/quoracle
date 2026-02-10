@@ -12,10 +12,10 @@
 - RegistryQueries: Registry queries (77 lines), composite value extraction
 - MessageHandler: Message processing (423 lines), timer cancellation (R11-R13), consensus integration, NO_EXECUTE action_type tracking, delegates to ConsensusHandler (v9.0), routes images via ImageDetector (v11.0), message queueing (v12.0), v13.0 handles 3-tuple via StateUtils.merge_consensus_state, v15.0 unified run_consensus_cycle/2, handle_consensus_error/4 DRY helper, v16.0 deferred consensus via consensus_scheduled flag, v18.0 deferred consensus for idle agents + handle_send_user_message delegates to handle_agent_message
 - ImageDetector: Image detection from action results (167 lines), converts MCP screenshots to multimodal content, supports base64 and URL images
-- Consensus: Multi-LLM consensus (494 lines), pre-clustering validation filter (v7.0), per-model refinement context (v10.0), system prompt injection fix
+- Consensus: Multi-LLM consensus (494 lines), pre-clustering validation filter (v7.0), per-model refinement context (v10.0), system prompt injection fix, v19.0 threads max_refinement_rounds from state to context
 - TokenManager: Token counting (276 lines), tiktoken integration via Tiktoken.CL100K for accurate BPE tokenization (v5.0), v8.0 adds history_tokens_for_model/2 helper
 - ContextManager: History summarization (274 lines), builds field-based prompts for consensus, JSON formatting for :decision/:result entries (v2.0), 1-arity build_conversation_messages DELETED (v5.0), v7.0 ACE injection removed (now in AceInjector)
-- ConfigManager: Config normalization (500 lines), atomic registration, ModelPoolInit submodule extracted, v5.0 preserves model_histories from restoration config, v8.0 extracts capability_groups
+- ConfigManager: Config normalization (500 lines), atomic registration, ModelPoolInit submodule extracted, v5.0 preserves model_histories from restoration config, v8.0 extracts capability_groups, v11.0 extracts max_refinement_rounds
 - ConfigManager.ModelPoolInit: Model pool initialization (37 lines), get_model_pool_for_init/2, initialize_model_histories/1
 - ConsensusHandler: Consensus execution (246 lines), v20.0 single prompt_opts for UI/LLM consistency (fix-20260113-skill-injection), extracts active_skills + skills_path from state
 - ConsensusHandler.Helpers: Helper functions (27 lines), normalize_sibling_context/1, self_contained_actions/0
@@ -26,7 +26,7 @@
 - ConsensusHandler.ContextInjector: Context token injection (95 lines, v2.0), inject_context_tokens/1 counts fully-built messages (excluding system prompt), format_context_tokens/1 with comma separators
 - StateUtils: State manipulation helpers (145 lines), action_type tracking for NO_EXECUTE, v3.0 adds merge_consensus_state/2 for ACE state merging (extracted from MessageHandler/ConsensusContinuationHandler), v5.0 adds cancel_wait_timer/1 for DRY timer cancellation (4 pattern-matched clauses), v6.0 adds schedule_consensus_continuation/1 for DRY "set flag + send trigger" pattern
 - ConsensusContinuationHandler: Continuation handling (59 lines), v4.0 delegates to MessageHandler.run_consensus_cycle/2 for unified message flush, v5.0 delegates cancel_wait_timer to StateUtils
-- DynSup: DynamicSupervisor wrapper (185 lines), 2-arity terminate for tests, v3.0 restore_agent prefers ace_state.model_histories
+- DynSup: DynamicSupervisor wrapper (185 lines), 2-arity terminate for tests, v3.0 restore_agent prefers ace_state.model_histories, v7.0 restores max_refinement_rounds from profile
 - Reflector: LLM-based lesson/state extraction (278 lines), self-reflection pattern, JSON parsing with validation, v2.1 uses ContentStringifier for multimodal prompts
 - LessonManager: Embedding-based lesson deduplication (175 lines), cosine similarity (0.90 threshold), O(n) accumulation
 - TreeTerminator: Recursive agent tree termination (213 lines, v1.0), BFS collection, bottom-up termination, DB cleanup
@@ -119,7 +119,7 @@
 - Test coverage: 18 Reflector tests, 25 LessonManager tests (all async: true)
 
 ## Per-Model Conversation Histories (2025-12-07)
-- Core.State uses `model_histories: %{}` (map of model_id => history list)
+- Core.State uses `model_histories: %{}` (map of model_id => history list), `max_refinement_rounds: non_neg_integer()` (v33.0, default 4)
 - Replaced single `conversation_history` field (removed)
 - ClientAPI: `get_model_histories/1` returns full map (removed deprecated `get_conversation_history/1`)
 - TokenManager: Uses all histories combined for context percentage calculations

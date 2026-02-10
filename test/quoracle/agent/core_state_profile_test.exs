@@ -35,6 +35,7 @@ defmodule Quoracle.Agent.CoreStateProfileTest do
       assert Map.has_key?(state, :profile_description)
       assert Map.has_key?(state, :model_pool)
       assert Map.has_key?(state, :capability_groups)
+      assert Map.has_key?(state, :max_refinement_rounds)
     end
 
     test "profile_name defaults to nil" do
@@ -89,6 +90,7 @@ defmodule Quoracle.Agent.CoreStateProfileTest do
         |> Map.put(:profile_description, "A custom profile for testing")
         |> Map.put(:model_pool, ["gpt-4o", "claude-opus"])
         |> Map.put(:capability_groups, [:hierarchy, :file_read])
+        |> Map.put(:max_refinement_rounds, 7)
 
       # Verify fields were set (Map.put succeeds even for non-struct keys,
       # but the key existence checks above will fail if fields don't exist)
@@ -96,6 +98,7 @@ defmodule Quoracle.Agent.CoreStateProfileTest do
       assert state.profile_description == "A custom profile for testing"
       assert state.model_pool == ["gpt-4o", "claude-opus"]
       assert state.capability_groups == [:hierarchy, :file_read]
+      assert state.max_refinement_rounds == 7
     end
   end
 
@@ -118,6 +121,46 @@ defmodule Quoracle.Agent.CoreStateProfileTest do
   # ==========================================================================
   # v26.0 - capability_groups field (R57-R60)
   # ==========================================================================
+
+  describe "max_refinement_rounds field" do
+    test "state includes max_refinement_rounds field" do
+      state = %State{
+        agent_id: "test-agent",
+        registry: :test_registry,
+        dynsup: self(),
+        pubsub: :test_pubsub
+      }
+
+      assert Map.has_key?(state, :max_refinement_rounds)
+    end
+
+    test "state uses max_refinement_rounds from config" do
+      config = %{
+        agent_id: "test-agent",
+        registry: :test_registry,
+        dynsup: self(),
+        pubsub: :test_pubsub,
+        max_refinement_rounds: 7
+      }
+
+      state = State.new(config)
+
+      assert state.max_refinement_rounds == 7
+    end
+
+    test "state defaults max_refinement_rounds to 4" do
+      config = %{
+        agent_id: "test-agent",
+        registry: :test_registry,
+        dynsup: self(),
+        pubsub: :test_pubsub
+      }
+
+      state = State.new(config)
+
+      assert state.max_refinement_rounds == 4
+    end
+  end
 
   describe "capability_groups field (R57-R60)" do
     # R57: capability_groups Field Exists

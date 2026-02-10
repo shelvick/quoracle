@@ -121,11 +121,12 @@ cd quoracle
 cp .env.example .env
 ```
 
-Edit `.env` and fill in the required values:
+Edit `.env` and fill in the required values. Generate each key in your terminal, then paste the output:
 
 ```bash
-SECRET_KEY_BASE=$(openssl rand -base64 64 | tr -d '\n')
-CLOAK_ENCRYPTION_KEY=$(openssl rand -base64 32)
+# Run each command and paste its output into .env
+openssl rand -base64 64 | tr -d '\n'   # → paste as SECRET_KEY_BASE
+openssl rand -base64 32                 # → paste as CLOAK_ENCRYPTION_KEY
 ```
 
 Then:
@@ -206,6 +207,8 @@ Switch to the **Profiles** tab. A profile defines _which models_ participate in 
 
 **Model pool**: Pick at least one model, but three is the sweet spot for consensus. Mixing providers (e.g., one OpenAI, one Anthropic, one Google) gives you the most diverse perspectives.
 
+**Max refinement rounds** (0–9) controls how many times the consensus pipeline can iterate before forcing a decision. The default is 4. Lower values make agents decide faster (and cheaper); higher values let them deliberate longer on complex tasks. Temperature descent adapts automatically to the configured round count.
+
 **Capability groups** control what actions are available:
 
 | Group | What It Unlocks |
@@ -258,7 +261,7 @@ The model pool is where most of the magic happens. A few things we've found:
 
 ### Using Skills
 
-Skills are reusable knowledge files that get injected into an agent's system prompt. They live at `~/.quoracle/skills/`:
+Skills are reusable knowledge files that get injected into an agent's system prompt. By default they live at `~/.quoracle/skills/`, but this is configurable in Settings > System:
 
 ```
 ~/.quoracle/skills/
@@ -394,7 +397,7 @@ Batch operations (`batch_sync`, `batch_async`) let agents execute multiple actio
 
 ### PubSub Isolation
 
-Every component receives its PubSub instance as an explicit parameter -- no global topics, no named processes, no process dictionary. This means the full test suite of 5600+ tests runs with `async: true`.
+Every component receives its PubSub instance as an explicit parameter -- no global topics, no named processes, no process dictionary. This means the full test suite of 5700+ tests runs with `async: true`.
 
 ## Configuration Reference
 

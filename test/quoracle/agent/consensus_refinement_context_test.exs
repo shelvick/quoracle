@@ -791,10 +791,10 @@ defmodule Quoracle.Agent.ConsensusRefinementContextTest do
       assert temp_r1 > temp_r2
       assert temp_r2 > temp_r3
 
-      # Claude max=1.0: 1.0 → 0.8 → 0.6
+      # Claude max=1.0 (default 4 rounds): 1.0 → 0.7 → 0.5
       assert temp_r1 == 1.0
-      assert temp_r2 == 0.8
-      assert temp_r3 == 0.6
+      assert temp_r2 == 0.7
+      assert temp_r3 == 0.5
     end
 
     test "per-model query uses Temperature module for refinement rounds" do
@@ -806,17 +806,19 @@ defmodule Quoracle.Agent.ConsensusRefinementContextTest do
 
       assert claude_r4.temperature < claude_r1.temperature
       assert claude_r1.temperature == 1.0
-      assert claude_r4.temperature == 0.4
+      # Round 4 with default 4 rounds = floor = 0.2
+      assert claude_r4.temperature == 0.2
     end
 
     test "different model families get different temperatures at same round" do
       opts = [round: 2]
 
+      # Round 2 with default 4 rounds
       claude_temp = PerModelQuery.build_query_options("anthropic:claude-sonnet-4", opts)
-      assert claude_temp.temperature == 0.8
+      assert claude_temp.temperature == 0.7
 
       gpt_temp = PerModelQuery.build_query_options("openai:gpt-4o", opts)
-      assert gpt_temp.temperature == 1.6
+      assert gpt_temp.temperature == 1.5
 
       assert gpt_temp.temperature > claude_temp.temperature
     end

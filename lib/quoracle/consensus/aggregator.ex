@@ -6,7 +6,6 @@ defmodule Quoracle.Consensus.Aggregator do
 
   alias Quoracle.Actions.Schema
   alias Quoracle.Consensus.Aggregator.{ActionSummary, ParamMatching}
-  alias Quoracle.Consensus.Manager
   alias Quoracle.Costs.Accumulator
   alias Quoracle.Models.Embeddings
 
@@ -149,8 +148,10 @@ defmodule Quoracle.Consensus.Aggregator do
         ""
       end
 
+    max_rounds = Map.get(context, :max_refinement_rounds, 4)
+
     final_round_hint =
-      if round_num >= Manager.get_max_refinement_rounds(),
+      if round_num >= max_rounds,
         do: "\nThis is the final round.",
         else: ""
 
@@ -203,7 +204,8 @@ defmodule Quoracle.Consensus.Aggregator do
         )
       end)
 
-    total_rounds = Map.get(context, :total_rounds, Manager.get_max_refinement_rounds())
+    max_rounds = Map.get(context, :max_refinement_rounds, 4)
+    total_rounds = Map.get(context, :total_rounds, max_rounds)
 
     """
     ## Final Consensus Round

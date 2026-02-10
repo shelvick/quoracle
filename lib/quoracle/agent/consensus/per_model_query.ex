@@ -202,7 +202,8 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
   @spec build_query_options(String.t(), keyword()) :: map()
   def build_query_options(model_id, opts) do
     round = Keyword.get(opts, :round, 1)
-    temperature = Temperature.calculate_round_temperature(model_id, round)
+    temp_opts = [max_refinement_rounds: Keyword.get(opts, :max_refinement_rounds, 4)]
+    temperature = Temperature.calculate_round_temperature(model_id, round, temp_opts)
 
     base_opts = %{
       max_tokens: Keyword.get(opts, :max_tokens, 4096),
@@ -255,7 +256,13 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
       clusters = Aggregator.cluster_responses(original_responses)
 
       cost_opts =
-        Keyword.take(Map.get(context, :original_opts, []), [:agent_id, :task_id, :pubsub])
+        Keyword.take(Map.get(context, :original_opts, []), [
+          :agent_id,
+          :task_id,
+          :pubsub,
+          :max_refinement_rounds,
+          :cost_accumulator
+        ])
 
       result = Result.format_result(clusters, length(original_responses), round, cost_opts)
       {:ok, result}

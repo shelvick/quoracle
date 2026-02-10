@@ -38,8 +38,14 @@ defmodule Quoracle.Profiles.TableProfilesTest do
       assert Map.has_key?(profile, :description)
       assert Map.has_key?(profile, :model_pool)
       assert Map.has_key?(profile, :capability_groups)
+      assert Map.has_key?(profile, :max_refinement_rounds)
       assert Map.has_key?(profile, :inserted_at)
       assert Map.has_key?(profile, :updated_at)
+    end
+
+    test "schema includes max_refinement_rounds with default 4" do
+      profile = new_profile()
+      assert profile.max_refinement_rounds == 4
     end
   end
 
@@ -274,6 +280,49 @@ defmodule Quoracle.Profiles.TableProfilesTest do
 
       refute cs.valid?
       assert errors_on(cs)[:description] != nil
+    end
+
+    test "max_refinement_rounds accepts values 0 through 9" do
+      for rounds <- 0..9 do
+        attrs = %{
+          name: "rounds-valid-#{rounds}",
+          model_pool: ["gpt-4o"],
+          capability_groups: [],
+          max_refinement_rounds: rounds
+        }
+
+        cs = changeset(new_profile(), attrs)
+        assert cs.valid?, "Expected max_refinement_rounds=#{rounds} to be valid"
+      end
+    end
+
+    test "max_refinement_rounds rejects values outside 0-9" do
+      invalid_values = [-1, 10]
+
+      for rounds <- invalid_values do
+        attrs = %{
+          name: "rounds-invalid-#{abs(rounds)}-#{if rounds < 0, do: "neg", else: "pos"}",
+          model_pool: ["gpt-4o"],
+          capability_groups: [],
+          max_refinement_rounds: rounds
+        }
+
+        cs = changeset(new_profile(), attrs)
+        refute cs.valid?, "Expected max_refinement_rounds=#{rounds} to be invalid"
+        assert errors_on(cs)[:max_refinement_rounds] != nil
+      end
+    end
+
+    test "max_refinement_rounds defaults to 4 when not specified" do
+      attrs = %{
+        name: "rounds-default-test",
+        model_pool: ["gpt-4o"],
+        capability_groups: []
+      }
+
+      cs = changeset(new_profile(), attrs)
+      assert cs.valid?
+      assert Ecto.Changeset.get_field(cs, :max_refinement_rounds) == 4
     end
   end
 

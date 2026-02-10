@@ -20,14 +20,21 @@ defmodule Quoracle.Agent.Reflector do
 
   @reflection_prompt """
   You are analyzing conversation history that is about to be condensed.
-  Extract valuable information in two categories:
+  Extract valuable information that would be ACTIONABLE if encountered later.
+  Ask: "What specific details would I need to act on this without re-discovering it?"
 
-  LESSONS - Reusable knowledge (facts learned, behavioral preferences discovered):
-  - Factual: Things that are true ("API X requires header Y", "User prefers JSON")
-  - Behavioral: How to act ("Be concise", "Always confirm before destructive actions")
+  LESSONS - Reusable knowledge (accumulated over time, deduplicated by similarity):
+  - Factual: Specific, precise facts with enough detail to act on.
+    GOOD: "Stripe webhook endpoint /api/webhooks/stripe requires idempotency-key header; without it, duplicate charges occur"
+    BAD: "Stripe needs a header"
+  - Behavioral: How to act, with context for when/why.
+    GOOD: "User wants shell commands confirmed before execution, especially rm and database operations"
+    BAD: "Be careful with commands"
 
-  STATE - Current situational context (will be replaced each condensation):
-  - Task progress, blockers, emotional context, recent focus areas
+  STATE - Current situational context (replaced each condensation):
+  - Task progress with specific details: what's done, what's next, what's blocked and why
+  - Decisions made and their rationale (so we don't revisit them)
+  - Failures encountered: what was tried, why it failed, what worked instead
 
   Return JSON:
   {
@@ -36,7 +43,7 @@ defmodule Quoracle.Agent.Reflector do
       {"type": "behavioral", "content": "..."}
     ],
     "state": [
-      {"summary": "Currently debugging auth module, 3/5 done, user frustrated"}
+      {"summary": "Implementing auth module: login/logout done, password reset blocked by missing SMTP config. Tried SendGrid but rate-limited; switching to Mailgun."}
     ]
   }
 

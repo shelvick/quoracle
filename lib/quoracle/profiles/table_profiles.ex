@@ -15,6 +15,7 @@ defmodule Quoracle.Profiles.TableProfiles do
           description: String.t() | nil,
           model_pool: [String.t()] | nil,
           capability_groups: [String.t()] | nil,
+          max_refinement_rounds: integer() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -27,6 +28,7 @@ defmodule Quoracle.Profiles.TableProfiles do
     field(:description, :string)
     field(:model_pool, {:array, :string})
     field(:capability_groups, {:array, :string}, default: [])
+    field(:max_refinement_rounds, :integer, default: 4)
 
     timestamps(type: :utc_datetime)
   end
@@ -34,7 +36,7 @@ defmodule Quoracle.Profiles.TableProfiles do
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(profile, attrs) do
     profile
-    |> cast(attrs, [:name, :description, :model_pool, :capability_groups])
+    |> cast(attrs, [:name, :description, :model_pool, :capability_groups, :max_refinement_rounds])
     |> validate_required([:name, :model_pool])
     |> put_default_capability_groups()
     |> validate_format(:name, ~r/^[a-zA-Z0-9_-]+$/,
@@ -45,6 +47,10 @@ defmodule Quoracle.Profiles.TableProfiles do
     |> validate_length(:model_pool, min: 1, message: "must have at least one model")
     |> validate_model_pool_format()
     |> validate_capability_groups()
+    |> validate_number(:max_refinement_rounds,
+      greater_than_or_equal_to: 0,
+      less_than_or_equal_to: 9
+    )
     |> unique_constraint(:name)
   end
 
