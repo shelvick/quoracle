@@ -1,0 +1,103 @@
+{
+  "interactions": [
+    {
+      "recorded_at": "2025-12-02T22:27:39.795290Z",
+      "request": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "accept": [
+            "application/json"
+          ],
+          "accept-encoding": [
+            "gzip"
+          ],
+          "user-agent": [
+            "req/0.5.15"
+          ]
+        },
+        "method": "GET",
+        "query_string": "",
+        "uri": "https://httpbin.org/status/503"
+      },
+      "response": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "access-control-allow-credentials": [
+            "true"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-length": [
+            "0"
+          ],
+          "content-type": [
+            "text/html; charset=utf-8"
+          ],
+          "date": [
+            "Tue, 02 Dec 2025 22:27:39 GMT"
+          ],
+          "server": [
+            "gunicorn/19.9.0"
+          ]
+        },
+        "status": 503
+      }
+    },
+    {
+      "recorded_at": "2026-01-17T02:12:50.205987Z",
+      "request": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "accept": [
+            "application/json"
+          ],
+          "accept-encoding": [
+            "gzip"
+          ],
+          "user-agent": [
+            "req/0.5.17"
+          ]
+        },
+        "method": "GET",
+        "query_string": "",
+        "uri": "https://httpbin.org/status/503"
+      },
+      "response": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "access-control-allow-credentials": [
+            "true"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-length": [
+            "0"
+          ],
+          "content-type": [
+            "text/html; charset=utf-8"
+          ],
+          "date": [
+            "Sat, 17 Jan 2026 02:12:50 GMT"
+          ],
+          "server": [
+            "gunicorn/19.9.0"
+          ]
+        },
+        "status": 503
+      }
+    }
+  ],
+  "version": "1.0"
+}

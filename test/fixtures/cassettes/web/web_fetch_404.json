@@ -1,0 +1,97 @@
+{
+  "interactions": [
+    {
+      "recorded_at": "2025-12-02T16:06:02.825762Z",
+      "request": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "accept-encoding": [
+            "gzip"
+          ],
+          "user-agent": [
+            "Quoracle/1.0"
+          ]
+        },
+        "method": "GET",
+        "query_string": "",
+        "uri": "http://httpbin.org/status/404"
+      },
+      "response": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "access-control-allow-credentials": [
+            "true"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-length": [
+            "0"
+          ],
+          "content-type": [
+            "text/html; charset=utf-8"
+          ],
+          "date": [
+            "Tue, 02 Dec 2025 16:06:02 GMT"
+          ],
+          "server": [
+            "gunicorn/19.9.0"
+          ]
+        },
+        "status": 404
+      }
+    },
+    {
+      "recorded_at": "2026-02-07T01:43:35.586844Z",
+      "request": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "accept-encoding": [
+            "gzip"
+          ],
+          "user-agent": [
+            "req/0.5.17"
+          ]
+        },
+        "method": "GET",
+        "query_string": "",
+        "uri": "http://httpbin.org/status/404"
+      },
+      "response": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "access-control-allow-credentials": [
+            "true"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-length": [
+            "0"
+          ],
+          "content-type": [
+            "text/html; charset=utf-8"
+          ],
+          "date": [
+            "Sat, 07 Feb 2026 01:43:35 GMT"
+          ],
+          "server": [
+            "gunicorn/19.9.0"
+          ]
+        },
+        "status": 404
+      }
+    }
+  ],
+  "version": "1.0"
+}

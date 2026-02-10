@@ -1,0 +1,15 @@
+_build/
+deps/
+doc/
+cover/
+tmp/
+.elixir_ls/
+priv/plts/
+priv/static/assets/
+priv/static/cache_manifest.json
+priv/static/uploads/
+assets/node_modules/
+.git/
+Dockerfile
+docker-compose.yml
+.dockerignore

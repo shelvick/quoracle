@@ -1,0 +1,224 @@
+{
+  "interactions": [
+    {
+      "recorded_at": "2025-12-02T22:27:07.325269Z",
+      "request": {
+        "body_json": {
+          "test": "data"
+        },
+        "body_type": "json",
+        "headers": {
+          "accept": [
+            "application/json"
+          ],
+          "accept-encoding": [
+            "gzip"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "user-agent": [
+            "req/0.5.15"
+          ]
+        },
+        "method": "POST",
+        "query_string": "",
+        "uri": "https://httpbin.org/post"
+      },
+      "response": {
+        "body_json": {
+          "args": {},
+          "data": "{\"test\":\"data\"}",
+          "files": {},
+          "form": {},
+          "headers": {
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "Authorization": "[FILTERED]",
+            "Content-Length": "15",
+            "Content-Type": "application/json",
+            "Host": "httpbin.org",
+            "User-Agent": "req/0.5.15",
+            "X-Amzn-Trace-Id": "Root=1-692f67bb-22c9edba072d63e563612607"
+          },
+          "json": {
+            "test": "data"
+          },
+          "origin": "203.0.113.1",
+          "url": "https://httpbin.org/post"
+        },
+        "body_type": "json",
+        "headers": {
+          "access-control-allow-credentials": [
+            "true"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "date": [
+            "Tue, 02 Dec 2025 22:27:07 GMT"
+          ],
+          "server": [
+            "gunicorn/19.9.0"
+          ]
+        },
+        "status": 200
+      }
+    },
+    {
+      "recorded_at": "2025-12-04T22:59:03.553231Z",
+      "request": {
+        "body_json": {
+          "test": "data"
+        },
+        "body_type": "json",
+        "headers": {
+          "accept": [
+            "application/json"
+          ],
+          "accept-encoding": [
+            "gzip"
+          ],
+          "authorization": [
+            "Bearer test-token"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "user-agent": [
+            "req/0.5.15"
+          ]
+        },
+        "method": "POST",
+        "query_string": "",
+        "uri": "https://httpbin.org/post"
+      },
+      "response": {
+        "body_json": {
+          "args": {},
+          "data": "{\"test\":\"data\"}",
+          "files": {},
+          "form": {},
+          "headers": {
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "Authorization": "Bearer test-token",
+            "Content-Length": "15",
+            "Content-Type": "application/json",
+            "Host": "httpbin.org",
+            "User-Agent": "req/0.5.15",
+            "X-Amzn-Trace-Id": "Root=1-69321236-01d30e2838e5b8ed178d7157"
+          },
+          "json": {
+            "test": "data"
+          },
+          "origin": "203.0.113.1",
+          "url": "https://httpbin.org/post"
+        },
+        "body_type": "json",
+        "headers": {
+          "access-control-allow-credentials": [
+            "true"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "date": [
+            "Thu, 04 Dec 2025 22:59:03 GMT"
+          ],
+          "server": [
+            "gunicorn/19.9.0"
+          ]
+        },
+        "status": 200
+      }
+    },
+    {
+      "recorded_at": "2026-01-17T02:12:42.252390Z",
+      "request": {
+        "body_json": {
+          "test": "data"
+        },
+        "body_type": "json",
+        "headers": {
+          "accept": [
+            "application/json"
+          ],
+          "accept-encoding": [
+            "gzip"
+          ],
+          "authorization": [
+            "Bearer test-token"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "user-agent": [
+            "req/0.5.17"
+          ]
+        },
+        "method": "POST",
+        "query_string": "",
+        "uri": "https://httpbin.org/post"
+      },
+      "response": {
+        "body_json": {
+          "args": {},
+          "data": "{\"test\":\"data\"}",
+          "files": {},
+          "form": {},
+          "headers": {
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "Authorization": "Bearer test-token",
+            "Content-Length": "15",
+            "Content-Type": "application/json",
+            "Host": "httpbin.org",
+            "User-Agent": "req/0.5.17",
+            "X-Amzn-Trace-Id": "Root=1-696af01a-747a797527887d1e4300ac39"
+          },
+          "json": {
+            "test": "data"
+          },
+          "origin": "203.0.113.1",
+          "url": "https://httpbin.org/post"
+        },
+        "body_type": "json",
+        "headers": {
+          "access-control-allow-credentials": [
+            "true"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "date": [
+            "Sat, 17 Jan 2026 02:12:42 GMT"
+          ],
+          "server": [
+            "gunicorn/19.9.0"
+          ]
+        },
+        "status": 200
+      }
+    }
+  ],
+  "version": "1.0"
+}

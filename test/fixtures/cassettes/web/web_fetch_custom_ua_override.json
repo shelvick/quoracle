@@ -1,0 +1,50 @@
+{
+  "interactions": [
+    {
+      "recorded_at": "2026-02-07T01:55:00.428158Z",
+      "request": {
+        "body": "",
+        "body_type": "text",
+        "headers": {
+          "accept-encoding": [
+            "gzip"
+          ],
+          "user-agent": [
+            "CustomBot/2.0"
+          ]
+        },
+        "method": "GET",
+        "query_string": "",
+        "uri": "http://httpbin.org/user-agent"
+      },
+      "response": {
+        "body_json": {
+          "user-agent": "CustomBot/2.0"
+        },
+        "body_type": "json",
+        "headers": {
+          "access-control-allow-credentials": [
+            "true"
+          ],
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "connection": [
+            "keep-alive"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "date": [
+            "Sat, 07 Feb 2026 01:55:00 GMT"
+          ],
+          "server": [
+            "gunicorn/19.9.0"
+          ]
+        },
+        "status": 200
+      }
+    }
+  ],
+  "version": "1.0"
+}
