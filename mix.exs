@@ -4,7 +4,7 @@ defmodule Quoracle.MixProject do
   def project do
     [
       app: :quoracle,
-      version: "0.1.3",
+      version: "0.1.4",
       elixir: "~> 1.18",
       listeners: [Phoenix.CodeReloader],
       elixirc_paths: elixirc_paths(Mix.env()),
