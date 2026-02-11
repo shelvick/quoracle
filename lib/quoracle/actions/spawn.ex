@@ -145,6 +145,15 @@ defmodule Quoracle.Actions.Spawn do
          agent_id: child_id,
          spawned_at: DateTime.utc_now()
        }}
+    else
+      {:error, :budget_required} ->
+        {:error,
+         "Budget is required when spawning children. " <>
+           "Specify a budget amount (e.g., budget: \"50.00\"). " <>
+           "Use get_budget to check your available funds."}
+
+      error ->
+        error
     end
   end
 

@@ -10,20 +10,33 @@ defmodule Quoracle.Actions.Spawn.BudgetValidation do
   Validates and checks budget for spawn action.
 
   Returns {:ok, %{child_budget_data: map, escrow_amount: Decimal | nil}}
-  or {:error, :invalid_budget_format | :insufficient_budget}
+  or {:error, :invalid_budget_format | :insufficient_budget | :budget_required}
   """
   @spec validate_and_check_budget(map(), map()) ::
           {:ok, %{child_budget_data: map(), escrow_amount: Decimal.t() | nil}}
-          | {:error, :invalid_budget_format | :insufficient_budget}
+          | {:error, :invalid_budget_format | :insufficient_budget | :budget_required}
   def validate_and_check_budget(params, deps) do
     # Extract budget from params (string from LLM)
     budget_str = Map.get(params, :budget) || Map.get(params, "budget")
 
     case budget_str do
       nil ->
-        # No budget specified - child gets N/A budget
-        {:ok,
-         %{child_budget_data: %{mode: :na, allocated: nil, committed: nil}, escrow_amount: nil}}
+        # Check if parent has a budget - budgeted parents MUST give budget to children
+        parent_budget = Map.get(deps, :budget_data)
+
+        case parent_budget do
+          %{mode: mode} when mode in [:root, :allocated] ->
+            # Budgeted parent must specify budget for child
+            {:error, :budget_required}
+
+          _ ->
+            # N/A, nil, or unknown parent - child gets N/A budget (unlimited)
+            {:ok,
+             %{
+               child_budget_data: %{mode: :na, allocated: nil, committed: nil},
+               escrow_amount: nil
+             }}
+        end
 
       budget_value ->
         # Parse and validate budget

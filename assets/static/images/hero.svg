@@ -35,7 +35,7 @@
 
   <!-- Root label -->
   <text x="210" y="48" font-size="14" font-weight="700" fill="#312e81">Root Agent</text>
-  <text x="340" y="48" font-size="11" fill="#6366f1">"Project Manager"</text>
+  <text x="340" y="48" font-size="11" fill="#6366f1">"Research Director"</text>
 
   <!-- Three model circles inside root -->
   <rect x="210" y="68" width="90" height="36" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.2"/>
@@ -98,7 +98,7 @@
   <!-- Child A -->
   <rect x="80" y="297" width="280" height="80" rx="10" fill="url(#h-child)"/>
   <text x="130" y="322" font-size="12" font-weight="700" fill="white">Child Agent</text>
-  <text x="253" y="322" font-size="10" fill="#ddd6fe">"Backend Engineer"</text>
+  <text x="253" y="322" font-size="10" fill="#ddd6fe">"Market Analyst"</text>
 
   <!-- Mini consensus inside Child A -->
   <circle cx="115" cy="353" r="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
@@ -114,7 +114,7 @@
   <!-- Child B -->
   <rect x="540" y="297" width="280" height="80" rx="10" fill="url(#h-child)"/>
   <text x="590" y="322" font-size="12" font-weight="700" fill="white">Child Agent</text>
-  <text x="710" y="322" font-size="10" fill="#ddd6fe">"Frontend Engineer"</text>
+  <text x="710" y="322" font-size="10" fill="#ddd6fe">"Content Strategist"</text>
 
   <!-- Mini consensus inside Child B -->
   <circle cx="575" cy="353" r="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
@@ -135,7 +135,7 @@
 
   <rect x="100" y="423" width="240" height="65" rx="8" fill="url(#h-grand)"/>
   <text x="140" y="448" font-size="11" font-weight="600" fill="white">Grandchild</text>
-  <text x="237" y="448" font-size="9" fill="#ede9fe">"Database Specialist"</text>
+  <text x="237" y="448" font-size="9" fill="#ede9fe">"Survey Designer"</text>
 
   <!-- Mini consensus inside Grandchild -->
   <circle cx="135" cy="472" r="7" fill="#fef3c7" stroke="#f59e0b" stroke-width="0.8"/>

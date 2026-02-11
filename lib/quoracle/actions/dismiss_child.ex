@@ -9,6 +9,7 @@ defmodule Quoracle.Actions.DismissChild do
   alias Ecto.Adapters.SQL.Sandbox
   alias Quoracle.Agent.Core
   alias Quoracle.Agent.TreeTerminator
+  alias Quoracle.Costs.{Aggregator, Recorder}
   alias Quoracle.Repo
 
   @doc """
@@ -100,38 +101,20 @@ defmodule Quoracle.Actions.DismissChild do
 
     # For test synchronization - notify when background task completes
     notify_pid = Keyword.get(opts, :dismiss_complete_notify)
+    task_id = Keyword.get(opts, :task_id)
 
     Task.Supervisor.start_child(
       Quoracle.SpawnTaskSupervisor,
       fn ->
-        # Wrap entire task in try/catch to handle sandbox owner exit race condition
-        # This happens when test exits before TreeTerminator Task completes
-        try do
-          # Allow DB access in background task (test isolation)
-          if deps.sandbox_owner do
-            Sandbox.allow(Repo, deps.sandbox_owner, self())
-          end
-
-          # Get child's budget_data BEFORE termination (for budget release)
-          child_budget_data = get_child_budget_data(child_id, registry)
-
-          TreeTerminator.terminate_tree(child_id, parent_id, reason, deps)
-
-          # Release budget from parent's committed (v3.0)
-          release_budget_from_parent(parent_pid, child_budget_data)
-
-          # Notify test process that background task is complete
-          if notify_pid do
-            send(notify_pid, {:dismiss_complete, child_id})
-          end
-        catch
-          # Handle sandbox owner exit - test process died before task completed
-          # Various exit formats from DBConnection when sandbox owner dies:
-          # The :stop tuple wraps the actual shutdown reason from DBConnection
-          :exit, {:stop, _reason} -> :ok
-          :exit, {:shutdown, _reason} -> :ok
-          :exit, :killed -> :ok
-        end
+        do_background_dismissal(
+          child_id,
+          parent_id,
+          parent_pid,
+          reason,
+          deps,
+          task_id,
+          notify_pid
+        )
       end
     )
 
@@ -146,6 +129,33 @@ defmodule Quoracle.Actions.DismissChild do
        child_id: child_id,
        status: "terminating"
      }}
+  end
+
+  # Background task body for dismissal: DB setup, budget snapshot, terminate, reconcile.
+  # Wrapped in try/catch to handle sandbox owner exit race condition
+  # (test process dies before Task completes).
+  defp do_background_dismissal(child_id, parent_id, parent_pid, reason, deps, task_id, notify_pid) do
+    try do
+      if deps.sandbox_owner do
+        Sandbox.allow(Repo, deps.sandbox_owner, self())
+      end
+
+      # Snapshot budget state BEFORE termination (TreeTerminator v2.0 deletes cost records)
+      child_budget_data = get_child_budget_data(child_id, deps.registry)
+      tree_spent = query_child_tree_spent(child_id)
+
+      TreeTerminator.terminate_tree(child_id, parent_id, reason, deps)
+
+      # Reconcile budget: create absorption record, release escrow (v4.0)
+      reconcile_child_budget(parent_pid, child_budget_data, child_id, task_id, tree_spent)
+
+      if notify_pid, do: send(notify_pid, {:dismiss_complete, child_id})
+    catch
+      # Handle sandbox owner exit - various exit formats from DBConnection
+      :exit, {:stop, _reason} -> :ok
+      :exit, {:shutdown, _reason} -> :ok
+      :exit, :killed -> :ok
+    end
   end
 
   # Look up parent_pid from registry
@@ -172,22 +182,68 @@ defmodule Quoracle.Actions.DismissChild do
     end
   end
 
-  # Release budget from parent's committed when child is dismissed (v3.0)
-  defp release_budget_from_parent(parent_pid, child_budget_data) do
-    # Only release if child had allocated budget
+  # Query total tree spent before termination deletes records (v4.0)
+  @spec query_child_tree_spent(String.t()) :: Decimal.t()
+  defp query_child_tree_spent(child_id) do
+    own_costs = Aggregator.by_agent(child_id)
+    children_costs = Aggregator.by_agent_children(child_id)
+
+    own_spent = own_costs.total_cost || Decimal.new("0")
+    children_spent = children_costs.total_cost || Decimal.new("0")
+    Decimal.add(own_spent, children_spent)
+  end
+
+  # Reconcile budget with pre-queried spent (after tree termination) (v4.0)
+  @spec reconcile_child_budget(pid() | nil, map() | nil, String.t(), binary() | nil, Decimal.t()) ::
+          :ok
+  defp reconcile_child_budget(parent_pid, child_budget_data, child_id, task_id, tree_spent) do
     case child_budget_data do
       %{mode: :allocated, allocated: allocated} when not is_nil(allocated) ->
         if parent_pid && Process.alive?(parent_pid) do
           try do
-            Core.release_budget_committed(parent_pid, allocated)
+            {:ok, parent_state} = Core.get_state(parent_pid)
+            parent_agent_id = parent_state.agent_id
+
+            # Create absorption cost record under the PARENT
+            Recorder.record_silent(%{
+              agent_id: parent_agent_id,
+              task_id: task_id,
+              cost_type: "child_budget_absorbed",
+              cost_usd: tree_spent,
+              metadata: %{
+                child_agent_id: child_id,
+                child_allocated: decimal_to_string(allocated),
+                child_tree_spent: decimal_to_string(tree_spent),
+                unspent_returned:
+                  decimal_to_string(
+                    Decimal.max(Decimal.sub(allocated, tree_spent), Decimal.new("0"))
+                  ),
+                dismissed_at: DateTime.to_iso8601(DateTime.utc_now())
+              }
+            })
+
+            # Use Escrow.release_allocation to properly update parent
+            Core.release_child_budget(parent_pid, allocated, tree_spent)
           catch
             :exit, _ -> :ok
           end
         end
 
-      _ ->
-        # N/A or no budget - nothing to release
         :ok
+
+      _ ->
+        # N/A or no budget - nothing to reconcile
+        :ok
+    end
+  end
+
+  # Convert Decimal to human-readable string for metadata (strips DB trailing zeros)
+  @spec decimal_to_string(Decimal.t()) :: String.t()
+  defp decimal_to_string(decimal) do
+    if Decimal.equal?(decimal, 0) do
+      "0"
+    else
+      decimal |> Decimal.round(2) |> Decimal.to_string()
     end
   end
 end

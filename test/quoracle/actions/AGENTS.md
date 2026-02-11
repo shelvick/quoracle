@@ -40,6 +40,8 @@
 - batch_async_test.exs: 28 tests + 3 properties (R1-R23 batch_async action) - Added 2026-01-26 (feat-20260126-batch-async)
 - router_batch_async_test.exs: 9 Router integration tests for batch_async - Added 2026-01-26
 - shared/batch_validation_test.exs: 11 tests (R1-R11 shared validation) - Added 2026-01-26
+- spawn_budget_test.exs: R52, R57 (2 tests) - Budget enforcement for budgeted parents (2026-02-11)
+- dismiss_child_reconciliation_test.exs: R22-R30 (9 tests) - Budget reconciliation on dismissal (2026-02-11)
 
 ## Coverage
 execute/2,/3,/4 delegation, target resolution, PubSub/Registry injection, wait parameter flow, error handling, nested map validation, enum constraints, action priorities, HTTP GET, HTML→Markdown conversion, redirect tracking, SSRF protection, error status mapping, Shell notification protocol (Router-mediated Core notification with action_id propagation), consistent action field in all action returns (answer_engine, wait, orient, spawn, shell), model_used field in answer_engine

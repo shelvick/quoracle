@@ -52,12 +52,7 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
 
         # Coerce string "true"/"false" to boolean (LLMs return strings from JSON)
         # Default for :wait action is true (wait indefinitely)
-        params_wait =
-          case params_wait do
-            "true" -> true
-            "false" -> false
-            other -> other
-          end
+        params_wait = Helpers.coerce_wait_value(params_wait)
 
         Map.put(action_response, :wait, params_wait)
       else
@@ -82,12 +77,7 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
     action_atom = if is_atom(action), do: action, else: String.to_existing_atom(action)
 
     # Coerce string "true"/"false" to boolean for wait comparison (LLMs return strings from JSON)
-    wait_for_check =
-      case Map.get(action_response, :wait) do
-        "true" -> true
-        "false" -> false
-        other -> other
-      end
+    wait_for_check = action_response |> Map.get(:wait) |> Helpers.coerce_wait_value()
 
     action_response =
       if action_atom in Helpers.self_contained_actions() and wait_for_check == true do
@@ -160,7 +150,9 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
   end
 
   defp build_execute_opts(state, action_id, agent_pid, action_response) do
-    execute_opts = [
+    budget_data = Map.get(state, :budget_data)
+
+    [
       action_id: action_id,
       agent_id: state.agent_id,
       task_id: Map.get(state, :task_id) || state.agent_id,
@@ -173,22 +165,32 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
       # Pass dismissing state to avoid GenServer callback deadlock in Spawn
       dismissing: Map.get(state, :dismissing, false),
       # Pass capability_groups for permission enforcement in Router (v2.0 system)
-      capability_groups: Map.get(state, :capability_groups, [])
+      capability_groups: Map.get(state, :capability_groups, []),
+      # Pass budget_data for BudgetValidation in Spawn (v2.0 budget propagation)
+      budget_data: budget_data,
+      # Query spent from Tracker only when budget_data has a budgeted mode
+      # (avoids unnecessary DB query for non-budgeted agents)
+      spent: query_spent_if_budgeted(budget_data, state.agent_id)
     ]
-
-    execute_opts =
-      if Map.get(state, :sandbox_owner) do
-        Keyword.put(execute_opts, :sandbox_owner, Map.get(state, :sandbox_owner))
-      else
-        execute_opts
-      end
-
-    # Pass auto_complete_todo to Router for automatic TODO marking on success
-    case Map.get(action_response, :auto_complete_todo) do
-      nil -> execute_opts
-      value -> Keyword.put(execute_opts, :auto_complete_todo, value)
-    end
+    |> maybe_put(:sandbox_owner, Map.get(state, :sandbox_owner))
+    |> maybe_put(:spawn_complete_notify, Map.get(state, :spawn_complete_notify))
+    |> maybe_put(:auto_complete_todo, Map.get(action_response, :auto_complete_todo))
   end
+
+  # Conditionally add a key to opts when the value is non-nil
+  @spec maybe_put(keyword(), atom(), term()) :: keyword()
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  # Only query DB for spent when the agent has a budgeted mode (:root or :allocated).
+  # Non-budgeted agents (nil, :na) don't need spent for any budget checks.
+  @spec query_spent_if_budgeted(map() | nil, String.t()) :: Decimal.t()
+  defp query_spent_if_budgeted(%{mode: mode}, agent_id)
+       when mode in [:root, :allocated] do
+    Quoracle.Budget.Tracker.get_spent(agent_id)
+  end
+
+  defp query_spent_if_budgeted(_budget_data, _agent_id), do: Decimal.new("0")
 
   defp handle_success(
          state,
@@ -246,12 +248,7 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
     wait_value = Map.get(action_response, :wait)
 
     # Coerce string "true"/"false" to boolean (LLMs return strings from JSON)
-    wait_value =
-      case wait_value do
-        "true" -> true
-        "false" -> false
-        other -> other
-      end
+    wait_value = Helpers.coerce_wait_value(wait_value)
 
     # Always-sync actions complete instantly - for these, wait: true means
     # "wait for external event", not "wait for this result"
@@ -375,14 +372,7 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
       end
 
     # Handle wait parameter for async actions
-    wait_value = Map.get(action_response, :wait)
-
-    wait_value =
-      case wait_value do
-        "true" -> true
-        "false" -> false
-        other -> other
-      end
+    wait_value = action_response |> Map.get(:wait) |> Helpers.coerce_wait_value()
 
     if wait_value do
       Quoracle.Agent.ConsensusHandler.handle_wait_parameter(state, action_atom, wait_value)

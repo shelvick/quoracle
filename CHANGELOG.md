@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-02-11
+
+### Fixed
+
+- **Budget enforcement for spawn** — Budgeted parent agents now correctly
+  require a `:budget` parameter when spawning children. Budget data and spent
+  amounts propagate through ActionExecutor to child agents, and budgets are
+  reconciled when children are dismissed.
+
+### Changed
+
+- Replaced dev-centric role names with research/business examples in SVG
+  diagrams.
+- DRY refactor of wait coercion, pipeline opts, and background dismissal
+  extraction in Core.
+
 ## [0.1.2] - 2026-02-11
 
 ### Added

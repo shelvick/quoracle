@@ -48,17 +48,17 @@
   <!-- Model A -->
   <rect x="420" y="175" width="130" height="50" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
   <text x="485" y="198" text-anchor="middle" font-size="11" font-weight="600" fill="#92400e">Model A</text>
-  <text x="485" y="214" text-anchor="middle" font-size="9" fill="#b45309">spawn_child "DevOps"</text>
+  <text x="485" y="214" text-anchor="middle" font-size="9" fill="#b45309">spawn_child "Analyst"</text>
 
   <!-- Model B -->
   <rect x="420" y="255" width="130" height="50" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
   <text x="485" y="278" text-anchor="middle" font-size="11" font-weight="600" fill="#1e3a8a">Model B</text>
-  <text x="485" y="294" text-anchor="middle" font-size="9" fill="#1d4ed8">spawn_child "DevOps"</text>
+  <text x="485" y="294" text-anchor="middle" font-size="9" fill="#1d4ed8">spawn_child "Analyst"</text>
 
   <!-- Model C -->
   <rect x="420" y="335" width="130" height="50" rx="8" fill="#dcfce7" stroke="#22c55e" stroke-width="1.5"/>
   <text x="485" y="358" text-anchor="middle" font-size="11" font-weight="600" fill="#14532d">Model C</text>
-  <text x="485" y="374" text-anchor="middle" font-size="9" fill="#15803d">call_api "/deploy"</text>
+  <text x="485" y="374" text-anchor="middle" font-size="9" fill="#15803d">web_fetch "/trends"</text>
 
   <!-- Arrows to clustering -->
   <line x1="550" y1="200" x2="605" y2="265" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>

@@ -1,7 +1,7 @@
 # test/quoracle/costs/
 
 ## Test Files
-- agent_cost_test.exs: 29 tests (schema validation, Decimal precision, JSONB)
+- agent_cost_test.exs: 34 tests (29 + R9-R11 child_budget_absorbed cost type, schema validation, Decimal precision, JSONB)
 - recorder_test.exs: 28 tests (recording, PubSub broadcast, safe_broadcast)
 - aggregator_test.exs: 36 tests (agent/task/model queries, recursive CTE)
 

@@ -585,4 +585,143 @@ defmodule Quoracle.Costs.AgentCostTest do
              "Migration should not use raw execute (not auto-reversible)"
     end
   end
+
+  # ============================================================
+  # TABLE_AgentCosts v2.0: R9 - child_budget_absorbed Cost Type [UNIT]
+  # WorkGroupID: fix-20260211-budget-enforcement
+  # Packet: 2 (Dismissal Reconciliation)
+  # ============================================================
+
+  describe "child_budget_absorbed cost type (v2.0)" do
+    @tag :r9
+    @tag :unit
+    test "R9: child_budget_absorbed is a valid cost type" do
+      attrs = %{
+        agent_id: Ecto.UUID.generate(),
+        task_id: Ecto.UUID.generate(),
+        cost_type: "child_budget_absorbed"
+      }
+
+      changeset = agent_cost_changeset(agent_cost_struct(), attrs)
+      assert changeset.valid?
+    end
+
+    @tag :r9
+    test "R9b: child_budget_absorbed included in cost_types/0" do
+      types = @agent_cost_module.cost_types()
+      assert "child_budget_absorbed" in types
+    end
+  end
+
+  # ============================================================
+  # TABLE_AgentCosts v2.0: R10 - Absorption Record DB Round-Trip [INTEGRATION]
+  # ============================================================
+
+  describe "absorption record storage (v2.0)" do
+    setup do
+      {:ok, task} =
+        Repo.insert(Task.changeset(%Task{}, %{prompt: "Test task", status: "running"}))
+
+      {:ok, task: task}
+    end
+
+    @tag :r10
+    @tag :integration
+    test "R10: absorption record stores tree spent as cost_usd", %{task: task} do
+      tree_spent = Decimal.new("30.00")
+
+      attrs = %{
+        agent_id: Ecto.UUID.generate(),
+        task_id: task.id,
+        cost_type: "child_budget_absorbed",
+        cost_usd: tree_spent,
+        metadata: %{
+          "child_agent_id" => "child-123",
+          "child_allocated" => "50.00",
+          "child_tree_spent" => "30.00",
+          "unspent_returned" => "20.00",
+          "dismissed_at" => DateTime.to_iso8601(DateTime.utc_now())
+        }
+      }
+
+      changeset = agent_cost_changeset(agent_cost_struct(), attrs)
+      assert {:ok, cost} = Repo.insert(changeset)
+
+      # Reload from database and verify cost_usd
+      reloaded = Repo.get!(@agent_cost_module, cost.id)
+      assert Decimal.equal?(reloaded.cost_usd, tree_spent)
+      assert reloaded.cost_type == "child_budget_absorbed"
+    end
+
+    @tag :r10
+    @tag :integration
+    test "R10b: absorption record with zero spent stores zero cost_usd", %{task: task} do
+      attrs = %{
+        agent_id: Ecto.UUID.generate(),
+        task_id: task.id,
+        cost_type: "child_budget_absorbed",
+        cost_usd: Decimal.new("0"),
+        metadata: %{
+          "child_agent_id" => "child-zero",
+          "child_allocated" => "50.00",
+          "child_tree_spent" => "0",
+          "unspent_returned" => "50.00",
+          "dismissed_at" => DateTime.to_iso8601(DateTime.utc_now())
+        }
+      }
+
+      changeset = agent_cost_changeset(agent_cost_struct(), attrs)
+      assert {:ok, cost} = Repo.insert(changeset)
+
+      reloaded = Repo.get!(@agent_cost_module, cost.id)
+      assert Decimal.equal?(reloaded.cost_usd, Decimal.new("0"))
+    end
+  end
+
+  # ============================================================
+  # TABLE_AgentCosts v2.0: R11 - Absorption Metadata Structure [INTEGRATION]
+  # ============================================================
+
+  describe "absorption metadata structure (v2.0)" do
+    setup do
+      {:ok, task} =
+        Repo.insert(Task.changeset(%Task{}, %{prompt: "Test task", status: "running"}))
+
+      {:ok, task: task}
+    end
+
+    @tag :r11
+    @tag :integration
+    test "R11: absorption metadata contains required fields", %{task: task} do
+      dismissed_at = DateTime.to_iso8601(DateTime.utc_now())
+
+      metadata = %{
+        "child_agent_id" => "child-abc123",
+        "child_allocated" => "50.00",
+        "child_tree_spent" => "30.00",
+        "unspent_returned" => "20.00",
+        "dismissed_at" => dismissed_at
+      }
+
+      attrs = %{
+        agent_id: Ecto.UUID.generate(),
+        task_id: task.id,
+        cost_type: "child_budget_absorbed",
+        cost_usd: Decimal.new("30.00"),
+        metadata: metadata
+      }
+
+      changeset = agent_cost_changeset(agent_cost_struct(), attrs)
+      assert {:ok, cost} = Repo.insert(changeset)
+
+      reloaded = Repo.get!(@agent_cost_module, cost.id)
+
+      # Verify all required metadata fields
+      assert reloaded.metadata["child_agent_id"] == "child-abc123"
+      assert reloaded.metadata["child_allocated"] == "50.00"
+      assert reloaded.metadata["child_tree_spent"] == "30.00"
+      assert reloaded.metadata["unspent_returned"] == "20.00"
+      assert reloaded.metadata["dismissed_at"] == dismissed_at
+    end
+  end
 end

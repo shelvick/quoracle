@@ -61,7 +61,8 @@ defmodule Quoracle.Agent.Core.State do
              :children,
              :pending_actions,
              :messages,
-             :mcp_client
+             :mcp_client,
+             :spawn_complete_notify
            ]}
 
   defstruct [
@@ -123,6 +124,8 @@ defmodule Quoracle.Agent.Core.State do
     sandbox_owner: nil,
     test_pid: nil,
     skip_auto_consensus: false,
+    # Test synchronization for async spawn completion (fires after budget escrow)
+    spawn_complete_notify: nil,
     # Dismiss child race prevention (v19.0)
     dismissing: false,
     # Budget system (v4.0)
@@ -206,6 +209,8 @@ defmodule Quoracle.Agent.Core.State do
           sandbox_owner: pid() | nil,
           test_pid: pid() | nil,
           skip_auto_consensus: boolean(),
+          # Test synchronization for async spawn completion
+          spawn_complete_notify: pid() | nil,
           # Dismiss child race prevention (v19.0)
           dismissing: boolean(),
           # Budget system (v4.0)
@@ -385,6 +390,8 @@ defmodule Quoracle.Agent.Core.State do
       sandbox_owner: Map.get(config, :sandbox_owner),
       test_pid: Map.get(config, :test_pid),
       skip_auto_consensus: Map.get(config, :skip_auto_consensus, false),
+      # Test synchronization for async spawn completion
+      spawn_complete_notify: Map.get(config, :spawn_complete_notify),
       # Dismiss child race prevention (v19.0)
       dismissing: Map.get(config, :dismissing, false),
       # Budget system (v4.0)

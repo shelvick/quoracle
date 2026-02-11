@@ -108,6 +108,8 @@ defmodule Quoracle.Agent.ConfigManager do
       model_states: Map.get(config, :model_states),
       restoration_mode: Map.get(config, :restoration_mode, false),
       budget_data: Map.get(config, :budget_data),
+      # Test synchronization for async spawn completion (fires after budget escrow)
+      spawn_complete_notify: Map.get(config, :spawn_complete_notify),
       # Profile fields (v6.0)
       profile_name: Map.get(config, :profile_name),
       profile_description: Map.get(config, :profile_description),
@@ -326,6 +328,7 @@ defmodule Quoracle.Agent.ConfigManager do
       test_opts: config[:test_opts] || [],
       sandbox_owner: config[:sandbox_owner],
       test_pid: config[:test_pid],
+      spawn_complete_notify: config[:spawn_complete_notify],
       context_summary: nil,
       # Track lazy loading
       context_limits_loaded: false,

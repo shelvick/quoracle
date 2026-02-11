@@ -40,6 +40,9 @@ quoracle-*.tar
 # Elixir Language Server
 .elixir_ls/
 
+# XPExpert LSP runtime logs
+.expert/
+
 # Dialyzer PLT files
 priv/plts/
 

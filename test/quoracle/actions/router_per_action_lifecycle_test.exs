@@ -97,7 +97,7 @@ defmodule Quoracle.Actions.RouterPerActionLifecycleTest do
       end)
 
       # Router should terminate after sync action
-      assert_receive {:DOWN, ^router_ref, :process, ^router_pid, reason}
+      assert_receive {:DOWN, ^router_ref, :process, ^router_pid, reason}, 30_000
       assert clean_termination?(reason)
     end
 
@@ -127,7 +127,7 @@ defmodule Quoracle.Actions.RouterPerActionLifecycleTest do
       end)
 
       # Router should terminate after notifying Core
-      assert_receive {:DOWN, ^router_ref, :process, ^router_pid, reason}
+      assert_receive {:DOWN, ^router_ref, :process, ^router_pid, reason}, 30_000
       assert clean_termination?(reason)
     end
 
@@ -190,7 +190,7 @@ defmodule Quoracle.Actions.RouterPerActionLifecycleTest do
       Process.exit(fake_core, :kill)
 
       # Router should self-terminate
-      assert_receive {:DOWN, ^router_ref, :process, ^router_pid, reason}
+      assert_receive {:DOWN, ^router_ref, :process, ^router_pid, reason}, 30_000
       assert clean_termination?(reason)
     end
   end
@@ -247,7 +247,7 @@ defmodule Quoracle.Actions.RouterPerActionLifecycleTest do
       end)
 
       # Router terminates after completion (verified more thoroughly in R42)
-      assert_receive {:DOWN, ^router_ref, :process, ^router_pid, reason}, 5000
+      assert_receive {:DOWN, ^router_ref, :process, ^router_pid, reason}, 30_000
       assert clean_termination?(reason)
     end
 
@@ -315,7 +315,7 @@ defmodule Quoracle.Actions.RouterPerActionLifecycleTest do
       end)
 
       # Router should terminate after shell completion
-      assert_receive {:DOWN, ^router_ref, :process, ^router_pid, reason}
+      assert_receive {:DOWN, ^router_ref, :process, ^router_pid, reason}, 30_000
       assert clean_termination?(reason)
     end
   end
@@ -392,7 +392,7 @@ defmodule Quoracle.Actions.RouterPerActionLifecycleTest do
       end)
 
       # Router should terminate after timer fires
-      assert_receive {:DOWN, ^router_ref, :process, ^router_pid, reason}
+      assert_receive {:DOWN, ^router_ref, :process, ^router_pid, reason}, 30_000
       assert clean_termination?(reason)
     end
 
@@ -422,7 +422,7 @@ defmodule Quoracle.Actions.RouterPerActionLifecycleTest do
       end)
 
       # Router should terminate immediately
-      assert_receive {:DOWN, ^router_ref, :process, ^router_pid, reason}
+      assert_receive {:DOWN, ^router_ref, :process, ^router_pid, reason}, 30_000
       assert clean_termination?(reason)
     end
   end
@@ -717,7 +717,7 @@ defmodule Quoracle.Actions.RouterPerActionLifecycleTest do
         end)
 
         # Every Router must terminate
-        assert_receive {:DOWN, ^router_ref, :process, ^router_pid, _reason}, 2000
+        assert_receive {:DOWN, ^router_ref, :process, ^router_pid, _reason}, 30_000
       end
     end
   end

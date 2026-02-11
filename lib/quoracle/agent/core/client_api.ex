@@ -156,6 +156,15 @@ defmodule Quoracle.Agent.Core.ClientAPI do
   end
 
   @doc """
+  Release child's budget from parent's committed, accounting for child's spending.
+  Uses Escrow.release_allocation/3 for proper math and re-evaluates over_budget.
+  """
+  @spec release_child_budget(pid(), Decimal.t(), Decimal.t()) :: :ok
+  def release_child_budget(pid, child_allocated, child_spent) do
+    GenServer.call(pid, {:release_child_budget, child_allocated, child_spent}, :infinity)
+  end
+
+  @doc """
   Get current budget state including budget_data and over_budget status.
   Returns {:ok, %{budget_data: map(), over_budget: boolean()}}.
   """
