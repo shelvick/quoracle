@@ -1,8 +1,9 @@
 name: Release
 
 on:
-  release:
-    types: [created]
+  push:
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
@@ -49,10 +50,17 @@ jobs:
       - name: Build release
         run: mix release
 
-      - name: Upload release tarball
+      - name: Extract changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk "/^## \[${VERSION}\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md > /tmp/release-notes.md
+
+      - name: Create release with tarball
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION=$(grep -oP 'version: "\K[^"]+' mix.exs)
           TARBALL="_build/prod/quoracle-${VERSION}.tar.gz"
-          gh release upload "$GITHUB_REF_NAME" "$TARBALL" --clobber
+          gh release create "$GITHUB_REF_NAME" "$TARBALL" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file /tmp/release-notes.md
