@@ -16,7 +16,7 @@ EmbeddingCache owns ETS table (process-owned)
   - v11.0: Multimodal message support via MessageBuilder extraction
   - `build_options/2`: Delegated to OptionsBuilder, public with `@doc false` for testing (R14-R17)
 - **ModelQuery.OptionsBuilder** (161 lines): Provider-specific LLM options builder (extracted 2026-01)
-  - `build_options/2`: Builds provider-specific options for ReqLLM
+  - `build_options/2`: Builds provider-specific options for ReqLLM, v16.0: passes max_tokens from caller options to ReqLLM (prevents LLMDB limits.output override)
   - `get_provider_prefix/1`: Extracts provider prefix from model_spec
   - Handles Azure, Google Vertex, Bedrock, default providers
   - Claude thinking config for Bedrock/Vertex Claude models

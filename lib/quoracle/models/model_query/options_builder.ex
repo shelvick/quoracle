@@ -6,8 +6,10 @@ defmodule Quoracle.Models.ModelQuery.OptionsBuilder do
 
   alias Quoracle.Models.ModelQuery.CacheHelper
 
-  # Extended thinking config for Claude models on adapters (Bedrock/Vertex)
-  @claude_thinking_config %{type: "enabled", budget_tokens: 16_000}
+  # Override ReqLLM's default reasoning budget (4,096 for :high) with a
+  # larger budget for Claude's extended thinking.  Harmlessly dropped for
+  # non-Anthropic providers via on_unsupported: :ignore.
+  @reasoning_token_budget 16_000
 
   @doc false
   @spec build_options(map(), map()) :: keyword()
@@ -21,92 +23,70 @@ defmodule Quoracle.Models.ModelQuery.OptionsBuilder do
           base = [
             on_unsupported: :ignore,
             reasoning_effort: :high,
+            reasoning_token_budget: @reasoning_token_budget,
             api_key: credential.api_key,
             base_url: credential.endpoint_url,
             deployment: credential.deployment_id
           ]
 
+          base = maybe_add_deepseek_thinking(base, credential.model_spec)
+
           if skip_json_mode do
             base
           else
-            Keyword.put(base, :provider_options, response_format: %{type: "json_object"})
+            merge_provider_options(base, response_format: %{type: "json_object"})
           end
 
         "google-vertex" ->
           base = [
             on_unsupported: :ignore,
+            reasoning_effort: :high,
+            reasoning_token_budget: @reasoning_token_budget,
             service_account_json: credential.api_key,
             project_id: credential.resource_id,
             region: credential.region || "global"
           ]
 
-          provider_opts =
-            if claude_model?(credential.model_spec) do
-              if skip_json_mode do
-                [additional_model_request_fields: %{thinking: @claude_thinking_config}]
-              else
-                [
-                  additional_model_request_fields: %{
-                    thinking: @claude_thinking_config,
-                    generationConfig: %{responseMimeType: "application/json"}
-                  }
-                ]
-              end
-            else
-              if skip_json_mode do
-                []
-              else
-                [
-                  additional_model_request_fields: %{
-                    generationConfig: %{responseMimeType: "application/json"}
-                  }
-                ]
-              end
-            end
-
-          base_with_reasoning =
-            if claude_model?(credential.model_spec) do
-              base
-            else
-              Keyword.put(base, :reasoning_effort, :high)
-            end
-
-          if provider_opts == [] do
-            base_with_reasoning
+          if skip_json_mode do
+            base
           else
-            Keyword.put(base_with_reasoning, :provider_options, provider_opts)
+            merge_provider_options(base,
+              additional_model_request_fields: %{
+                generationConfig: %{responseMimeType: "application/json"}
+              }
+            )
           end
 
         "amazon-bedrock" ->
-          case String.split(credential.api_key || "", ":", parts: 2) do
-            [access_key, secret_key] when access_key != "" and secret_key != "" ->
-              base_opts = [
-                on_unsupported: :ignore,
-                access_key_id: access_key,
-                secret_access_key: secret_key,
-                region: credential.region || "us-east-1"
-              ]
+          base =
+            case String.split(credential.api_key || "", ":", parts: 2) do
+              [access_key, secret_key] when access_key != "" and secret_key != "" ->
+                [
+                  on_unsupported: :ignore,
+                  reasoning_effort: :high,
+                  reasoning_token_budget: @reasoning_token_budget,
+                  access_key_id: access_key,
+                  secret_access_key: secret_key,
+                  region: credential.region || "us-east-1"
+                ]
 
-              base_opts
-              |> maybe_add_claude_thinking(credential.model_spec)
-              |> CacheHelper.maybe_add_cache_options(options)
+              _ ->
+                [
+                  on_unsupported: :ignore,
+                  reasoning_effort: :high,
+                  reasoning_token_budget: @reasoning_token_budget,
+                  api_key: credential.api_key,
+                  region: credential.region || "us-east-1"
+                ]
+            end
 
-            _ ->
-              base_opts = [
-                on_unsupported: :ignore,
-                api_key: credential.api_key,
-                region: credential.region || "us-east-1"
-              ]
-
-              base_opts
-              |> maybe_add_claude_thinking(credential.model_spec)
-              |> CacheHelper.maybe_add_cache_options(options)
-          end
+          CacheHelper.maybe_add_cache_options(base, options)
 
         _ ->
           base = [
             on_unsupported: :ignore,
             reasoning_effort: :high,
+            reasoning_token_budget: @reasoning_token_budget,
             api_key: credential.api_key
           ]
 
@@ -117,14 +97,22 @@ defmodule Quoracle.Models.ModelQuery.OptionsBuilder do
           end
       end
 
-    if plug = Map.get(options, :plug) do
-      Keyword.put(base_opts, :req_http_options, plug: plug)
-    else
-      base_opts
+    base_opts =
+      if plug = Map.get(options, :plug) do
+        Keyword.put(base_opts, :req_http_options, plug: plug)
+      else
+        base_opts
+      end
+
+    # Pass through caller-provided max_tokens (from dynamic calculation)
+    # When present, this overrides ReqLLM's default of injecting LLMDB limits.output
+    case Map.get(options, :max_tokens) do
+      nil -> base_opts
+      max_tokens -> Keyword.put(base_opts, :max_tokens, max_tokens)
     end
   end
 
-  @doc false
+  @doc "Extracts the provider prefix from a model_spec string (e.g., `\"azure\"` from `\"azure:gpt-5\"`)."
   @spec get_provider_prefix(term()) :: String.t()
   def get_provider_prefix(model_spec) when is_binary(model_spec) do
     case String.split(model_spec, ":", parts: 2) do
@@ -135,27 +123,27 @@ defmodule Quoracle.Models.ModelQuery.OptionsBuilder do
 
   def get_provider_prefix(_), do: "unknown"
 
-  defp claude_model?(model_spec) when is_binary(model_spec) do
-    downcased = String.downcase(model_spec)
-    String.contains?(downcased, "claude") or String.contains?(downcased, "anthropic")
+  defp deepseek_model?(model_spec) when is_binary(model_spec) do
+    case String.split(model_spec, ":", parts: 2) do
+      [_prefix, model_id] -> String.starts_with?(model_id, "deepseek")
+      _ -> false
+    end
   end
 
-  defp claude_model?(_), do: false
+  defp deepseek_model?(_), do: false
 
-  defp maybe_add_claude_thinking(opts, model_spec) do
-    if claude_model?(model_spec) do
-      existing_provider_opts = Keyword.get(opts, :provider_options, [])
-
-      new_provider_opts =
-        Keyword.put(
-          existing_provider_opts,
-          :additional_model_request_fields,
-          %{thinking: @claude_thinking_config}
-        )
-
-      Keyword.put(opts, :provider_options, new_provider_opts)
+  defp maybe_add_deepseek_thinking(opts, model_spec) do
+    if deepseek_model?(model_spec) do
+      merge_provider_options(opts,
+        additional_model_request_fields: %{thinking: %{type: "enabled"}}
+      )
     else
       opts
     end
+  end
+
+  defp merge_provider_options(opts, new_provider_opts) do
+    existing = Keyword.get(opts, :provider_options, [])
+    Keyword.put(opts, :provider_options, Keyword.merge(existing, new_provider_opts))
   end
 end
