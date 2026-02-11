@@ -6,13 +6,16 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
   """
 
   alias Quoracle.Models.ModelQuery
-  alias Quoracle.Agent.ContextManager
+  alias Quoracle.Agent.{ContextManager, TokenManager}
   alias Quoracle.Agent.Consensus.MessageBuilder
   alias Quoracle.Agent.Consensus.PerModelQuery.{Condensation, Helpers}
   alias Quoracle.Consensus.{ActionParser, Aggregator, Result, Temperature}
   alias Quoracle.Utils.JsonExtractor
 
   require Logger
+
+  # Minimum output budget before forcing proactive condensation
+  @output_floor 4096
 
   # Delegate helper functions
   defdelegate context_length_error?(error), to: Helpers
@@ -49,7 +52,13 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
     # Use unified message-building helper (R65-R70)
     messages_with_system = build_query_messages(state, model_id, opts)
 
-    query_opts = build_query_options(model_id, opts)
+    # Dynamic max_tokens: proactive condensation if available output below floor
+    {messages_with_system, state} =
+      maybe_proactive_condense(messages_with_system, state, model_id, opts)
+
+    # Calculate dynamic max_tokens from built messages
+    dynamic_max_tokens = calculate_max_tokens(messages_with_system, model_id)
+    query_opts = build_query_options(model_id, Keyword.put(opts, :max_tokens, dynamic_max_tokens))
 
     # Support injectable model_query_fn for testing
     query_fn = Keyword.get(opts, :model_query_fn, &ModelQuery.query_models/3)
@@ -69,7 +78,12 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
 
           # Use same message-building helper for retry (R65-R70)
           retry_messages = build_query_messages(condensed_state, model_id, opts)
-          retry_query_opts = build_query_options(model_id, opts)
+
+          # Recalculate dynamic max_tokens for retry with condensed messages
+          retry_max_tokens = calculate_max_tokens(retry_messages, model_id)
+
+          retry_query_opts =
+            build_query_options(model_id, Keyword.put(opts, :max_tokens, retry_max_tokens))
 
           case query_fn.(retry_messages, [model_id], retry_query_opts) do
             {:ok, %{successful_responses: [response | _]}} ->
@@ -93,6 +107,49 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
 
       {:error, reason} ->
         {:error, reason, state}
+    end
+  end
+
+  # Calculates dynamic max_tokens based on available context space.
+  # Formula: max_tokens = min(context_window - input_tokens, output_limit)
+  @spec calculate_max_tokens(list(map()), String.t()) :: pos_integer()
+  defp calculate_max_tokens(messages, model_id) do
+    context_window = TokenManager.get_model_context_limit(model_id)
+    input_tokens = TokenManager.estimate_all_messages_tokens(messages)
+    output_limit = TokenManager.get_model_output_limit(model_id)
+
+    available_output = max(context_window - input_tokens, 1)
+    min(available_output, output_limit)
+  end
+
+  # Proactive condensation: if available output space is below @output_floor,
+  # condense history before querying to free up context space.
+  @spec maybe_proactive_condense(list(map()), map(), String.t(), keyword()) ::
+          {list(map()), map()}
+  defp maybe_proactive_condense(messages, state, model_id, opts) do
+    context_window = TokenManager.get_model_context_limit(model_id)
+    input_tokens = TokenManager.estimate_all_messages_tokens(messages)
+    available_output = context_window - input_tokens
+
+    if available_output < @output_floor do
+      # Condense and rebuild messages
+      condensed_state = condense_model_history_with_reflection(state, model_id, opts)
+      rebuilt_messages = build_query_messages(condensed_state, model_id, opts)
+
+      # Check if condensation was sufficient
+      post_input_tokens = TokenManager.estimate_all_messages_tokens(rebuilt_messages)
+      post_available = context_window - post_input_tokens
+
+      if post_available < @output_floor do
+        Logger.warning(
+          "Dynamic max_tokens: available output #{post_available} still below " <>
+            "floor #{@output_floor} after condensation for model #{model_id}"
+        )
+      end
+
+      {rebuilt_messages, condensed_state}
+    else
+      {messages, state}
     end
   end
 
@@ -206,11 +263,17 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
     temperature = Temperature.calculate_round_temperature(model_id, round, temp_opts)
 
     base_opts = %{
-      max_tokens: Keyword.get(opts, :max_tokens, 4096),
       temperature: temperature,
       prompt_cache: -2,
       round: round
     }
+
+    # Pass through caller-provided max_tokens (from dynamic calculation)
+    base_opts =
+      case Keyword.get(opts, :max_tokens) do
+        nil -> base_opts
+        max_tokens -> Map.put(base_opts, :max_tokens, max_tokens)
+      end
 
     # Pass through cost recording context and HTTP test plug
     base_opts =

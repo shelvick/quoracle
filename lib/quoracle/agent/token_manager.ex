@@ -331,6 +331,39 @@ defmodule Quoracle.Agent.TokenManager do
     end
   end
 
+  @doc """
+  Gets the output limit for a model from LLMDB.
+  Returns `limits.output` from the LLMDB model entry.
+  Falls back to `@default_context_limit` if model not found or limits.output is nil.
+  """
+  @spec get_model_output_limit(String.t()) :: integer()
+  def get_model_output_limit(model_spec) do
+    case find_model_by_spec(model_spec) do
+      {:ok, model} ->
+        get_in(model, [:limits, :output]) || @default_context_limit
+
+      :error ->
+        @default_context_limit
+    end
+  end
+
+  @doc """
+  Estimates total tokens across ALL messages, including system prompt.
+
+  Unlike `estimate_messages_tokens/1` which excludes system messages, this
+  counts every message -- needed for accurate input token calculation when
+  computing dynamic max_tokens to prevent context window overflow.
+  """
+  @spec estimate_all_messages_tokens(list(map())) :: non_neg_integer()
+  def estimate_all_messages_tokens([]), do: 0
+
+  def estimate_all_messages_tokens(messages) when is_list(messages) do
+    Enum.reduce(messages, 0, fn msg, acc ->
+      content = extract_message_content(msg)
+      acc + estimate_tokens(content)
+    end)
+  end
+
   # Find a model in LLMDB by its spec string
   defp find_model_by_spec(model_spec) do
     LLMDB.models()
