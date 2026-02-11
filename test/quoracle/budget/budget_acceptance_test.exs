@@ -354,9 +354,10 @@ defmodule Quoracle.Budget.BudgetAcceptanceTest do
       assert Decimal.equal?(root_after_dismiss.budget_data.committed, Decimal.new("0")),
              "Parent committed must be 0 after child dismiss"
 
-      # VERIFY: Parent is STILL over budget (monotonic - spent doesn't decrease)
-      assert root_after_dismiss.over_budget == true,
-             "Over budget status must remain true (monotonic)"
+      # VERIFY: Parent recovers from over-budget after child dismissal (v34.0)
+      # available = 100 - 75(own spent) - 0(committed) = 25 > 0, so no longer over budget
+      assert root_after_dismiss.over_budget == false,
+             "Over budget status should recover after child budget released (v34.0)"
 
       # ============================================================
       # SUCCESS: Full budget lifecycle verified

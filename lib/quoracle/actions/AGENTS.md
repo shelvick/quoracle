@@ -15,10 +15,10 @@
 
 **Action Implementations**:
 - Orient: 12-field strategic reflection (144 lines)
-- Spawn: Child agent spawning with downstream_constraints (449 lines, ConfigBuilder 273 lines, Helpers 82 lines), dismissing flag check (v11.0), child_spawned notification (v12.0), profile parameter (v14.0)
+- Spawn: Child agent spawning with downstream_constraints (474 lines, ConfigBuilder 273 lines, Helpers 82 lines, BudgetValidation 113 lines), dismissing flag check (v11.0), child_spawned notification (v12.0), profile parameter (v14.0), budget enforcement for budgeted parents (v17.0: :budget_required error)
 - Wait: Unified wait parameter (142 lines, true/false/number support, interruptible)
 - SendMessage: Parent/child messaging (3-arity)
-- DismissChild: Recursive child termination (141 lines, v2.0), async background dispatch to TreeTerminator, child_dismissed notification
+- DismissChild: Recursive child termination (249 lines, v4.0), async background dispatch to TreeTerminator, child_dismissed notification, budget reconciliation with absorption records and escrow release
 - Answer (263 lines): Gemini grounding search
   - Model from ConfigModelSettings.get_answer_engine_model!() (config-driven)
   - Raises RuntimeError if answer engine model not configured
@@ -91,6 +91,14 @@ Actions → Schema for parameter definitions
 - router_test.exs: 1318 tests, access control, dispatch
 
 ## Recent Changes
+
+**Feb 11, 2026 - Budget Enforcement (WorkGroupID: fix-20260211-budget-enforcement)**:
+- **Spawn v17.0**: BudgetValidation nil branch now checks parent mode — budgeted parents (:root/:allocated) MUST specify budget for children, returns {:error, :budget_required} with LLM-guiding error message
+- **DismissChild v4.0 (249 lines)**: Budget reconciliation on dismissal
+  - Extracted `do_background_dismissal/7` from anonymous fn (REFACTOR)
+  - `query_child_tree_spent/1`: Queries Aggregator before TreeTerminator deletes records
+  - `reconcile_child_budget/5`: Creates `child_budget_absorbed` cost record under parent, calls `Core.release_child_budget/3`
+  - `decimal_to_string/1`: Metadata formatting helper
 
 **Jan 26, 2026 - Batch Async (WorkGroupID: feat-20260126-batch-async)**:
 - **BatchAsync v1.0 (127 lines)**: Parallel batch action execution

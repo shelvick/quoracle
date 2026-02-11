@@ -109,6 +109,8 @@ defmodule Quoracle.Agent.Core do
   defdelegate update_budget_committed(agent, amount), to: ClientAPI
   @spec release_budget_committed(pid(), Decimal.t()) :: :ok
   defdelegate release_budget_committed(agent, amount), to: ClientAPI
+  @spec release_child_budget(pid(), Decimal.t(), Decimal.t()) :: :ok
+  defdelegate release_child_budget(pid, child_allocated, child_spent), to: ClientAPI
   @spec get_budget(pid()) :: {:ok, %{budget_data: map(), over_budget: boolean()}}
   defdelegate get_budget(agent), to: ClientAPI
 
@@ -233,6 +235,11 @@ defmodule Quoracle.Agent.Core do
 
   def handle_call({:release_budget_committed, amount}, _from, state) do
     BudgetHandler.handle_release_budget_committed(amount, state)
+  end
+
+  # Release child budget with proper escrow math (v34.0)
+  def handle_call({:release_child_budget, child_allocated, child_spent}, _from, state) do
+    BudgetHandler.handle_release_child_budget(child_allocated, child_spent, state)
   end
 
   # Get current budget state (v22.0)
@@ -427,7 +434,8 @@ defmodule Quoracle.Agent.Core do
   def handle_info({:DOWN, ref, :process, pid, reason}, state),
     do: MessageInfoHandler.handle_down(ref, pid, reason, state)
 
-  def handle_info({:cost_recorded, _}, state), do: {:noreply, update_over_budget_status(state)}
+  def handle_info({:cost_recorded, _}, state),
+    do: {:noreply, BudgetHandler.update_over_budget_status(state)}
 
   def handle_info({:EXIT, pid, reason}, state),
     do: MessageInfoHandler.handle_exit(pid, reason, state)
@@ -478,12 +486,6 @@ defmodule Quoracle.Agent.Core do
   """
   @spec extract_parent_agent_id(pid() | nil, State.t()) :: String.t() | nil
   defdelegate extract_parent_agent_id(parent_pid, state), to: Persistence
-
-  # Budget tracking helper - delegated to BudgetHandler (v24.0)
-  @spec update_over_budget_status(State.t()) :: State.t()
-  defp update_over_budget_status(state) do
-    BudgetHandler.update_over_budget_status(state)
-  end
 
   # v30.0: Route shell commands to their owning Router
   defp route_to_shell_router(command_id, message, state) do

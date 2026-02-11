@@ -1,9 +1,10 @@
 # lib/quoracle/agent/
 
 ## Modules
-- Core: Event-driven GenServer (498 lines), delegates message handling, stores prompt_fields + dismissing flag + capability_groups + shell_routers in state, v20.0 extracts adjust_child_budget/update_budget_data to ClientAPI, adds route_to_shell_router/3 helper
-- Core.ClientAPI: GenServer wrappers (200 lines, 16 functions with @spec), v20.0 adds adjust_child_budget/4, update_budget_data/2
+- Core: Event-driven GenServer (497 lines), delegates message handling, stores prompt_fields + dismissing flag + capability_groups + shell_routers in state, v20.0 extracts adjust_child_budget/update_budget_data to ClientAPI, adds route_to_shell_router/3 helper
+- Core.ClientAPI: GenServer wrappers (209 lines, 17 functions with @spec), v20.0 adds adjust_child_budget/4, update_budget_data/2, v34.0 adds release_child_budget/3
 - Core.TodoHandler: TODO state management (57 lines), extracted for 500-line limit
+- Core.BudgetHandler: Budget GenServer callbacks (198 lines), adjust_child_budget/4, handle_release_child_budget/3 (v34.0), update_over_budget_status/1 (non-monotonic since v34.0)
 - Core.ChildrenTracker: Children state management (63 lines), handle_child_spawned/2, handle_child_dismissed/2, handle_child_restored/2 (v2.1)
 - Core.Initialization: Init and DB setup (154 lines), extracted for 500-line limit (2025-10-17)
 - Core.Persistence: DB persistence (365 lines), model_histories + ACE state serialization, delegates ACE to submodule
@@ -18,7 +19,7 @@
 - ConfigManager: Config normalization (500 lines), atomic registration, ModelPoolInit submodule extracted, v5.0 preserves model_histories from restoration config, v8.0 extracts capability_groups, v11.0 extracts max_refinement_rounds
 - ConfigManager.ModelPoolInit: Model pool initialization (37 lines), get_model_pool_for_init/2, initialize_model_histories/1
 - ConsensusHandler: Consensus execution (246 lines), v20.0 single prompt_opts for UI/LLM consistency (fix-20260113-skill-injection), extracts active_skills + skills_path from state
-- ConsensusHandler.Helpers: Helper functions (27 lines), normalize_sibling_context/1, self_contained_actions/0
+- ConsensusHandler.Helpers: Helper functions (58 lines), normalize_sibling_context/1, self_contained_actions/0, coerce_wait_value/1 (v34.0 DRY extraction), prepend_to_content/2
 - ConsensusHandler.LogHelper: Logging helpers (40 lines), safe_broadcast_log/5, log_action_error/1 (extracted for 500-line limit)
 - ConsensusHandler.TodoInjector: TODO injection (82 lines), inject_todo_context/2, format_todos_as_xml/1, escape_xml/1
 - ConsensusHandler.ChildrenInjector: Children context injection (78 lines), inject_children_context/2, format_children/1, Registry-based status check
@@ -29,7 +30,7 @@
 - DynSup: DynamicSupervisor wrapper (185 lines), 2-arity terminate for tests, v3.0 restore_agent prefers ace_state.model_histories, v7.0 restores max_refinement_rounds from profile
 - Reflector: LLM-based lesson/state extraction (278 lines), self-reflection pattern, JSON parsing with validation, v2.1 uses ContentStringifier for multimodal prompts
 - LessonManager: Embedding-based lesson deduplication (175 lines), cosine similarity (0.90 threshold), O(n) accumulation
-- TreeTerminator: Recursive agent tree termination (213 lines, v1.0), BFS collection, bottom-up termination, DB cleanup
+- TreeTerminator: Recursive agent tree termination (235 lines, v2.0), BFS collection, bottom-up termination, DB cleanup including agent_costs deletion (prevents double-counting after budget absorption)
 - HistoryTransfer: History and ACE state transfer during model pool switching (226 lines, v1.0), select_source_model/2, condense_until_fits/4, transfer_state_to_new_pool/3
 
 ## Helpers (extracted for 500-line limit)
@@ -158,10 +159,10 @@
 - terminate_tree/4: Main entry point (root_agent_id, dismissed_by, reason, deps)
 - BFS collection of descendants with dismissing flag set during traversal
 - Bottom-up termination (leaves first) prevents orphan scenarios
-- Deletes agent, logs, messages from DB after process termination
+- Deletes agent_costs, agent, logs, messages from DB after process termination (v2.0: added agent_costs deletion for budget absorption double-counting prevention)
 - Dual PubSub broadcasts: agent_dismissed (before) + agent_terminated (after)
 - Partial failure handling: logs failures, continues with remaining agents
-- Test coverage: 15 TreeTerminator tests, 12 DismissChild tests, 5 spawn race tests
+- Test coverage: 18 TreeTerminator tests (15 + R15-R17), 12 DismissChild tests, 5 spawn race tests
 
 ## Runtime Model Pool Switching (2025-12-30)
 - Core.switch_model_pool/2: GenServer.call with :infinity timeout for blocking switch

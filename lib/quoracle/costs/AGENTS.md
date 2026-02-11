@@ -6,7 +6,7 @@
 - Aggregator: Query module with recursive CTE for agent trees (396 lines)
 
 ## Key Functions
-- AgentCost.changeset/2: Validates cost_type in [llm_consensus, llm_embedding, llm_answer, llm_summarization]
+- AgentCost.changeset/2: Validates cost_type in [llm_consensus, llm_embedding, llm_answer, llm_summarization, llm_condensation, image_generation, external, child_budget_absorbed]
 - Recorder.record/2: Insert + broadcast to tasks/agents topics, requires pubsub opt
 - Recorder.record_silent/1: Insert without broadcast
 - Aggregator.by_agent/1: Agent's own costs

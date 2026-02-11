@@ -35,6 +35,17 @@ defmodule Quoracle.Agent.ConsensusHandler.Helpers do
 
   def normalize_sibling_context(action_response), do: action_response
 
+  @doc """
+  Coerce string wait values to native Elixir types.
+
+  LLMs return strings from JSON ("true"/"false"), but the wait parameter
+  needs native booleans/numbers for pattern matching throughout ActionExecutor.
+  """
+  @spec coerce_wait_value(term()) :: boolean() | number() | nil
+  def coerce_wait_value("true"), do: true
+  def coerce_wait_value("false"), do: false
+  def coerce_wait_value(other), do: other
+
   @doc "Prepend text to message content, handling both binary and multimodal (list) formats."
   @spec prepend_to_content(String.t(), binary() | list()) :: binary() | list()
   def prepend_to_content(prefix, content) when is_list(content) do

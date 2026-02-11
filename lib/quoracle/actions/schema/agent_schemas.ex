@@ -21,7 +21,8 @@ defmodule Quoracle.Actions.Schema.AgentSchemas do
         :delegation_strategy,
         :sibling_context,
         :downstream_constraints,
-        :skills
+        :skills,
+        :budget
       ],
       param_types: %{
         task_description: :string,
@@ -37,7 +38,8 @@ defmodule Quoracle.Actions.Schema.AgentSchemas do
         sibling_context: {:list, :map},
         # NOTE: models types removed - see optional_params comment
         downstream_constraints: :string,
-        skills: {:list, :string}
+        skills: {:list, :string},
+        budget: :string
       },
       param_descriptions: %{
         task_description:
@@ -63,7 +65,9 @@ defmodule Quoracle.Actions.Schema.AgentSchemas do
         downstream_constraints:
           "Additional constraint that will apply to this child and ALL its descendants - accumulates with any inherited constraints from upstream (e.g., 'No external API calls' or 'Read-only operations only' or 'Complete within 5 minutes'). Part of each descendant's SYSTEM prompt.",
         skills:
-          "List of skill names to pre-load into the child's system prompt. Skills provide domain knowledge (e.g., ['elixir-testing', 'api-design']). Available skills are listed in your system prompt. The child will have this knowledge immediately without needing to learn_skills."
+          "List of skill names to pre-load into the child's system prompt. Skills provide domain knowledge (e.g., ['elixir-testing', 'api-design']). Available skills are listed in your system prompt. The child will have this knowledge immediately without needing to learn_skills.",
+        budget:
+          "Budget allocation for child agent in USD (e.g., '50.00'). If omitted, child gets unlimited budget. Must be a positive decimal string. Parent must have sufficient available budget."
       },
       consensus_rules: %{
         task_description: {:semantic_similarity, threshold: 0.95},
@@ -77,7 +81,8 @@ defmodule Quoracle.Actions.Schema.AgentSchemas do
         delegation_strategy: :exact_match,
         sibling_context: :structural_merge,
         downstream_constraints: {:semantic_similarity, threshold: 0.90},
-        skills: :union_merge
+        skills: :union_merge,
+        budget: :exact_match
       }
     },
     wait: %{

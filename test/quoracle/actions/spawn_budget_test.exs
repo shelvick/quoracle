@@ -1,18 +1,20 @@
 defmodule Quoracle.Actions.SpawnBudgetTest do
   @moduledoc """
-  Tests for ACTION_Spawn v13.0 - Budget Escrow for Child Spawn.
+  Tests for ACTION_Spawn budget system.
 
-  WorkGroupID: wip-20251231-budget
-  Packet: Packet 8 (Spawn/Dismiss/Manager)
-
-  Tests budget allocation during spawn_child action:
+  v13.0 (WorkGroupID: wip-20251231-budget):
   - Validation of parent budget sufficiency
   - Creation of child budget_data
   - Parent committed tracking
+
+  v17.0 (WorkGroupID: fix-20260211-budget-enforcement, Packet 1):
+  - Budget enforcement: budgeted parents MUST specify budget when spawning
+  - R52-R58: Budget required validation and error guidance
   """
   use Quoracle.DataCase, async: true
 
   alias Quoracle.Actions.Spawn
+  alias Quoracle.Actions.Spawn.BudgetValidation
   alias Quoracle.Agent.Core
   alias Test.IsolationHelpers
 
@@ -377,5 +379,88 @@ defmodule Quoracle.Actions.SpawnBudgetTest do
       assert child_state.budget_data.mode == :allocated
       assert Decimal.equal?(child_state.budget_data.allocated, Decimal.new("1000.00"))
     end
+  end
+
+  describe "budget enforcement for budgeted parents (v17.0)" do
+    # R52: Budgeted Parent Must Specify Budget [UNIT]
+    # Tests BudgetValidation.validate_and_check_budget/2 directly.
+    # A parent with :root or :allocated budget mode MUST provide a budget param.
+    @tag :r52
+    @tag :unit
+    test "R52: budgeted parent cannot spawn child without budget" do
+      # Arrange: no budget in params, parent has :root budget in deps
+      params_no_budget = %{}
+
+      root_deps = %{
+        budget_data: %{mode: :root, allocated: Decimal.new("100.00"), committed: Decimal.new("0")}
+      }
+
+      # Act & Assert: :root parent without budget param returns :budget_required
+      assert {:error, :budget_required} =
+               BudgetValidation.validate_and_check_budget(params_no_budget, root_deps)
+
+      # Also test :allocated mode
+      allocated_deps = %{
+        budget_data: %{
+          mode: :allocated,
+          allocated: Decimal.new("50.00"),
+          committed: Decimal.new("0")
+        }
+      }
+
+      assert {:error, :budget_required} =
+               BudgetValidation.validate_and_check_budget(params_no_budget, allocated_deps)
+    end
+
+    # R57: Error Message Contains Guidance [INTEGRATION]
+    # The :budget_required error, when surfaced through Spawn.execute, should
+    # return a descriptive string message (not just the atom) that guides the
+    # LLM on what to do: include "budget" param and use "get_budget" to check funds.
+    @tag :r57
+    @tag :integration
+    test "R57: budget_required error message guides LLM", %{deps: deps, profile: profile} do
+      # Create parent with root budget (budgeted parent)
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_parent_with_budget(deps, parent_budget)
+      {:ok, parent_state} = Core.get_state(parent_pid)
+
+      params = %{
+        "task_description" => "Child without budget from budgeted parent",
+        "success_criteria" => "Complete",
+        "immediate_context" => "Test",
+        "approach_guidance" => "Standard",
+        "profile" => profile.name
+        # NOTE: No "budget" param - this is the bug scenario
+      }
+
+      # Include budget_data in opts so BudgetValidation can see parent's budget mode
+      spawn_opts =
+        build_spawn_opts(deps, parent_state) ++
+          [
+            agent_pid: parent_pid,
+            budget_data: parent_budget
+          ]
+
+      # Act: Attempt spawn without budget from budgeted parent
+      result = Spawn.execute(params, parent_state.agent_id, spawn_opts)
+
+      # Assert: Error contains guidance for the LLM agent
+      # The error should be a string message (not just atom) that mentions:
+      # 1. "budget" - what's required
+      # 2. "get_budget" - how to check available funds
+      assert {:error, message} = result
+      assert is_binary(message), "Error should be a descriptive string, got: #{inspect(message)}"
+      assert message =~ "budget", "Error message should mention 'budget'"
+      assert message =~ "get_budget", "Error message should mention 'get_budget' action"
+    end
+
+    # NOTE: R53 (N/A parent unchanged), R54 (nil budget unchanged), R55 (root + budget OK),
+    # R56 (allocated + budget OK), R58 (acceptance) test existing behavior that already passes.
+    # These will be added as regression tests during IMPLEMENT phase.
   end
 end

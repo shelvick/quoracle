@@ -156,22 +156,34 @@ defmodule Quoracle.Agent.Core.BudgetHandler do
   end
 
   @doc """
-  Updates over_budget status based on current spent vs allocated.
-  over_budget is monotonic - once true, stays true.
+  Handle release_child_budget call - uses Escrow.release_allocation for proper math.
+  Decrements committed by child_allocated, re-evaluates over_budget.
   """
-  @spec update_over_budget_status(State.t()) :: State.t()
-  def update_over_budget_status(%State{over_budget: true} = state) do
-    # Already over budget - stays over budget (monotonic)
-    state
+  @spec handle_release_child_budget(Decimal.t(), Decimal.t(), State.t()) ::
+          {:reply, :ok, State.t()}
+  def handle_release_child_budget(child_allocated, child_spent, state) do
+    {:ok, updated_budget, _unspent} =
+      Escrow.release_allocation(state.budget_data, child_allocated, child_spent)
+
+    new_state = %{state | budget_data: updated_budget}
+    # Re-evaluate over_budget (v34.0 removes monotonicity)
+    new_state = update_over_budget_status(new_state)
+    {:reply, :ok, new_state}
   end
 
+  @doc """
+  Updates over_budget status based on current spent vs allocated.
+  Re-evaluates on every call - budget can recover when child absorption
+  returns unspent funds.
+  """
+  @spec update_over_budget_status(State.t()) :: State.t()
   def update_over_budget_status(%State{budget_data: %{allocated: nil}} = state) do
     # N/A budget - never over budget
     state
   end
 
   def update_over_budget_status(%State{} = state) do
-    # Check if spent exceeds available budget
+    # Re-evaluate budget status (not monotonic - budget can recover via child absorption)
     # Wrap in try/rescue - DB may be unavailable during shutdown or network issues
     try do
       spent = Tracker.get_spent(state.agent_id)

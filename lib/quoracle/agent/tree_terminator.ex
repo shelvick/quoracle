@@ -17,6 +17,7 @@ defmodule Quoracle.Agent.TreeTerminator do
 
   alias Quoracle.Agent.{Core, DynSup, RegistryQueries}
   alias Quoracle.Agents.Agent, as: AgentSchema
+  alias Quoracle.Costs.AgentCost
   alias Quoracle.Logs.Log
   alias Quoracle.Messages.Message
   alias Quoracle.Repo
@@ -166,15 +167,18 @@ defmodule Quoracle.Agent.TreeTerminator do
   defp delete_agent_records(agent_id) do
     try do
       # Delete in order respecting foreign keys
-      # 1. Delete messages (both sent and received)
+      # 1. Delete agent cost records (prevents double-counting after budget absorption)
+      Repo.delete_all(from(c in AgentCost, where: c.agent_id == ^agent_id))
+
+      # 2. Delete messages (both sent and received)
       Repo.delete_all(
         from(m in Message, where: m.from_agent_id == ^agent_id or m.to_agent_id == ^agent_id)
       )
 
-      # 2. Delete logs
+      # 3. Delete logs
       Repo.delete_all(from(l in Log, where: l.agent_id == ^agent_id))
 
-      # 3. Delete agent record
+      # 4. Delete agent record
       Repo.delete_all(from(a in AgentSchema, where: a.agent_id == ^agent_id))
 
       :ok

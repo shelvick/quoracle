@@ -44,7 +44,7 @@
   <!-- ============================================================ -->
   <rect x="310" y="137" width="280" height="70" rx="10" fill="url(#rootGrad)"/>
   <text x="450" y="161" text-anchor="middle" font-size="13" font-weight="700" fill="white">Root Agent</text>
-  <text x="450" y="178" text-anchor="middle" font-size="10" fill="#c7d2fe">"Project Manager"</text>
+  <text x="450" y="178" text-anchor="middle" font-size="10" fill="#c7d2fe">"Research Director"</text>
   <text x="450" y="196" text-anchor="middle" font-size="9" fill="#a5b4fc">budget: $5.00 | profile: Full Access</text>
 
   <!-- ============================================================ -->
@@ -68,13 +68,13 @@
   <!-- Child A: Backend -->
   <rect x="100" y="267" width="260" height="70" rx="10" fill="url(#childGrad)"/>
   <text x="230" y="291" text-anchor="middle" font-size="12" font-weight="700" fill="white">Child Agent</text>
-  <text x="230" y="308" text-anchor="middle" font-size="10" fill="#ddd6fe">"Backend Engineer"</text>
+  <text x="230" y="308" text-anchor="middle" font-size="10" fill="#ddd6fe">"Market Analyst"</text>
   <text x="230" y="325" text-anchor="middle" font-size="9" fill="#c4b5fd">budget: $2.00 | profile: Builder</text>
 
   <!-- Child B: Frontend -->
   <rect x="540" y="267" width="260" height="70" rx="10" fill="url(#childGrad)"/>
   <text x="670" y="291" text-anchor="middle" font-size="12" font-weight="700" fill="white">Child Agent</text>
-  <text x="670" y="308" text-anchor="middle" font-size="10" fill="#ddd6fe">"Frontend Engineer"</text>
+  <text x="670" y="308" text-anchor="middle" font-size="10" fill="#ddd6fe">"Content Strategist"</text>
   <text x="670" y="325" text-anchor="middle" font-size="9" fill="#c4b5fd">budget: $2.00 | profile: Builder</text>
 
   <!-- ============================================================ -->
@@ -95,13 +95,13 @@
   <!-- Grandchild A1: DB Specialist -->
   <rect x="15" y="380" width="190" height="60" rx="8" fill="url(#grandGrad)"/>
   <text x="110" y="403" text-anchor="middle" font-size="11" font-weight="600" fill="white">Grandchild</text>
-  <text x="110" y="420" text-anchor="middle" font-size="9" fill="#ede9fe">"Database Specialist"</text>
+  <text x="110" y="420" text-anchor="middle" font-size="9" fill="#ede9fe">"Survey Designer"</text>
   <text x="110" y="434" text-anchor="middle" font-size="9" fill="#ddd6fe">budget: $0.50 | profile: Builder</text>
 
   <!-- Grandchild A2: API Designer -->
   <rect x="235" y="380" width="190" height="60" rx="8" fill="url(#grandGrad)"/>
   <text x="330" y="403" text-anchor="middle" font-size="11" font-weight="600" fill="white">Grandchild</text>
-  <text x="330" y="420" text-anchor="middle" font-size="9" fill="#ede9fe">"API Designer"</text>
+  <text x="330" y="420" text-anchor="middle" font-size="9" fill="#ede9fe">"Trend Forecaster"</text>
   <text x="330" y="434" text-anchor="middle" font-size="9" fill="#ddd6fe">budget: $0.50 | profile: Researcher</text>
 
   <!-- ============================================================ -->

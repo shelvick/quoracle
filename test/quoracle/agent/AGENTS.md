@@ -6,7 +6,9 @@
 - core_broadcast_test.exs: PubSub broadcast tests, race condition fix (synchronization after async cast)
 - config_manager_test.exs: 12 tests
 - dyn_sup_test.exs: 15 tests
-- tree_terminator_test.exs: 15 tests - BFS collection, bottom-up order, DB deletion, PubSub events, race prevention (2025-12)
+- tree_terminator_test.exs: 18 tests (15 + R15-R17) - BFS collection, bottom-up order, DB deletion (incl. agent_costs v2.0), PubSub events, race prevention (2025-12, 2026-02)
+- core_budget_test.exs: R40-R43 (4 tests) - Over-budget re-evaluation, monotonicity removal (2026-02-11)
+- consensus_handler/action_executor_budget_test.exs: R59-R64 (4 tests) - ActionExecutor budget_data/spent propagation (2026-02-11)
 - consensus_test.exs: 44 tests, property-based, message alternation
 - consensus_integration_test.exs: 30 JSON parsing tests
 - consensus_handler_test.exs: ConsensusHandler tests with wait parameter (async: false - modifies global Logger level)

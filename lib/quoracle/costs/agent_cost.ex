@@ -12,7 +12,7 @@ defmodule Quoracle.Costs.AgentCost do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @cost_types ~w(llm_consensus llm_embedding llm_answer llm_summarization llm_condensation image_generation external)
+  @cost_types ~w(llm_consensus llm_embedding llm_answer llm_summarization llm_condensation image_generation external child_budget_absorbed)
 
   @type t :: %__MODULE__{
           id: binary() | nil,
