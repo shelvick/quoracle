@@ -10,7 +10,7 @@ defmodule Quoracle.Actions.Schema do
   # Ensure send_message target atoms exist for String.to_existing_atom/1 in validator
   # Must be defined here (not in SendMessage.ex) because Validator loads Schema before SendMessage
   # Using module attribute ensures atoms are created at compile time
-  @send_message_targets [:parent, :children, :all_children, :announcement, :user]
+  @send_message_targets [:parent, :children, :announcement]
 
   @spec __send_message_targets__ :: [atom()]
   def __send_message_targets__, do: @send_message_targets

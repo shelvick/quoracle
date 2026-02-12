@@ -19,6 +19,7 @@ defmodule Quoracle.Tasks.TaskRestorer do
   - `opts` - Options keyword list:
     - `:registry` - Registry instance to query (required)
     - `:dynsup` - DynamicSupervisor PID for testing (default: application dynsup)
+    - `:kill` - Force-kill via Process.exit(:kill) instead of graceful :stop_requested (default: false)
 
   ## Returns
   - `:ok` - All agents terminated successfully
@@ -59,13 +60,20 @@ defmodule Quoracle.Tasks.TaskRestorer do
               :desc
             )
 
-          # Step 5: Send :stop_requested to each agent (deterministic mailbox ordering)
-          # Using send/2 directly ensures :stop_requested is processed in FIFO order
-          # after any pending :trigger_consensus messages (drain pattern in Core)
+          # Step 5: Terminate each agent
+          # kill: true → Process.exit(:kill) for immediate termination (used by delete_task)
+          # kill: false → send(:stop_requested) for graceful shutdown (used by pause)
+          kill? = Keyword.get(opts, :kill, false)
+
           Enum.each(sorted_agents, fn {agent_id, meta} ->
             if Process.alive?(meta.pid) do
-              send(meta.pid, :stop_requested)
-              Logger.debug("Sent :stop_requested to agent #{agent_id}")
+              if kill? do
+                Process.exit(meta.pid, :kill)
+                Logger.debug("Killed agent #{agent_id}")
+              else
+                send(meta.pid, :stop_requested)
+                Logger.debug("Sent :stop_requested to agent #{agent_id}")
+              end
             else
               Logger.debug("Agent #{agent_id} already terminated")
             end

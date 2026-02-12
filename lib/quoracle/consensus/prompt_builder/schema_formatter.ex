@@ -61,14 +61,14 @@ defmodule Quoracle.Consensus.PromptBuilder.SchemaFormatter do
                 "oneOf" => [
                   %{
                     "type" => "string",
-                    "enum" => ["parent", "children"],
-                    "description" => "Target parent agent or all children"
+                    "enum" => ["parent", "children", "announcement"],
+                    "description" =>
+                      "'parent' (your creator - status/results go here), 'children' (direct only), 'announcement' (broadcast directives/corrections downward - NOT for status updates)"
                   },
                   %{
                     "type" => "array",
                     "items" => %{"type" => "string"},
-                    "description" =>
-                      "List of specific agent IDs (e.g., [\"agent_123\", \"agent_456\"])"
+                    "description" => "List of specific agent IDs"
                   }
                 ]
               }

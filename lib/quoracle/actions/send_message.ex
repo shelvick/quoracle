@@ -104,12 +104,13 @@ defmodule Quoracle.Actions.SendMessage do
   end
 
   defp normalize_target(target) when is_binary(target) do
+    # Strip brackets - LLMs sometimes send [parent] instead of parent
+    target = String.trim(target, "[]")
+
     case target do
       "parent" -> :parent
       "children" -> :children
-      "all_children" -> :all_children
       "announcement" -> :announcement
-      "user" -> :user
       other -> other
     end
   end
@@ -125,16 +126,8 @@ defmodule Quoracle.Actions.SendMessage do
     resolve_children(agent_id, registry)
   end
 
-  defp resolve_targets(:all_children, agent_id, registry) do
-    resolve_children(agent_id, registry)
-  end
-
   defp resolve_targets(:announcement, agent_id, registry) do
     resolve_all_descendants(agent_id, registry)
-  end
-
-  defp resolve_targets(:user, _agent_id, _registry) do
-    {:ok, [{:user, nil}]}
   end
 
   defp resolve_targets(to, _agent_id, nil) when is_list(to) do
@@ -170,7 +163,12 @@ defmodule Quoracle.Actions.SendMessage do
     {:ok, valid_targets}
   end
 
-  defp resolve_targets(_to, _agent_id, _registry) do
+  defp resolve_targets(to, _agent_id, _registry) do
+    Logger.error(
+      "Invalid send_message target: #{inspect(to)}. " <>
+        "Valid targets: 'parent', 'children', 'announcement', or a list of agent IDs"
+    )
+
     {:error, :invalid_target}
   end
 
