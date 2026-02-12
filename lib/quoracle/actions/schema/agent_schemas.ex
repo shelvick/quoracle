@@ -108,7 +108,7 @@ defmodule Quoracle.Actions.Schema.AgentSchemas do
       },
       param_descriptions: %{
         to:
-          "Message recipient: 'parent' (your creator), 'children' (direct children only), 'announcement' (one-way broadcast to all descendants recursively), or array of specific agent IDs",
+          "Message recipient: 'parent' (your creator - use for status updates and results), 'children' (direct children only), 'announcement' (broadcast directives/corrections to all descendants - NEVER for status updates, use 'parent' instead), or array of specific agent IDs",
         content: "The message text to send"
       },
       consensus_rules: %{

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-02-12
+
+### Fixed
+
+- **Orphaned agents on task deletion** — Deleting a task now force-kills its
+  agents instead of sending a graceful stop request. Agents stuck in retry
+  loops could not process `:stop_requested` messages, leaving them running
+  indefinitely.
+- **Send message target cleanup** — Stripped bracket artifacts from LLM-generated
+  targets (e.g., `[parent]` → `parent`). Removed dead `all_children` and `user`
+  target types; added error logging for invalid targets.
+- **Announcement guardrails** — Tightened send_message schema and prompt guidance
+  to prevent LLMs from misusing `announcement` for status updates. Announcement
+  is now explicitly documented as broadcast-only for directives and corrections.
+
 ## [0.1.4] - 2026-02-11
 
 ### Changed

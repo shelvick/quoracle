@@ -442,8 +442,8 @@ defmodule Quoracle.Tasks.TaskManager do
 
   # Private helper for auto-pause logic
   defp maybe_pause_task(task_id, opts) do
-    # Always call pause_task - it handles both empty and non-empty cases
-    # This follows "let it crash" philosophy - no defensive checking
-    Quoracle.Tasks.TaskRestorer.pause_task(task_id, opts)
+    # Force-kill agents on deletion — they may be blocked in retry loops
+    # and unable to process :stop_requested messages
+    Quoracle.Tasks.TaskRestorer.pause_task(task_id, Keyword.put(opts, :kill, true))
   end
 end

@@ -717,16 +717,14 @@ defmodule Quoracle.Actions.SchemaTest do
     end
 
     # R4: Target Count Updated
-    test "send_message_targets has 5 targets" do
-      # [UNIT] - WHEN __send_message_targets__/0 called THEN returns 5 targets
+    test "send_message_targets has 3 targets" do
+      # [UNIT] - WHEN __send_message_targets__/0 called THEN returns 3 targets
       targets = Schema.__send_message_targets__()
-      assert length(targets) == 5
+      assert length(targets) == 3
 
       # Verify all expected targets are present
       assert :parent in targets
       assert :children in targets
-      assert :all_children in targets
-      assert :user in targets
       assert :announcement in targets
     end
   end

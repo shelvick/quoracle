@@ -25,10 +25,6 @@ quoracle-*.tar
 # Claude Code local settings overrides
 .claude/settings.local.json
 
-# Claude phase-review temporary files
-.claude/.diffs
-.claude/.commit_approved
-
 # Editor and IDE files
 .vscode/
 .idea/
@@ -40,11 +36,8 @@ quoracle-*.tar
 # Elixir Language Server
 .elixir_ls/
 
-# XPExpert LSP runtime logs
+# Expert LSP runtime logs
 .expert/
-
-# Dialyzer PLT files
-priv/plts/
 
 # Since we are building assets from assets/,
 # we ignore priv/static/assets. You may want to
@@ -52,9 +45,6 @@ priv/plts/
 /priv/static/assets/
 /priv/static/cache_manifest.json
 /priv/static/uploads/
-
-# npm dependencies (if you ever add them)
-/assets/node_modules/
 
 # Docker environment (contains secrets)
 .env

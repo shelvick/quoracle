@@ -604,16 +604,15 @@ defmodule Quoracle.Integration.SpawnTest do
       {:ok, _} =
         GenServer.call(parent_pid, {
           :process_action,
-          %{action: "send_message", params: %{to: "all_children", content: "Broadcast"}},
+          %{action: "send_message", params: %{to: "children", content: "Broadcast"}},
           "a3"
         })
 
-      # Only direct child should receive (all_children doesn't recurse)
+      # Only direct child should receive (children = direct only)
       assert {:ok, child_state} = Quoracle.Agent.Core.get_state(child)
       assert Enum.any?(child_state.messages, &(&1.content == "Broadcast"))
 
-      # TEST-FIX: all_children only sends to direct children, not grandchildren
-      # Grandchild won't receive parent's broadcast
+      # Grandchild won't receive parent's broadcast (use announcement for recursion)
     end
 
     test "deep hierarchy maintains proper parent chains", %{

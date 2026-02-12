@@ -10,7 +10,7 @@ defmodule Quoracle.Actions.Schema.Metadata do
     wait:
       "Pause execution for a specified duration. WHEN: Need to delay before retry, wait for external process, or rate-limit operations. HOW: Specify duration in seconds (can be fractional like 0.5 for 500ms). This is the ONLY action that doesn't require a 'wait' parameter.",
     send_message:
-      "Communicate with parent or children. WHEN: Report progress/results to parent, coordinate with direct children, broadcast one-way announcements to all descendants, or request information. HOW: Set 'to' to 'parent', 'children' (direct only), 'announcement' (recursive broadcast to all descendants - no reply expected), or array of specific agent IDs.",
+      "Communicate with parent or children. WHEN: Report progress/results to parent, coordinate with direct children, or request information. HOW: Set 'to' to 'parent', 'children' (direct only), 'announcement' (broadcast instructions/corrections to all descendants), or array of specific agent IDs. IMPORTANT: Use 'parent' for status updates and results - 'announcement' is ONLY for broadcasting directives, corrections, or critical information downward to your subtree. Never use 'announcement' for status reports.",
     orient:
       "Perform structured strategic analysis before acting. WHEN: Task is unclear, multiple approaches exist, or need to think through complexity. HOW: Fill out 4 required fields (current_situation, goal_clarity, available_resources, key_challenges) plus optional planning fields. Use this to think, not to act. It is usually a good idea to 'orient' before any non-trivial task.",
     answer_engine:
