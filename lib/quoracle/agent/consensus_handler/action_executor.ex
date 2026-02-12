@@ -79,8 +79,12 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
     # Coerce string "true"/"false" to boolean for wait comparison (LLMs return strings from JSON)
     wait_for_check = action_response |> Map.get(:wait) |> Helpers.coerce_wait_value()
 
+    is_self_contained =
+      action_atom in Helpers.self_contained_actions() or
+        (action_atom == :batch_sync and Helpers.batch_all_self_contained?(action_response))
+
     action_response =
-      if action_atom in Helpers.self_contained_actions() and wait_for_check == true do
+      if is_self_contained and wait_for_check == true do
         Logger.warning(
           "Auto-correcting wait:true to wait:false for #{action} action. " <>
             "This action completes instantly and cannot trigger external responses. " <>
