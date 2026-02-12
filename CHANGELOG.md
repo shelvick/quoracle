@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-02-12
+
+### Fixed
+
+- **batch_sync stall with wait:true** — `batch_sync` actions with `wait:true`
+  stalled indefinitely when all sub-actions were self-contained (e.g.,
+  `file_read`, `orient`). Now dynamically inspects sub-actions and auto-corrects
+  `wait:true` to `false` when no sub-action can trigger an external response.
+  Mixed batches preserve `wait:true` as expected.
+
 ## [0.1.5] - 2026-02-12
 
 ### Fixed

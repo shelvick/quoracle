@@ -17,9 +17,37 @@ defmodule Quoracle.Agent.ConsensusHandler.Helpers do
       # Added 2026-01-16: These have no external responder, wait:true stalls indefinitely
       :adjust_budget,
       :file_read,
-      :file_write
+      :file_write,
+      # batch_sync completes inline and returns collected results - no external responder
+      # at the batch level (sub-action side-effects arrive as separate agent messages)
+      :batch_sync
     ]
   end
+
+  @doc """
+  Check if a batch_sync action has all self-contained sub-actions.
+
+  Returns true only when every sub-action in the batch is in self_contained_actions().
+  Mixed batches (e.g., file_read + send_message) return false because the non-self-contained
+  sub-action may trigger an external response the agent should wait for.
+  """
+  @spec batch_all_self_contained?(map()) :: boolean()
+  def batch_all_self_contained?(%{params: %{actions: actions}}) when is_list(actions) do
+    self_contained = self_contained_actions()
+
+    Enum.all?(actions, fn
+      %{action: action_type} -> to_action_atom(action_type) in self_contained
+      %{"action" => action_type} -> to_action_atom(action_type) in self_contained
+      _ -> false
+    end)
+  end
+
+  def batch_all_self_contained?(_action_response), do: false
+
+  defp to_action_atom(action_type) when is_atom(action_type), do: action_type
+
+  defp to_action_atom(action_type) when is_binary(action_type),
+    do: String.to_existing_atom(action_type)
 
   @doc "Normalize sibling_context: empty map -> empty list (LLM JSON confusion fix)."
   @spec normalize_sibling_context(map()) :: map()
