@@ -68,10 +68,9 @@ defmodule Quoracle.Consensus.Result do
         params[:actions] || params["actions"] || []
       end)
 
-    # batch_sync doesn't use semantic_similarity, so no accumulator threading needed
     initial_acc = Keyword.get(cost_opts, :cost_accumulator)
 
-    case ConsensusRules.apply_rule(:batch_sequence_merge, sequences) do
+    case ConsensusRules.apply_rule(:batch_sequence_merge, sequences, cost_opts) do
       {:ok, merged_actions} ->
         build_batch_sync_action(actions, merged_actions, initial_acc)
 

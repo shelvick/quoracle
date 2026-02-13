@@ -33,14 +33,17 @@ defmodule Quoracle.Models.Embeddings do
   - `{:ok, result, updated_accumulator}` when `:cost_accumulator` provided in options
   - Cached results always return 2-tuple (no cost to accumulate)
   """
-  @spec get_embedding(String.t()) :: {:ok, embedding_result()} | {:error, atom()}
-  @spec get_embedding(String.t(), map() | keyword()) ::
+  @spec get_embedding(term()) :: {:ok, embedding_result()} | {:error, atom()}
+  @spec get_embedding(term(), map() | keyword()) ::
           {:ok, embedding_result()}
           | {:ok, embedding_result(), Accumulator.t()}
           | {:error, atom()}
   def get_embedding(text, options \\ %{}) do
     # Convert keyword list to map if needed
     options = if is_list(options), do: Map.new(options), else: options
+
+    # Stringify non-binary input (consensus rules may pass lists/maps)
+    text = if is_binary(text), do: text, else: Jason.encode!(text)
 
     # Validate input
     if text == "" do
