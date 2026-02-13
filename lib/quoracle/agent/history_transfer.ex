@@ -281,7 +281,7 @@ defmodule Quoracle.Agent.HistoryTransfer do
         limit -> Keyword.put(base_opts, :target_limit, limit)
       end
     else
-      []
+      [agent_id: state.agent_id, task_id: state.task_id, pubsub: state.pubsub]
     end
   end
 end

@@ -357,8 +357,8 @@ defmodule Quoracle.Models.ModelQuery do
   Automatically chunks long text and averages embeddings.
   Returns {:ok, %{embedding: list(), cached: boolean(), chunks: integer()}}
   """
-  @spec get_embedding(String.t()) :: {:ok, map()} | {:error, atom()}
-  @spec get_embedding(String.t(), map() | keyword()) :: {:ok, map()} | {:error, atom()}
+  @spec get_embedding(term()) :: {:ok, map()} | {:error, atom()}
+  @spec get_embedding(term(), map() | keyword()) :: {:ok, map()} | {:error, atom()}
   defdelegate get_embedding(text), to: Embeddings
   defdelegate get_embedding(text, options), to: Embeddings
 end

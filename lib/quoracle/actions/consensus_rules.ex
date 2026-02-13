@@ -30,6 +30,19 @@ defmodule Quoracle.Actions.ConsensusRules do
     end
   end
 
+  def apply_rule(:batch_sequence_merge, [], _cost_opts), do: {:ok, []}
+  def apply_rule(:batch_sequence_merge, [single_sequence], _cost_opts), do: {:ok, single_sequence}
+
+  def apply_rule(:batch_sequence_merge, sequences, cost_opts) when is_list(sequences) do
+    lengths = Enum.map(sequences, &length/1)
+
+    if Enum.uniq(lengths) |> length() > 1 do
+      {:error, :sequence_length_mismatch}
+    else
+      merge_sequences(sequences, cost_opts)
+    end
+  end
+
   def apply_rule(rule, values, _cost_opts), do: apply_rule(rule, values)
 
   @spec apply_rule(atom() | tuple(), list()) :: {:ok, any()} | {:error, atom()}
@@ -95,14 +108,7 @@ defmodule Quoracle.Actions.ConsensusRules do
   def apply_rule(:batch_sequence_merge, [single_sequence]), do: {:ok, single_sequence}
 
   def apply_rule(:batch_sequence_merge, sequences) when is_list(sequences) do
-    # Check all sequences have the same length
-    lengths = Enum.map(sequences, &length/1)
-
-    if Enum.uniq(lengths) |> length() > 1 do
-      {:error, :sequence_length_mismatch}
-    else
-      merge_sequences(sequences)
-    end
+    apply_rule(:batch_sequence_merge, sequences, [])
   end
 
   def apply_rule(:wait_parameter, []), do: {:error, :no_values}
@@ -367,13 +373,13 @@ defmodule Quoracle.Actions.ConsensusRules do
   end
 
   # Merges action sequences position by position
-  defp merge_sequences(sequences) do
+  defp merge_sequences(sequences, cost_opts) do
     # Transpose: [[a1,a2], [b1,b2]] -> [[a1,b1], [a2,b2]]
     transposed = Enum.zip_with(sequences, & &1)
 
     # Merge each position
     Enum.reduce_while(transposed, {:ok, []}, fn actions_at_position, {:ok, acc} ->
-      case merge_position(actions_at_position) do
+      case merge_position(actions_at_position, cost_opts) do
         {:ok, merged_action} -> {:cont, {:ok, acc ++ [merged_action]}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
@@ -381,7 +387,7 @@ defmodule Quoracle.Actions.ConsensusRules do
   end
 
   # Merges actions at a single position
-  defp merge_position(actions) do
+  defp merge_position(actions, cost_opts) do
     # Normalize keys (handle string keys from LLM)
     normalized = Enum.map(actions, &normalize_action_keys/1)
 
@@ -391,7 +397,7 @@ defmodule Quoracle.Actions.ConsensusRules do
     case Enum.uniq(action_types) do
       [action_type] ->
         # All same type - merge params using that action's consensus rules
-        merge_action_params(action_type, normalized)
+        merge_action_params(action_type, normalized, cost_opts)
 
       _ ->
         {:error, :sequence_mismatch}
@@ -415,7 +421,7 @@ defmodule Quoracle.Actions.ConsensusRules do
   end
 
   # Merges params for actions of the same type
-  defp merge_action_params(action_type, actions) do
+  defp merge_action_params(action_type, actions, cost_opts) do
     params_list = Enum.map(actions, & &1.params)
 
     # Get all unique param keys across all actions
@@ -427,14 +433,14 @@ defmodule Quoracle.Actions.ConsensusRules do
     # Merge each param using the action's consensus rule
     case Schema.get_schema(action_type) do
       {:ok, schema} ->
-        merge_params_with_rules(action_type, all_keys, params_list, schema)
+        merge_params_with_rules(action_type, all_keys, params_list, schema, cost_opts)
 
       {:error, _} ->
         {:error, :unknown_action}
     end
   end
 
-  defp merge_params_with_rules(action_type, keys, params_list, schema) do
+  defp merge_params_with_rules(action_type, keys, params_list, schema, cost_opts) do
     Enum.reduce_while(keys, {:ok, %{}}, fn key, {:ok, acc} ->
       # Collect values for this param from all actions (filter out nils)
       values =
@@ -449,7 +455,7 @@ defmodule Quoracle.Actions.ConsensusRules do
         # Get the consensus rule for this param
         rule = Map.get(schema.consensus_rules, key, :exact_match)
 
-        case apply_rule(rule, values) do
+        case apply_rule(rule, values, cost_opts) do
           {:ok, merged_value} ->
             {:cont, {:ok, Map.put(acc, key, merged_value)}}
 
