@@ -139,11 +139,13 @@ defmodule Quoracle.Actions.Spawn do
       )
 
       # Return IMMEDIATELY with child_id (no pid yet - spawning in background)
+      # v19.0: Include budget_allocated so Core can update committed via handle_action_result
       {:ok,
        %{
          action: "spawn",
          agent_id: child_id,
-         spawned_at: DateTime.utc_now()
+         spawned_at: DateTime.utc_now(),
+         budget_allocated: budget_result.escrow_amount
        }}
     else
       {:error, :budget_required} ->
@@ -292,10 +294,9 @@ defmodule Quoracle.Actions.Spawn do
                }}
             )
 
-            # Update parent's committed budget (escrow) if child has allocated budget
-            if budget_result.escrow_amount do
-              Core.update_budget_committed(parent_pid, budget_result.escrow_amount)
-            end
+            # REMOVED: Core.update_budget_committed callback (caused deadlock - Bug 2)
+            # budget_committed is now updated by Core itself when it processes the
+            # spawn result via handle_action_result → maybe_update_budget_committed
           end
 
           {:ok, child_pid}

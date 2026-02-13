@@ -36,17 +36,49 @@ defmodule Quoracle.Actions.AdjustBudget do
 
     with :ok <- validate_positive(new_budget),
          {:ok, child_pid} <- find_child(child_id, registry),
-         {:ok, parent_state} <- get_parent_state(agent_id, registry),
+         {:ok, parent_state} <- get_parent_state(agent_id, registry, opts),
          :ok <- validate_direct_child(parent_state, child_id),
          {:ok, child_state} <- Core.get_state(child_pid),
          :ok <- validate_adjustment(parent_state, child_state, new_budget),
-         :ok <- Core.adjust_child_budget(agent_id, child_id, new_budget, opts) do
+         :ok <- do_adjust(agent_id, child_id, new_budget, opts) do
       {:ok,
        %{
          action: "adjust_budget",
          child_id: child_id,
          new_budget: Decimal.to_string(new_budget)
        }}
+    end
+  end
+
+  # v2.0: Dispatch budget adjustment based on whether parent_config is available.
+  # When parent_config is provided, the parent GenServer may be blocked during action
+  # execution and can't service GenServer.call. Update child directly instead.
+  # When no parent_config, use Core.adjust_child_budget via Registry (original path).
+  defp do_adjust(agent_id, child_id, new_budget, opts) do
+    if Keyword.has_key?(opts, :parent_config) do
+      adjust_child_directly(child_id, new_budget, opts)
+    else
+      Core.adjust_child_budget(agent_id, child_id, new_budget, opts)
+    end
+  end
+
+  # Update child's budget_data directly when parent GenServer is unavailable.
+  # Parent's budget_data will be updated by Core when it processes the action result.
+  @spec adjust_child_directly(String.t(), Decimal.t(), keyword()) :: :ok | {:error, term()}
+  defp adjust_child_directly(child_id, new_budget, opts) do
+    registry = Keyword.fetch!(opts, :registry)
+
+    case Registry.lookup(registry, {:agent, child_id}) do
+      [{child_pid, _}] ->
+        child_budget_data =
+          case Core.get_state(child_pid) do
+            {:ok, child_state} -> %{child_state.budget_data | allocated: new_budget}
+          end
+
+        Core.update_budget_data(child_pid, child_budget_data)
+
+      [] ->
+        {:error, :child_not_found}
     end
   end
 
@@ -74,11 +106,21 @@ defmodule Quoracle.Actions.AdjustBudget do
     end
   end
 
-  @spec get_parent_state(String.t(), atom()) :: {:ok, map()} | {:error, :parent_not_found}
-  defp get_parent_state(parent_id, registry) do
-    case Registry.lookup(registry, {:agent, parent_id}) do
-      [{parent_pid, _}] -> Core.get_state(parent_pid)
-      [] -> {:error, :parent_not_found}
+  @spec get_parent_state(String.t(), atom(), keyword()) ::
+          {:ok, map()} | {:error, :parent_not_found}
+  defp get_parent_state(parent_id, registry, opts) do
+    # v2.0: Use parent_config from opts (passed by ActionExecutor) to avoid
+    # calling back to Core via GenServer.call (prevents deadlock)
+    case Keyword.get(opts, :parent_config) do
+      %{agent_id: ^parent_id} = parent_state ->
+        {:ok, parent_state}
+
+      _ ->
+        # Fallback to Registry lookup (for direct execution outside ActionExecutor)
+        case Registry.lookup(registry, {:agent, parent_id}) do
+          [{parent_pid, _}] -> Core.get_state(parent_pid)
+          [] -> {:error, :parent_not_found}
+        end
     end
   end
 

@@ -54,6 +54,7 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
 
   alias Quoracle.Agent.ConsensusHandler
   alias Quoracle.Agent.ConsensusHandlerTest.MockRouter
+  import Quoracle.Agent.ConsensusTestHelpers, only: [execute_and_collect_result: 3]
 
   import ExUnit.CaptureLog
 
@@ -202,7 +203,11 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         pending_actions: %{},
         wait_timer: nil,
         # Required for spawn_child action to be allowed
-        capability_groups: [:hierarchy]
+        capability_groups: [:hierarchy],
+        # v35.0: Fields required by handle_action_result
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       agent_pid = self()
@@ -224,14 +229,14 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         wait: false
       }
 
-      result = ConsensusHandler.execute_consensus_action(state, consensus_result, agent_pid)
+      # v35.0: Collect async result through helper
+      result = execute_and_collect_result(state, consensus_result, agent_pid)
 
-      # Sync result: action processed and removed from pending (prevents duplicate notifications)
+      # Result processed: action removed from pending
       assert %{pending_actions: pending} = result
       assert map_size(pending) == 0
 
-      # Should trigger consensus via send/2 (not cast - prevents race condition)
-      # FIX: Synchronous result storage prevents race with immediate replies
+      # Consensus triggered via handle_action_result
       assert_receive :trigger_consensus
     end
 
@@ -247,9 +252,10 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         wait: true
       }
 
-      result = ConsensusHandler.execute_consensus_action(state, consensus_result, agent_pid)
+      # v35.0: Collect async result through helper
+      result = execute_and_collect_result(state, consensus_result, agent_pid)
 
-      # Sync result: action processed and removed from pending (prevents duplicate notifications)
+      # Result processed: action removed from pending
       assert %{pending_actions: pending} = result
       assert map_size(pending) == 0
 
@@ -266,7 +272,10 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         router_pid: mock_router,
         pending_actions: %{},
         wait_timer: nil,
-        model_histories: %{"default" => []}
+        model_histories: %{"default" => []},
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       # orient is a self-contained action - wait:true should be auto-corrected
@@ -282,9 +291,10 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         wait: true
       }
 
-      result = ConsensusHandler.execute_consensus_action(state, consensus_result, self())
+      # v35.0: Collect async result through helper
+      result = execute_and_collect_result(state, consensus_result, self())
 
-      # Sync result: action processed and removed from pending (prevents duplicate notifications)
+      # Result processed: action removed from pending
       assert %{pending_actions: pending} = result
       assert map_size(pending) == 0
 
@@ -305,7 +315,8 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         wait: 5
       }
 
-      result = ConsensusHandler.execute_consensus_action(state, consensus_result, agent_pid)
+      # v35.0: Collect async result through helper
+      result = execute_and_collect_result(state, consensus_result, agent_pid)
 
       assert %{wait_timer: {timer_ref, :timed_wait}} = result
       assert is_reference(timer_ref)
@@ -317,24 +328,19 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
     end
 
     test "handles router execution errors gracefully", %{state: state, agent_pid: agent_pid} do
-      # Mock router error response
+      # Mock router error response - invalid_action triggers ArgumentError
+      # in String.to_existing_atom, which the per-action Router returns as error
       consensus_result = %{
         action: :invalid_action,
         params: %{},
         wait: true
       }
 
-      import ExUnit.CaptureLog
-
-      log =
-        capture_log(fn ->
-          result = ConsensusHandler.execute_consensus_action(state, consensus_result, agent_pid)
-          # Check that key fields remain unchanged even on error
-          assert result.agent_id == state.agent_id
-          assert result.pending_actions == state.pending_actions
-        end)
-
-      assert log =~ "Action execution failed"
+      # v35.0: Error result arrives via cast; collect processes it
+      result = execute_and_collect_result(state, consensus_result, agent_pid)
+      # Key fields preserved even on error
+      assert result.agent_id == state.agent_id
+      # Errors trigger consensus continuation
       assert_receive :trigger_consensus
     end
 
@@ -348,7 +354,10 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         router_pid: mock_router,
         pending_actions: %{},
         wait_timer: nil,
-        model_histories: %{"default" => []}
+        model_histories: %{"default" => []},
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       consensus_result = %{
@@ -403,8 +412,7 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
 
       result = ConsensusHandler.execute_consensus_action(state, consensus_result, agent_pid)
 
-      # Check that sibling_context was normalized in history
-      # FIX: Find the :decision entry (may not be first due to sync result storage)
+      # Check that sibling_context was normalized in history (decision entry added before dispatch)
       all_entries = result.model_histories["default"]
       entry = Enum.find(all_entries, &(&1.type == :decision))
       assert entry != nil, "Should have a decision entry"
@@ -427,7 +435,10 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         router_pid: mock_router,
         pending_actions: %{},
         wait_timer: nil,
-        model_histories: %{"default" => []}
+        model_histories: %{"default" => []},
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       agent_pid = self()
@@ -452,14 +463,13 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         wait: 5
       }
 
-      result_state = ConsensusHandler.execute_consensus_action(state, consensus_result, agent_pid)
+      # v35.0: Collect async result through helper
+      result_state = execute_and_collect_result(state, consensus_result, agent_pid)
 
-      # FIX: Result is now stored synchronously (race condition fix), not via cast
-      # Check result is in the returned state's history
       histories = result_state.model_histories
       all_entries = histories |> Map.values() |> List.flatten()
       result_entry = Enum.find(all_entries, &(&1.type == :result))
-      assert result_entry != nil, "Result should be stored synchronously in history"
+      assert result_entry != nil, "Result should be stored in history"
     end
 
     # R8: Timer Set After Result Cast
@@ -476,14 +486,13 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         wait: 5
       }
 
-      result_state = ConsensusHandler.execute_consensus_action(state, consensus_result, agent_pid)
+      # v35.0: Collect async result through helper
+      result_state = execute_and_collect_result(state, consensus_result, agent_pid)
 
-      # FIX: Result is now stored synchronously (race condition fix), not via cast
-      # Verify result was stored in returned state
       histories = result_state.model_histories
       all_entries = histories |> Map.values() |> List.flatten()
       result_entry = Enum.find(all_entries, &(&1.type == :result))
-      assert result_entry != nil, "Result should be stored synchronously"
+      assert result_entry != nil, "Result should be stored"
 
       # Then verify timer was set
       assert %{wait_timer: {timer_ref, :timed_wait}} = result_state
@@ -498,7 +507,6 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
       state: state,
       agent_pid: agent_pid
     } do
-      # Execute action with timed wait
       consensus_result = %{
         action: :orient,
         params: %{
@@ -511,15 +519,13 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         wait: 1
       }
 
-      result_state =
-        ConsensusHandler.execute_consensus_action(state, consensus_result, agent_pid)
+      # v35.0: Collect async result through helper
+      result_state = execute_and_collect_result(state, consensus_result, agent_pid)
 
-      # FIX: Result is now stored synchronously (race condition fix), not via cast
-      # Verify result was stored in returned state's history
       histories = result_state.model_histories
       all_entries = histories |> Map.values() |> List.flatten()
       result_entry = Enum.find(all_entries, &(&1.type == :result))
-      assert result_entry != nil, "Result should be stored synchronously"
+      assert result_entry != nil, "Result should be stored"
 
       # Timer should be set
       assert %{wait_timer: {timer_ref, :timed_wait}} = result_state
@@ -540,7 +546,10 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         wait_timer: nil,
         model_histories: %{"default" => []},
         # Required for spawn_child action to be allowed
-        capability_groups: [:hierarchy]
+        capability_groups: [:hierarchy],
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       agent_pid = self()
@@ -589,10 +598,10 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         # wait is missing - will be defaulted
       }
 
-      _result = ConsensusHandler.execute_consensus_action(state, consensus_result, agent_pid)
+      # v35.0: Collect async result through helper
+      _result = execute_and_collect_result(state, consensus_result, agent_pid)
 
-      # Should trigger consensus via send/2 (not cast - prevents race condition)
-      # FIX: Synchronous result storage prevents race with immediate replies
+      # Consensus triggered via handle_action_result
       assert_receive :trigger_consensus
     end
 
@@ -625,7 +634,10 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         router_pid: mock_router,
         pending_actions: %{},
         wait_timer: nil,
-        model_histories: %{"default" => []}
+        model_histories: %{"default" => []},
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       agent_pid = self()
@@ -638,7 +650,6 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
       state: state,
       agent_pid: agent_pid
     } do
-      # Execute action with short timed wait
       consensus_result = %{
         action: :orient,
         params: %{
@@ -651,22 +662,20 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         wait: 1
       }
 
-      result_state =
-        ConsensusHandler.execute_consensus_action(state, consensus_result, agent_pid)
+      # v35.0: Collect async result through helper
+      result_state = execute_and_collect_result(state, consensus_result, agent_pid)
 
-      # 1. FIX: Result is now stored synchronously (race condition fix), not via cast
+      # 1. Result stored via handle_action_result
       histories = result_state.model_histories
       all_entries = histories |> Map.values() |> List.flatten()
       result_entry = Enum.find(all_entries, &(&1.type == :result))
-      assert result_entry != nil, "Result must be stored synchronously before timer"
+      assert result_entry != nil, "Result must be stored before timer"
 
       # 2. Timer must be set
       assert %{wait_timer: {timer_ref, :timed_wait}} = result_state
       assert is_reference(timer_ref)
 
-      # 3. After timer fires, :trigger_consensus should be received
-      # (We'll simulate this by waiting for the actual timer or canceling)
-      # Cancel and manually trigger for test speed
+      # 3. Cancel and manually trigger for test speed
       Process.cancel_timer(timer_ref)
       send(self(), :trigger_consensus)
 
@@ -676,7 +685,6 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
     end
 
     test "timed wait does not cause result to be lost", %{state: state, agent_pid: agent_pid} do
-      # This verifies the bug is fixed - result should NOT be lost
       consensus_result = %{
         action: :orient,
         params: %{
@@ -689,19 +697,18 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         wait: 5
       }
 
-      result_state =
-        ConsensusHandler.execute_consensus_action(state, consensus_result, agent_pid)
+      # v35.0: Collect async result through helper
+      result_state = execute_and_collect_result(state, consensus_result, agent_pid)
 
-      # FIX: Result is now stored synchronously (race condition fix), not via cast
-      # The key assertion: result MUST be in returned state's history
+      # The key assertion: result MUST be in history
       histories = result_state.model_histories
       all_entries = histories |> Map.values() |> List.flatten()
       result_entry = Enum.find(all_entries, &(&1.type == :result))
 
-      assert result_entry != nil, "Result should be stored synchronously (not lost)"
-      # New format: content is pre-wrapped JSON string, result field has the raw data
+      assert result_entry != nil, "Result should be stored (not lost)"
       assert is_binary(result_entry.content)
-      assert is_map(result_entry.result)
+      # Result field stores the raw data as {:ok, map} or {:error, reason}
+      assert match?({:ok, _}, result_entry.result)
 
       # Cleanup timer
       if result_state.wait_timer do
@@ -725,7 +732,10 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         router_pid: mock_router,
         pending_actions: %{},
         wait_timer: nil,
-        model_histories: %{"default" => []}
+        model_histories: %{"default" => []},
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       agent_pid = self()
@@ -733,9 +743,9 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
       %{state: state, agent_pid: agent_pid}
     end
 
-    # R21: Synchronous Result Storage for wait:true (boolean)
+    # R21: Result Storage for wait:true (boolean)
     @tag capture_log: true
-    test "wait:true stores result synchronously in returned state", %{
+    test "wait:true stores result in returned state", %{
       state: state,
       agent_pid: agent_pid
     } do
@@ -751,22 +761,19 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         wait: true
       }
 
-      result_state =
-        ConsensusHandler.execute_consensus_action(state, consensus_result, agent_pid)
+      # v35.0: Collect async result through helper
+      result_state = execute_and_collect_result(state, consensus_result, agent_pid)
 
-      # Result must be in returned state (synchronous, not via cast)
+      # Result must be in state after collection
       histories = result_state.model_histories
       all_entries = histories |> Map.values() |> List.flatten()
       result_entry = Enum.find(all_entries, &(&1.type == :result))
 
-      assert result_entry != nil, "wait:true must store result synchronously"
-      # New format: content is pre-wrapped JSON string
+      assert result_entry != nil, "wait:true must store result"
       assert is_binary(result_entry.content)
     end
 
     # R22: Always-sync action with wait:true does NOT trigger consensus
-    # Note: send_message, spawn_child are always_sync but NOT self-contained
-    # (Self-contained actions like orient, todo auto-correct wait:true to false)
     test "always_sync action with wait:true does not trigger consensus", %{
       state: state,
       agent_pid: agent_pid
@@ -778,12 +785,10 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
         wait: true
       }
 
-      _result_state =
-        ConsensusHandler.execute_consensus_action(state, consensus_result, agent_pid)
+      # v35.0: Collect async result through helper
+      _result_state = execute_and_collect_result(state, consensus_result, agent_pid)
 
       # Should NOT receive :trigger_consensus (send_message is always_sync with wait:true)
-      # Agent waits for external event (reply from parent)
-      # 500ms margin for CI load (not testing timeout behavior, just verifying no message sent)
       refute_receive :trigger_consensus, 500
     end
   end

@@ -112,6 +112,78 @@ defmodule Quoracle.Models.ModelQuery.OptionsBuilder do
     end
   end
 
+  @doc "Builds provider-specific options for embedding requests."
+  @spec build_embedding_options(map(), map()) :: keyword()
+  def build_embedding_options(credential, options) do
+    model_spec = Map.get(credential, :model_spec)
+    provider_prefix = get_provider_prefix(model_spec)
+
+    base_opts =
+      case provider_prefix do
+        "azure" ->
+          build_azure_embedding_opts(credential)
+
+        "google-vertex" ->
+          [
+            service_account_json: Map.get(credential, :api_key),
+            project_id: Map.get(credential, :resource_id),
+            region: Map.get(credential, :region) || "global"
+          ]
+
+        "amazon-bedrock" ->
+          build_bedrock_embedding_opts(credential)
+
+        _ ->
+          # Default: OpenAI-compatible (just api_key)
+          [api_key: Map.get(credential, :api_key)]
+      end
+
+    # Support plug injection for testing
+    if plug = Map.get(options, :plug) do
+      Keyword.put(base_opts, :req_http_options, plug: plug)
+    else
+      base_opts
+    end
+  end
+
+  defp build_azure_embedding_opts(credential) do
+    api_key = Map.get(credential, :api_key)
+    base_url = Map.get(credential, :endpoint_url)
+    deployment = Map.get(credential, :deployment_id)
+
+    opts = [api_key: api_key]
+
+    opts =
+      if base_url do
+        Keyword.put(opts, :base_url, base_url)
+      else
+        opts
+      end
+
+    if deployment do
+      Keyword.put(opts, :deployment, deployment)
+    else
+      opts
+    end
+  end
+
+  defp build_bedrock_embedding_opts(credential) do
+    case String.split(Map.get(credential, :api_key) || "", ":", parts: 2) do
+      [access_key, secret_key] when access_key != "" and secret_key != "" ->
+        [
+          access_key_id: access_key,
+          secret_access_key: secret_key,
+          region: Map.get(credential, :region) || "us-east-1"
+        ]
+
+      _ ->
+        [
+          api_key: Map.get(credential, :api_key),
+          region: Map.get(credential, :region) || "us-east-1"
+        ]
+    end
+  end
+
   @doc "Extracts the provider prefix from a model_spec string (e.g., `\"azure\"` from `\"azure:gpt-5\"`)."
   @spec get_provider_prefix(term()) :: String.t()
   def get_provider_prefix(model_spec) when is_binary(model_spec) do

@@ -23,22 +23,28 @@ defmodule Quoracle.Actions.SearchSecretsTest do
     :ok
   end
 
-  # Helper to create test secrets
-  defp create_test_secret(name, description \\ nil) do
-    TableSecrets.create(%{
-      name: name,
-      value: "test_value_#{name}",
-      description: description
-    })
+  # Helper to create test secret with unique name and return the name.
+  # Unique names prevent deadlocks when tests run concurrently with async: true.
+  defp create_test_secret!(name, description \\ nil) do
+    unique_name = "#{name}_#{System.unique_integer([:positive])}"
+
+    {:ok, _} =
+      TableSecrets.create(%{
+        name: unique_name,
+        value: "test_value_#{unique_name}",
+        description: description
+      })
+
+    unique_name
   end
 
   describe "execute/3 - search behavior" do
     # R1: Valid Search Returns Matches
     test "returns matching secret names", %{sandbox_owner: _owner} do
       # [UNIT] - WHEN execute called IF search_terms match secrets THEN returns matching names
-      {:ok, _} = create_test_secret("aws_api_key")
-      {:ok, _} = create_test_secret("github_token")
-      {:ok, _} = create_test_secret("database_password")
+      aws_name = create_test_secret!("aws_api_key")
+      _github_name = create_test_secret!("github_token")
+      _db_name = create_test_secret!("database_password")
 
       params = %{"search_terms" => ["api"]}
       result = SearchSecrets.execute(params, "agent_123", [])
@@ -46,15 +52,14 @@ defmodule Quoracle.Actions.SearchSecretsTest do
       assert {:ok, response} = result
       assert response.action == "search_secrets"
       # Packet 2: Response uses :matching_secrets (not :matching_names)
-      assert "aws_api_key" in response.matching_secrets
-      refute "github_token" in response.matching_secrets
+      assert aws_name in response.matching_secrets
       assert length(response.matching_secrets) == 1
     end
 
     # R2: Empty Results Handling
     test "returns empty list when no matches", %{sandbox_owner: _owner} do
       # [UNIT] - WHEN execute called IF no secrets match THEN returns empty list with count 0
-      {:ok, _} = create_test_secret("aws_api_key")
+      _name = create_test_secret!("aws_api_key")
 
       params = %{"search_terms" => ["nonexistent"]}
       result = SearchSecrets.execute(params, "agent_123", [])
@@ -66,44 +71,44 @@ defmodule Quoracle.Actions.SearchSecretsTest do
     # R3: Multiple Terms OR Logic
     test "multiple terms use OR logic", %{sandbox_owner: _owner} do
       # [UNIT] - WHEN execute called IF multiple terms THEN returns names matching ANY term
-      {:ok, _} = create_test_secret("aws_api_key")
-      {:ok, _} = create_test_secret("github_token")
-      {:ok, _} = create_test_secret("database_password")
+      aws_name = create_test_secret!("aws_api_key")
+      github_name = create_test_secret!("github_token")
+      db_name = create_test_secret!("database_password")
 
       params = %{"search_terms" => ["aws", "github"]}
       result = SearchSecrets.execute(params, "agent_123", [])
 
       assert {:ok, response} = result
-      assert "aws_api_key" in response.matching_secrets
-      assert "github_token" in response.matching_secrets
-      refute "database_password" in response.matching_secrets
+      assert aws_name in response.matching_secrets
+      assert github_name in response.matching_secrets
+      refute db_name in response.matching_secrets
       assert length(response.matching_secrets) == 2
     end
 
     # R4: Case Insensitive Matching
     test "search is case insensitive", %{sandbox_owner: _owner} do
       # [UNIT] - WHEN execute called IF term differs by case THEN still matches
-      {:ok, _} = create_test_secret("AWS_API_KEY")
+      upper_name = create_test_secret!("AWS_API_KEY")
 
       params = %{"search_terms" => ["aws"]}
       result = SearchSecrets.execute(params, "agent_123", [])
 
       assert {:ok, response} = result
-      assert "AWS_API_KEY" in response.matching_secrets
+      assert upper_name in response.matching_secrets
 
       # Also test uppercase search finding lowercase
-      {:ok, _} = create_test_secret("github_token")
+      lower_name = create_test_secret!("github_token")
       params2 = %{"search_terms" => ["GITHUB"]}
       result2 = SearchSecrets.execute(params2, "agent_123", [])
 
       assert {:ok, response2} = result2
-      assert "github_token" in response2.matching_secrets
+      assert lower_name in response2.matching_secrets
     end
 
     # R5: Empty Terms List
     test "empty search terms returns empty results", %{sandbox_owner: _owner} do
       # [UNIT] - WHEN execute called IF search_terms is empty list THEN returns empty results
-      {:ok, _} = create_test_secret("aws_api_key")
+      _name = create_test_secret!("aws_api_key")
 
       params = %{"search_terms" => []}
       result = SearchSecrets.execute(params, "agent_123", [])
@@ -115,27 +120,29 @@ defmodule Quoracle.Actions.SearchSecretsTest do
     # R11: Empty String Filtering
     test "filters out empty string terms", %{sandbox_owner: _owner} do
       # [UNIT] - WHEN execute called IF terms contains empty strings THEN they are filtered out
-      {:ok, _} = create_test_secret("aws_api_key")
+      aws_name = create_test_secret!("aws_api_key")
 
       # Empty strings should be filtered, leaving only "aws"
       params = %{"search_terms" => ["", "aws", ""]}
       result = SearchSecrets.execute(params, "agent_123", [])
 
       assert {:ok, response} = result
-      assert "aws_api_key" in response.matching_secrets
+      assert aws_name in response.matching_secrets
     end
 
     # R12: Wildcard Escaping
     test "SQL wildcards treated as literal characters", %{sandbox_owner: _owner} do
       # [UNIT] - WHEN execute called IF terms contain % or _ THEN treated as literal characters
-      {:ok, _} = create_test_secret("api_key_v1")
-      {:ok, _} = create_test_secret("api_key_v2")
+      name_v1 = create_test_secret!("api_key_v1")
+      name_v2 = create_test_secret!("api_key_v2")
 
       # Search with underscore should match literally, not as wildcard
       params = %{"search_terms" => ["key_v"]}
       result = SearchSecrets.execute(params, "agent_123", [])
 
       assert {:ok, response} = result
+      assert name_v1 in response.matching_secrets
+      assert name_v2 in response.matching_secrets
       assert length(response.matching_secrets) == 2
 
       # Search with % character (can't appear in secret names)
@@ -184,30 +191,33 @@ defmodule Quoracle.Actions.SearchSecretsTest do
     # R9: Standard Response Format
     test "response includes standard action format", %{sandbox_owner: _owner} do
       # [UNIT] - WHEN execute succeeds THEN response includes action, matching_secrets, count, message
-      {:ok, _} = create_test_secret("test_secret")
+      name = create_test_secret!("test_secret")
 
-      params = %{"search_terms" => ["test"]}
+      params = %{"search_terms" => ["test_secret"]}
       result = SearchSecrets.execute(params, "agent_123", [])
 
       assert {:ok, response} = result
       assert Map.has_key?(response, :action)
       assert Map.has_key?(response, :matching_secrets)
       assert response.action == "search_secrets"
+      assert name in response.matching_secrets
     end
 
     # R10: Never Returns Values
     test "response never includes secret values", %{sandbox_owner: _owner} do
       # [UNIT] - WHEN execute succeeds THEN response contains only names, never secret values
+      unique_suffix = "#{System.unique_integer([:positive])}"
+      secret_name = "test_secret_#{unique_suffix}"
       secret_value = "super_secret_value_12345"
 
       {:ok, _} =
         TableSecrets.create(%{
-          name: "test_secret",
+          name: secret_name,
           value: secret_value,
           description: "test"
         })
 
-      params = %{"search_terms" => ["test"]}
+      params = %{"search_terms" => ["test_secret_#{unique_suffix}"]}
       result = SearchSecrets.execute(params, "agent_123", [])
 
       assert {:ok, response} = result

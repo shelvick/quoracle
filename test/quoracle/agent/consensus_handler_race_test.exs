@@ -26,21 +26,17 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
   @moduledoc """
   Tests for race condition fix in ConsensusHandler (WorkGroupID: fix-20251211-051748, Packet 2).
 
-  Bug: When send_message executes with wait: false, the action result is stored via
-  GenServer.cast (async), creating a race window where immediate replies can be
-  processed before the result is stored in history.
+  v35.0: Updated for non-blocking dispatch pattern (fix-20260212-action-deadlock).
+  ActionExecutor now dispatches to Task.Supervisor; results arrive via GenServer.cast.
+  Tests use execute_and_collect_result helper to receive async results and process
+  them through MessageHandler.handle_action_result, simulating the full GenServer flow.
 
-  Fix: Replace async cast with synchronous StateUtils.add_history_entry_with_action
-  + send(agent_pid, :trigger_consensus).
-
-  Requirements tested: R15-R20
-
-  Note: History entries are PREPENDED (newest at index 0). So for proper alternation
-  where decision is added BEFORE result, decision should have HIGHER index than result.
+  Requirements tested: R15-R24
   """
 
   use Quoracle.DataCase, async: true
   import ExUnit.CaptureLog
+  import Quoracle.Agent.ConsensusTestHelpers, only: [execute_and_collect_result: 3]
 
   alias Quoracle.Agent.ConsensusHandler
   alias Quoracle.Agent.StateUtils
@@ -54,7 +50,7 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
     key_challenges: "Race between cast and message processing"
   }
 
-  describe "R15: Synchronous result storage for wait:false" do
+  describe "R15: Result stored after dispatch + collect" do
     setup do
       {:ok, router} = MockRouter.start_link(result: %{status: "sent", sync: true})
 
@@ -64,7 +60,10 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
         action_counter: 0,
         wait_timer: nil,
         model_histories: %{"model_1" => []},
-        pubsub: :test_pubsub
+        pubsub: :test_pubsub,
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       on_exit(fn ->
@@ -80,56 +79,40 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
       %{state: state, router: router}
     end
 
-    test "wait:false adds result to state synchronously before returning", %{state: state} do
+    test "wait:false result is available after cast arrives", %{state: state} do
       action_response = %{
         action: :orient,
         params: @valid_orient_params,
         wait: false
       }
 
-      # Execute with test process as agent_pid
-      result_state =
-        ConsensusHandler.execute_consensus_action(
-          state,
-          action_response,
-          self()
-        )
+      # v35.0: Use helper to dispatch + collect async result
+      result_state = execute_and_collect_result(state, action_response, self())
 
-      # R15: Result MUST be in returned state (synchronous update)
-      # BUG: Current code returns original state, result added via async cast
+      # Result arrives via cast and is processed by handle_action_result
       histories = result_state.model_histories["model_1"]
-
-      # Find the result entry (type: :result)
       result_entry = Enum.find(histories, fn entry -> entry.type == :result end)
 
-      # This should FAIL with buggy code (result not in state, only sent via cast)
-      assert result_entry != nil, "Result should be in state synchronously, not via cast"
+      assert result_entry != nil, "Result should be available after cast collected"
     end
 
-    test "wait:0 also adds result to state synchronously", %{state: state} do
+    test "wait:0 result is available after cast arrives", %{state: state} do
       action_response = %{
         action: :orient,
         params: @valid_orient_params,
         wait: 0
       }
 
-      result_state =
-        ConsensusHandler.execute_consensus_action(
-          state,
-          action_response,
-          self()
-        )
+      result_state = execute_and_collect_result(state, action_response, self())
 
-      # R15: Result MUST be in returned state
       histories = result_state.model_histories["model_1"]
       result_entry = Enum.find(histories, fn entry -> entry.type == :result end)
 
-      # This should FAIL with buggy code
-      assert result_entry != nil, "Result should be in state synchronously for wait: 0"
+      assert result_entry != nil, "Result should be available after cast collected for wait: 0"
     end
   end
 
-  describe "R16: No cast for wait:false" do
+  describe "R16: Result delivered via cast" do
     setup do
       {:ok, router} = MockRouter.start_link(result: %{status: "sent", sync: true})
 
@@ -139,7 +122,10 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
         action_counter: 0,
         wait_timer: nil,
         model_histories: %{"model_1" => []},
-        pubsub: :test_pubsub
+        pubsub: :test_pubsub,
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       on_exit(fn ->
@@ -155,29 +141,28 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
       %{state: state}
     end
 
-    test "wait:false does not send GenServer.cast for :action_result", %{state: state} do
+    test "wait:false delivers result via GenServer.cast", %{state: state} do
       action_response = %{
         action: :orient,
         params: @valid_orient_params,
         wait: false
       }
 
+      # v35.0: Non-blocking dispatch sends result via cast
       ConsensusHandler.execute_consensus_action(
         state,
         action_response,
         self()
       )
 
-      # R16: Should NOT receive :action_result cast
-      # BUG: Current code sends GenServer.cast(agent_pid, {:action_result, ...})
-      # GenServer.cast to non-GenServer process sends {:"$gen_cast", msg}
-      refute_receive {:"$gen_cast", {:action_result, _, _, _}},
-                     100,
-                     "wait:false should NOT use GenServer.cast for result"
+      # v35.0: Result arrives as cast (this is the new intended behavior)
+      assert_receive {:"$gen_cast", {:action_result, _, _, _}},
+                     5000,
+                     "wait:false should deliver result via GenServer.cast"
     end
   end
 
-  describe "R17: Consensus triggered via send" do
+  describe "R17: Consensus triggered after result" do
     setup do
       {:ok, router} = MockRouter.start_link(result: %{status: "sent", sync: true})
 
@@ -187,7 +172,10 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
         action_counter: 0,
         wait_timer: nil,
         model_histories: %{"model_1" => []},
-        pubsub: :test_pubsub
+        pubsub: :test_pubsub,
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       on_exit(fn ->
@@ -203,39 +191,32 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
       %{state: state}
     end
 
-    test "wait:false triggers consensus via send(:trigger_consensus)", %{state: state} do
+    test "wait:false triggers consensus via cast result processing", %{state: state} do
       action_response = %{
         action: :orient,
         params: @valid_orient_params,
         wait: false
       }
 
-      ConsensusHandler.execute_consensus_action(
-        state,
-        action_response,
-        self()
-      )
+      # v35.0: Collect result through helper (processes handle_action_result)
+      result_state = execute_and_collect_result(state, action_response, self())
 
-      # R17: Should receive :trigger_consensus via send/2
-      # BUG: Current code sends cast with continue:true, not direct send
+      # v35.0: handle_action_result sends :trigger_consensus after processing
       assert_receive :trigger_consensus
+      assert result_state.consensus_scheduled
     end
 
-    test "wait:0 also triggers consensus via send", %{state: state} do
+    test "wait:0 also triggers consensus via cast result processing", %{state: state} do
       action_response = %{
         action: :orient,
         params: @valid_orient_params,
         wait: 0
       }
 
-      ConsensusHandler.execute_consensus_action(
-        state,
-        action_response,
-        self()
-      )
+      result_state = execute_and_collect_result(state, action_response, self())
 
-      # BUG: Current code sends cast with continue:true, not direct send
       assert_receive :trigger_consensus
+      assert result_state.consensus_scheduled
     end
   end
 
@@ -249,7 +230,10 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
         action_counter: 0,
         wait_timer: nil,
         model_histories: %{"model_1" => []},
-        pubsub: :test_pubsub
+        pubsub: :test_pubsub,
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       on_exit(fn ->
@@ -273,24 +257,15 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
         wait: false
       }
 
-      # Execute the action
-      result_state =
-        ConsensusHandler.execute_consensus_action(
-          state,
-          action_response,
-          self()
-        )
+      # v35.0: Collect result through helper
+      result_state = execute_and_collect_result(state, action_response, self())
 
-      # R18: After execute_consensus_action returns, the result MUST be in history
-      # This prevents race where reply is processed before result is stored
+      # After collect, the result is in history
       histories = result_state.model_histories["model_1"]
-
-      # Count entries by type
       result_count = Enum.count(histories, fn e -> e.type == :result end)
 
-      # BUG: Current code returns state without result (cast is async)
       assert result_count >= 1,
-             "Result MUST be in history before function returns (race prevention)"
+             "Result MUST be in history after cast collected (race prevention)"
     end
   end
 
@@ -305,7 +280,10 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
         action_counter: 0,
         wait_timer: nil,
         model_histories: %{"model_1" => []},
-        pubsub: :test_pubsub
+        pubsub: :test_pubsub,
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       on_exit(fn ->
@@ -328,38 +306,26 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
         wait: false
       }
 
-      result_state =
-        ConsensusHandler.execute_consensus_action(
-          state,
-          action_response,
-          self()
-        )
+      # v35.0: Collect result through helper
+      result_state = execute_and_collect_result(state, action_response, self())
 
       # R19: History should have proper alternation for LLM APIs
-      # decision (assistant) -> result (user) pattern
-      # Note: History is PREPENDED, so newer entries have LOWER indices
       histories = result_state.model_histories["model_1"]
-
-      # Get types in order (index 0 = newest)
       types = Enum.map(histories, & &1.type)
 
-      # BUG: Current code only has decision (no result - it's async via cast)
       assert :decision in types, "History must contain decision"
       assert :result in types, "History must contain result"
 
       # With prepending: result (newer, added second) should be at lower index
-      # decision (older, added first) should be at higher index
       decision_idx = Enum.find_index(types, &(&1 == :decision))
       result_idx = Enum.find_index(types, &(&1 == :result))
 
-      # Result added AFTER decision, so result_idx < decision_idx (prepend order)
       assert result_idx < decision_idx,
              "Result (newer) should have lower index than decision (older) in prepended history"
     end
   end
 
-  # R20: Dead code path at lines 418-420 (unreachable after defaulting at 300-308)
-  # This test verifies the dead code path adds result + logs error after fix
+  # R20: Dead code path (defense-in-depth)
   describe "R20: Nil wait dead code path" do
     setup do
       {:ok, router} = MockRouter.start_link(result: %{status: "ok", sync: true})
@@ -370,7 +336,10 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
         action_counter: 0,
         wait_timer: nil,
         model_histories: %{"model_1" => []},
-        pubsub: :test_pubsub
+        pubsub: :test_pubsub,
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       on_exit(fn ->
@@ -387,35 +356,19 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
     end
 
     test "dead nil wait path stores result defensively", %{state: state} do
-      # R20: The dead code path at lines 418-420 currently does NOTHING:
-      #   is_nil(wait_value) -> state
-      # After fix, it should store result and trigger consensus.
-      #
-      # This path is normally unreachable (nil defaulted to false at 300-308),
-      # but we test it as defense-in-depth by verifying that IF wait_value
-      # could somehow be nil in the cond, result would still be stored.
-      #
-      # Since we can't reach the dead code path directly, we test that
-      # wait:false (which hits similar code) stores result synchronously.
-      # This test overlaps with R15 but emphasizes the defensive aspect.
       action_response = %{
         action: :orient,
         params: @valid_orient_params,
         wait: false
       }
 
-      result_state =
-        ConsensusHandler.execute_consensus_action(
-          state,
-          action_response,
-          self()
-        )
+      # v35.0: Collect result through helper
+      result_state = execute_and_collect_result(state, action_response, self())
 
       # R20 defense-in-depth: Result must be in state (not lost)
       histories = result_state.model_histories["model_1"]
       result_entry = Enum.find(histories, fn entry -> entry.type == :result end)
 
-      # BUG: Current code returns state without result (cast is async)
       assert result_entry != nil, "Result must be stored to prevent silent data loss"
     end
   end
@@ -430,7 +383,10 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
         action_counter: 0,
         wait_timer: nil,
         model_histories: %{"model_1" => []},
-        pubsub: :test_pubsub
+        pubsub: :test_pubsub,
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       on_exit(fn ->
@@ -447,24 +403,14 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
     end
 
     test "agent handles immediate reply after wait:false send_message", %{state: state} do
-      # User scenario:
-      # 1. Agent sends message to child with wait: false
-      # 2. Child replies immediately (message in mailbox before cast processed)
-      # 3. Agent should continue normally without alternation errors
-
       action_response = %{
         action: :orient,
         params: @valid_orient_params,
         wait: false
       }
 
-      # Execute action with wait: false
-      result_state =
-        ConsensusHandler.execute_consensus_action(
-          state,
-          action_response,
-          self()
-        )
+      # v35.0: Collect result through helper
+      result_state = execute_and_collect_result(state, action_response, self())
 
       # Simulate immediate reply arriving in mailbox
       reply_message = %{
@@ -472,32 +418,21 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
         content: "response"
       }
 
-      # Add the reply to history (simulating MessageHandler.handle_agent_message)
       state_with_reply =
         StateUtils.add_history_entry(result_state, :message, reply_message)
 
       # ACCEPTANCE: History should be valid for LLM API (alternation maintained)
       histories = state_with_reply.model_histories["model_1"]
-
-      # Verify we have: decision, result, message (all present)
       types = Enum.map(histories, & &1.type)
 
       assert :decision in types, "History must have decision"
       assert :result in types, "History must have result (not lost to race)"
       assert :message in types, "History must have incoming message"
-
-      # BUG: Current code won't have :result (it's async via cast)
-      # This causes the assertion above to fail
     end
   end
 
   # ==========================================================================
   # Bug 1 Tests: wait:true Race Condition (R21-R24)
-  # WorkGroupID: fix-20251211-051748
-  #
-  # Problem: wait:true uses async GenServer.cast to store results, creating
-  # race window where child's immediate reply can be processed before the
-  # spawn result is stored in history.
   # ==========================================================================
 
   describe "R21: Synchronous result storage for wait:true" do
@@ -511,7 +446,10 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
         action_counter: 0,
         wait_timer: nil,
         model_histories: %{"model_1" => []},
-        pubsub: :test_pubsub
+        pubsub: :test_pubsub,
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       on_exit(fn ->
@@ -527,37 +465,29 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
       %{state: state, router: router}
     end
 
-    test "wait:true adds result synchronously before returning", %{state: state} do
+    test "wait:true result available after cast collected", %{state: state} do
       action_response = %{
         action: :orient,
         params: @valid_orient_params,
         wait: true
       }
 
-      # Execute with test process as agent_pid (capture expected auto-correction warning)
+      # v35.0: Collect result (capture expected auto-correction warning)
       {result_state, _log} =
         with_log(fn ->
-          ConsensusHandler.execute_consensus_action(
-            state,
-            action_response,
-            self()
-          )
+          execute_and_collect_result(state, action_response, self())
         end)
 
-      # R21: Result MUST be in returned state (synchronous update)
-      # BUG: Current code uses GenServer.cast for wait:true (async)
+      # Result arrives via cast and is processed
       histories = result_state.model_histories["model_1"]
-
-      # Find the result entry (type: :result)
       result_entry = Enum.find(histories, fn entry -> entry.type == :result end)
 
-      # This should FAIL with buggy code (result not in state, sent via cast)
       assert result_entry != nil,
-             "wait:true result should be in state synchronously, not via cast"
+             "wait:true result should be available after cast collected"
     end
   end
 
-  describe "R22: No cast for wait:true" do
+  describe "R22: Result delivered via cast for wait:true" do
     setup do
       {:ok, router} =
         MockRouter.start_link(result: %{child_agent_id: "child-123", status: "spawned"})
@@ -568,7 +498,10 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
         action_counter: 0,
         wait_timer: nil,
         model_histories: %{"model_1" => []},
-        pubsub: :test_pubsub
+        pubsub: :test_pubsub,
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       on_exit(fn ->
@@ -584,14 +517,14 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
       %{state: state}
     end
 
-    test "wait:true does not use GenServer.cast for result", %{state: state} do
+    test "wait:true delivers result via GenServer.cast", %{state: state} do
       action_response = %{
         action: :orient,
         params: @valid_orient_params,
         wait: true
       }
 
-      # Capture expected auto-correction warning for orient+wait:true
+      # v35.0: Non-blocking dispatch sends result via cast
       capture_log(fn ->
         ConsensusHandler.execute_consensus_action(
           state,
@@ -600,12 +533,10 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
         )
       end)
 
-      # R22: Should NOT receive :action_result cast for wait:true
-      # BUG: Current code sends GenServer.cast(agent_pid, {:action_result, ...})
-      # GenServer.cast to non-GenServer process sends {:"$gen_cast", msg}
-      refute_receive {:"$gen_cast", {:action_result, _, _, _}},
-                     100,
-                     "wait:true should NOT use GenServer.cast for result"
+      # v35.0: Result arrives as cast (new intended behavior)
+      assert_receive {:"$gen_cast", {:action_result, _, _, _}},
+                     5000,
+                     "wait:true should deliver result via GenServer.cast"
     end
   end
 
@@ -622,7 +553,10 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
         wait_timer: nil,
         model_histories: %{"model_1" => []},
         pubsub: pubsub_name,
-        capability_groups: [:hierarchy]
+        capability_groups: [:hierarchy],
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       %{state: state}
@@ -630,27 +564,21 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
 
     test "always_sync with wait:true stores result without triggering consensus", %{state: state} do
       # send_message is always_sync but NOT self-contained (expects external reply)
-      # Note: self-contained actions (orient, todo, etc.) auto-correct wait:true to false
       action_response = %{
         action: :send_message,
         params: %{to: "parent", content: "test message"},
         wait: true
       }
 
-      result_state =
-        ConsensusHandler.execute_consensus_action(
-          state,
-          action_response,
-          self()
-        )
+      # v35.0: Collect result through helper
+      result_state = execute_and_collect_result(state, action_response, self())
 
       # R23: Result stored but NO :trigger_consensus sent
       # (always_sync + wait:true = result stored, no continuation)
       histories = result_state.model_histories["model_1"]
       result_entry = Enum.find(histories, fn entry -> entry.type == :result end)
 
-      # Result must be in state
-      assert result_entry != nil, "Result must be stored synchronously"
+      assert result_entry != nil, "Result must be stored after cast collected"
 
       # Should NOT trigger consensus (always_sync with wait:true)
       refute_receive :trigger_consensus,
@@ -670,7 +598,10 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
         action_counter: 0,
         wait_timer: nil,
         model_histories: %{"model_1" => []},
-        pubsub: :test_pubsub
+        pubsub: :test_pubsub,
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       on_exit(fn ->
@@ -687,33 +618,24 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
     end
 
     test "immediate child message does not race with wait:true result storage", %{state: state} do
-      # Scenario: spawn_child with wait:true, child sends message immediately
-      # Result: spawn result MUST be in history before child message processed
-
       action_response = %{
         action: :orient,
         params: @valid_orient_params,
         wait: true
       }
 
-      # Execute action with wait:true (capture expected auto-correction warning)
+      # v35.0: Collect result (capture expected auto-correction warning)
       {result_state, _log} =
         with_log(fn ->
-          ConsensusHandler.execute_consensus_action(
-            state,
-            action_response,
-            self()
-          )
+          execute_and_collect_result(state, action_response, self())
         end)
 
-      # R24: After execute_consensus_action returns, result MUST be in history
-      # This prevents race where child's immediate reply is processed first
+      # After collect, result is in history
       histories = result_state.model_histories["model_1"]
       result_entry = Enum.find(histories, fn entry -> entry.type == :result end)
 
-      # BUG: Current code uses cast (async), so result not in returned state
       assert result_entry != nil,
-             "wait:true result MUST be in history before function returns (race prevention)"
+             "wait:true result MUST be in history after cast collected (race prevention)"
     end
   end
 
@@ -728,7 +650,10 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
         action_counter: 0,
         wait_timer: nil,
         model_histories: %{"model_1" => []},
-        pubsub: :test_pubsub
+        pubsub: :test_pubsub,
+        consensus_scheduled: false,
+        queued_messages: [],
+        children: []
       }
 
       on_exit(fn ->
@@ -745,25 +670,16 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
     end
 
     test "spawn result appears before immediate child reply in history", %{state: state} do
-      # User scenario:
-      # 1. Parent spawns child with wait: true
-      # 2. Child sends message immediately after spawn
-      # 3. Parent should see spawn result BEFORE child's message in history
-
       action_response = %{
         action: :orient,
         params: @valid_orient_params,
         wait: true
       }
 
-      # Execute spawn_child with wait:true (capture expected auto-correction warning)
+      # v35.0: Collect result (capture expected auto-correction warning)
       {result_state, _log} =
         with_log(fn ->
-          ConsensusHandler.execute_consensus_action(
-            state,
-            action_response,
-            self()
-          )
+          execute_and_collect_result(state, action_response, self())
         end)
 
       # Simulate immediate child reply
@@ -779,7 +695,6 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
       histories = state_with_child_msg.model_histories["model_1"]
       types = Enum.map(histories, & &1.type)
 
-      # Must have both
       assert :result in types, "History must have spawn result"
       assert :event in types, "History must have child message"
 
@@ -787,12 +702,8 @@ defmodule Quoracle.Agent.ConsensusHandlerRaceTest do
       result_idx = Enum.find_index(types, &(&1 == :result))
       event_idx = Enum.find_index(types, &(&1 == :event))
 
-      # Event added AFTER result, so event_idx < result_idx in prepended order
       assert event_idx < result_idx,
              "Spawn result (older) must appear before child message (newer) in history"
-
-      # BUG: Current code uses async cast, so result not in history yet
-      # This assertion will fail because result_idx will be nil
     end
   end
 end

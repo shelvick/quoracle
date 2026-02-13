@@ -17,6 +17,7 @@ defmodule Quoracle.Actions.Validator.BatchAsync do
     actions = Map.get(atom_params, :actions, [])
 
     with :ok <- BatchValidation.validate_batch_size(actions),
+         :ok <- BatchValidation.validate_all_maps(actions),
          :ok <-
            BatchValidation.validate_actions_eligible(actions, &ActionList.async_batchable?/1),
          :ok <- validate_wait_param(atom_params) do

@@ -82,6 +82,43 @@ defmodule Quoracle.Agent.Core.MessageInfoHandler do
   end
 
   @doc """
+  Handle spawn failure notification from Spawn action.
+  Logs warning, records failure in history, removes child if tracked, continues consensus.
+  """
+  @spec handle_spawn_failed(map(), map()) :: {:noreply, map()}
+  def handle_spawn_failed(%{child_id: child_id, reason: reason} = data, state) do
+    task = Map.get(data, :task, "unknown")
+
+    Logger.warning(
+      "Spawn failed for child #{child_id}: #{inspect(reason)}. Task: #{truncate(task, 100)}"
+    )
+
+    # Add to history so LLM knows spawn failed
+    failure_content = "Spawn failed for child #{child_id}: #{inspect(reason)}"
+    state = StateUtils.add_history_entry(state, :result, failure_content)
+
+    # Remove from children list if it was eagerly tracked
+    state =
+      case state.children do
+        children when is_list(children) ->
+          %{state | children: Enum.reject(children, &(&1.agent_id == child_id))}
+
+        _ ->
+          state
+      end
+
+    # Continue consensus so agent can react to the failure
+    new_state = StateUtils.schedule_consensus_continuation(state)
+    {:noreply, new_state}
+  end
+
+  defp truncate(str, max) when is_binary(str) and byte_size(str) > max,
+    do: String.slice(str, 0, max) <> "..."
+
+  defp truncate(str, _max) when is_binary(str), do: str
+  defp truncate(other, _max), do: inspect(other)
+
+  @doc """
   Unified handler for all consensus trigger messages.
   v19.0: Replaces handle_request_consensus, handle_continue_consensus, handle_continue_consensus_tuple.
 

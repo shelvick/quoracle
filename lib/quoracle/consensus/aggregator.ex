@@ -469,4 +469,5 @@ defmodule Quoracle.Consensus.Aggregator do
     do: String.to_existing_atom(action_type)
 
   defp extract_action_type(%{"action" => action_type}) when is_atom(action_type), do: action_type
+  defp extract_action_type(_other), do: :unknown
 end

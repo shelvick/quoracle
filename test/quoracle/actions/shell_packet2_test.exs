@@ -294,10 +294,13 @@ defmodule Quoracle.Actions.ShellPacket2Test do
       # Per-action Router (v28.0): After command completes, Router terminates.
       # Terminate request returns :command_not_found since Router is dead.
 
-      # Start and complete a quick command
+      # Start a command that takes just long enough to go async
       # Force async with threshold: 0 to ensure it registers in Router
+      # Note: "echo done" alone can complete before async path triggers (race condition)
       opts_async = Keyword.put(opts, :smart_threshold, 0)
-      {:ok, %{command_id: cmd_id}} = Shell.execute(%{command: "echo done"}, "agent-1", opts_async)
+
+      {:ok, %{command_id: cmd_id}} =
+        Shell.execute(%{command: "sleep 0.01 && echo done"}, "agent-1", opts_async)
 
       # Wait for completion via action_result
       assert_receive {:"$gen_cast", {:action_result, _, {:ok, _}}}, 30_000

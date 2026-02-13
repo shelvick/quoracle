@@ -24,6 +24,15 @@ defmodule Quoracle.Actions.Shared.BatchValidation do
   def validate_batch_size(actions) when is_list(actions), do: :ok
 
   @doc """
+  Validates all entries in the actions list are maps.
+  Protects against malformed LLM responses containing bare strings.
+  """
+  @spec validate_all_maps([term()]) :: :ok | {:error, atom()}
+  def validate_all_maps(actions) do
+    if Enum.all?(actions, &is_map/1), do: :ok, else: {:error, :invalid_action_format}
+  end
+
+  @doc """
   Validates all actions are eligible for batching.
 
   ## Parameters
@@ -94,6 +103,7 @@ defmodule Quoracle.Actions.Shared.BatchValidation do
   @spec validate_batch([map()], (atom() -> boolean())) :: :ok | {:error, term()}
   def validate_batch(actions, eligible_fn) do
     with :ok <- validate_batch_size(actions),
+         :ok <- validate_all_maps(actions),
          :ok <- validate_actions_eligible(actions, eligible_fn) do
       validate_action_params(actions)
     end

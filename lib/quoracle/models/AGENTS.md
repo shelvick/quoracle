@@ -38,9 +38,14 @@ EmbeddingCache owns ETS table (process-owned)
   - `extract_usage/1`, `extract_total_cost/1`: Response parsing
   - `extract_cache_creation_tokens/1`: v12.0 - Extract cache_creation_input_tokens from usage
   - `format_cost/1`: v12.0 - Format Decimal cost as string for JSON metadata
-- **Embeddings** (445 lines): Text embedding via ReqLLM, caching, chunking at 10K chars
+- **Embeddings** (493 lines): Text embedding via ReqLLM, caching, token-based chunking
   - Model from ConfigModelSettings.get_embedding_model!() (config-driven)
   - v5.0: `compute_embedding_cost/2` — compute cost_usd from LLMDB pricing (Decimal arithmetic)
+  - v7.0: Multi-provider support, token-based chunking via TokenChunker
+- **Embeddings.TokenChunker** (108 lines): Token-based text chunking for embedding models
+  - `chunk_text_by_tokens/2`: Split text at word boundaries respecting token limits
+  - `get_embedding_token_limit/1`: Look up model limits from LLMDB (default 8191)
+  - `effective_token_limit/1`: Apply 90% safety margin to model limit
 - **EmbeddingCache**: GenServer owns :embedding_cache ETS (LRU 100 entries)
 - **CredentialManager**: DB credential retrieval, returns model_spec for LLMDB lookup
 - **ConfigModelSettings** (319 lines): Runtime config for consensus/embedding/answer models

@@ -1,7 +1,7 @@
 # lib/quoracle/agent/
 
 ## Modules
-- Core: Event-driven GenServer (497 lines), delegates message handling, stores prompt_fields + dismissing flag + capability_groups + shell_routers in state, v20.0 extracts adjust_child_budget/update_budget_data to ClientAPI, adds route_to_shell_router/3 helper
+- Core: Event-driven GenServer (500 lines), delegates message handling, stores prompt_fields + dismissing flag + capability_groups + shell_routers in state, v20.0 extracts adjust_child_budget/update_budget_data to ClientAPI, adds route_to_shell_router/3 helper, v35.0 adds spawn_failed delegation to MessageInfoHandler
 - Core.ClientAPI: GenServer wrappers (209 lines, 17 functions with @spec), v20.0 adds adjust_child_budget/4, update_budget_data/2, v34.0 adds release_child_budget/3
 - Core.TodoHandler: TODO state management (57 lines), extracted for 500-line limit
 - Core.BudgetHandler: Budget GenServer callbacks (198 lines), adjust_child_budget/4, handle_release_child_budget/3 (v34.0), update_over_budget_status/1 (non-monotonic since v34.0)
@@ -9,16 +9,17 @@
 - Core.Initialization: Init and DB setup (154 lines), extracted for 500-line limit (2025-10-17)
 - Core.Persistence: DB persistence (365 lines), model_histories + ACE state serialization, delegates ACE to submodule
 - Core.Persistence.ACEState: ACE state serialization (332 lines), context_lessons + model_states + model_histories (v5.0), extracted for 500-line limit
-- Core.MessageInfoHandler: Info message dispatch (263 lines), handle_wait_expired/2 with v21.0 staleness check, handle_trigger_consensus/1 (v19.0 unified handler), handle_agent_message_2tuple/3tuple, handle_down/4, handle_exit/3
+- Core.MessageInfoHandler: Info message dispatch (329 lines), handle_wait_expired/2 with v21.0 staleness check, handle_trigger_consensus/1 (v19.0 unified handler), handle_agent_message_2tuple/3tuple, handle_down/4, handle_exit/3, handle_spawn_failed/2 (v35.0: logs warning, records failure in history, removes child, schedules consensus)
 - RegistryQueries: Registry queries (77 lines), composite value extraction
-- MessageHandler: Message processing (423 lines), timer cancellation (R11-R13), consensus integration, NO_EXECUTE action_type tracking, delegates to ConsensusHandler (v9.0), routes images via ImageDetector (v11.0), message queueing (v12.0), v13.0 handles 3-tuple via StateUtils.merge_consensus_state, v15.0 unified run_consensus_cycle/2, handle_consensus_error/4 DRY helper, v16.0 deferred consensus via consensus_scheduled flag, v18.0 deferred consensus for idle agents + handle_send_user_message delegates to handle_agent_message
+- MessageHandler: Message processing (377 lines, was 591 before ActionResultHandler extraction), timer cancellation (R11-R13), consensus integration, NO_EXECUTE action_type tracking, delegates to ConsensusHandler (v9.0), routes images via ImageDetector (v11.0), message queueing (v12.0), v13.0 handles 3-tuple via StateUtils.merge_consensus_state, v15.0 unified run_consensus_cycle/2, handle_consensus_error/4 DRY helper, v16.0 deferred consensus via consensus_scheduled flag, v18.0 deferred consensus for idle agents, v24.0 delegates handle_action_result/4 to ActionResultHandler
+- MessageHandler.ActionResultHandler: Action result processing (271 lines, extracted REFACTOR 2026-02-13), handle_action_result/4 with extended wait parameter handling, handle_batch_action_result/4, flush_queued_messages/1, format_sender_id/1, maybe_track_child/3 (spawn_child tracking), maybe_update_budget_committed/3 (replaces Core.update_budget_committed callback)
 - ImageDetector: Image detection from action results (167 lines), converts MCP screenshots to multimodal content, supports base64 and URL images
 - Consensus: Multi-LLM consensus (494 lines), pre-clustering validation filter (v7.0), per-model refinement context (v10.0), system prompt injection fix, v19.0 threads max_refinement_rounds from state to context
 - TokenManager: Token counting (376 lines), tiktoken integration via Tiktoken.CL100K for accurate BPE tokenization (v5.0), v8.0 adds history_tokens_for_model/2 helper, v16.0 adds estimate_all_messages_tokens/1 (all messages including system) and get_model_output_limit/1 (LLMDB limits.output)
 - ContextManager: History summarization (274 lines), builds field-based prompts for consensus, JSON formatting for :decision/:result entries (v2.0), 1-arity build_conversation_messages DELETED (v5.0), v7.0 ACE injection removed (now in AceInjector)
 - ConfigManager: Config normalization (500 lines), atomic registration, ModelPoolInit submodule extracted, v5.0 preserves model_histories from restoration config, v8.0 extracts capability_groups, v11.0 extracts max_refinement_rounds
 - ConfigManager.ModelPoolInit: Model pool initialization (37 lines), get_model_pool_for_init/2, initialize_model_histories/1
-- ConsensusHandler: Consensus execution (246 lines), v20.0 single prompt_opts for UI/LLM consistency (fix-20260113-skill-injection), extracts active_skills + skills_path from state
+- ConsensusHandler: Consensus execution (244 lines), v20.0 single prompt_opts for UI/LLM consistency (fix-20260113-skill-injection), extracts active_skills + skills_path from state
 - ConsensusHandler.Helpers: Helper functions (58 lines), normalize_sibling_context/1, self_contained_actions/0, coerce_wait_value/1 (v34.0 DRY extraction), prepend_to_content/2
 - ConsensusHandler.LogHelper: Logging helpers (40 lines), safe_broadcast_log/5, log_action_error/1 (extracted for 500-line limit)
 - ConsensusHandler.TodoInjector: TODO injection (82 lines), inject_todo_context/2, format_todos_as_xml/1, escape_xml/1
@@ -45,7 +46,8 @@
 - Core.TodoHandler: handle_update_todos/2, handle_get_todos/1, handle_mark_first_todo_done/1
 - ClientAPI: 13 wrappers (get_agent_id, get_state, handle_message, add_pending_action, etc.)
 - RegistryQueries: find_children_by_parent/1,/2, get_parent_from_registry/1,/2, find_siblings/1
-- MessageHandler: handle_agent_message/3 (queues when pending, R1-R2), handle_action_result/4 (flushes queue, R3-R6), handle_message/2 (R13), cancel_wait_timer/1, run_consensus_cycle/2 (v15.0 unified entry point), flush_queued_messages/1, handle_consensus_error/4 (private DRY helper)
+- MessageHandler: handle_agent_message/3 (queues when pending, R1-R2), handle_action_result/4 (delegates to ActionResultHandler), handle_message/2 (R13), cancel_wait_timer/1, run_consensus_cycle/2 (v15.0 unified entry point), handle_consensus_error/4 (private DRY helper)
+- ActionResultHandler: handle_action_result/4, handle_batch_action_result/4, flush_queued_messages/1, format_sender_id/1, maybe_track_child/3, maybe_update_budget_committed/3, handle_action_result_continuation/3
 - ConsensusHandler: get_action_consensus/1 (v8.0 - state only), execute_consensus_action/3, handle_wait_parameter/3, inject_todo_context/2 (delegated to TodoInjector)
 - Consensus: get_consensus/2, get_consensus_with_state/2, filter_invalid_responses/1 (v7.0), ensure_system_prompt/1, build_refinement_messages/2
 - ConfigManager: normalize_config/1, register_agent/2, setup_agent/1,/2
@@ -219,5 +221,16 @@
 - **ActionExecutor**: Uses helper at 4 locations (lines 301, 313, 401, 420)
 - **WaitFlow v26.0**: Simplified to no-ops - all triggers moved to Agent layer (ActionExecutor)
 - Test coverage: 13 tests in state_utils_schedule_continuation_test.exs, 18 tests in consensus_continuation_test.exs
+
+## Non-Blocking Action Dispatch (2026-02-12, fix-20260212-action-deadlock)
+- **Problem solved**: GenServer self-deadlock — Core blocked during consensus cycle, actions calling back to Core via GenServer.call deadlocked
+- **Root cause**: ActionExecutor called Router.execute synchronously inside Core's GenServer callback
+- **ActionExecutor v24.0**: Dispatches Router.execute to `Task.Supervisor.start_child(Quoracle.SpawnTaskSupervisor, ...)`, returns state immediately. Task sends result back via `GenServer.cast(agent_pid, {:action_result, action_id, result, result_opts})`
+- **ActionResultHandler** (extracted from MessageHandler): Handles action results with extended wait parameter logic, child tracking, budget_committed updates
+- **FIX_BudgetCallbackElimination**: `Core.update_budget_committed` removed from Spawn background task. Budget committed updated via `ActionResultHandler.maybe_update_budget_committed/3` when processing spawn result
+- **FIX_SpawnFailedHandler**: New `MessageInfoHandler.handle_spawn_failed/2` prevents FunctionClauseError on spawn failure
+- **AdjustBudget v2.0**: Uses `opts[:parent_config]` instead of `Core.get_state(parent_pid)` to avoid callback deadlock
+- **Sandbox isolation**: Background tasks call `Ecto.Adapters.SQL.Sandbox.allow` with `sandbox_owner` from opts
+- Test coverage: 7 action_executor tests, 13 budget_callback tests, 6 system-level deadlock prevention tests, 5815 total tests + 74 properties
 
 Test coverage: 55 Core tests (37 base + 7 consensus + 11 TODO), 12 ContextManager (+ 4 field integration), 18 MessageFormatter, 18 Reflector, 25 LessonManager, 15 TreeTerminator, 15 HistoryTransfer, 15 ModelPoolSwitch, all async: true

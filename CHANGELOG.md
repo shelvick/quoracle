@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-02-13
+
+### Added
+
+- **Multi-provider embedding support** — Agents can now use different embedding
+  providers and models via configurable opts, with token-based chunking for
+  inputs exceeding provider token limits.
+
+### Fixed
+
+- **Action executor deadlock** — Actions are now dispatched via Task.Supervisor
+  instead of inline callbacks, eliminating a deadlock where synchronous action
+  execution blocked the agent's message loop.
+- **Race condition in message handling** — Extracted ActionResultHandler from
+  MessageHandler to fix an R64 race condition where action results could be
+  processed before the agent was ready.
+- **FunctionClauseError in Aggregator** — `extract_action_type/1` now handles
+  unexpected input shapes gracefully instead of crashing.
+- **Batch validator crash on non-map entries** — Guard added to prevent crashes
+  when batch actions contain malformed entries.
+
+### Changed
+
+- Replaced manual `on_exit` cleanup across test files with
+  `register_agent_cleanup` helper for consistency.
+- Added dynamic `max_tokens` to Reflector query path to prevent context window
+  overflow.
+
 ## [0.1.6] - 2026-02-12
 
 ### Fixed

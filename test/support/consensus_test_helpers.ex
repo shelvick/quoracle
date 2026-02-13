@@ -89,4 +89,41 @@ defmodule Quoracle.Agent.ConsensusTestHelpers do
   @spec get_system_prompt_content(list(map())) :: String.t() | nil
   def get_system_prompt_content([%{role: "system", content: content} | _rest]), do: content
   def get_system_prompt_content(_messages), do: nil
+
+  @doc """
+  Executes a consensus action and collects the async result, returning the
+  fully-processed state.
+
+  v35.0: ActionExecutor dispatches to Task.Supervisor (non-blocking). This
+  helper receives the cast result and processes it through
+  MessageHandler.handle_action_result to simulate the old synchronous behavior
+  for unit tests that inspect the returned state.
+
+  Returns the processed state after the action result has been applied.
+  Falls back to the dispatched state if no cast arrives within timeout.
+  """
+  @spec execute_and_collect_result(map(), map(), pid(), non_neg_integer()) :: map()
+  def execute_and_collect_result(state, action_response, agent_pid \\ self(), timeout \\ 5000) do
+    dispatched_state =
+      Quoracle.Agent.ConsensusHandler.ActionExecutor.execute_consensus_action(
+        state,
+        action_response,
+        agent_pid
+      )
+
+    receive do
+      {:"$gen_cast", {:action_result, action_id, result, opts}} ->
+        {:noreply, processed_state} =
+          Quoracle.Agent.MessageHandler.handle_action_result(
+            dispatched_state,
+            action_id,
+            result,
+            opts
+          )
+
+        processed_state
+    after
+      timeout -> dispatched_state
+    end
+  end
 end

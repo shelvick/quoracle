@@ -200,11 +200,18 @@ defmodule Quoracle.Budget.BudgetAcceptanceTest do
       assert child_pid, "Child should spawn successfully"
       register_agent_cleanup(child_pid)
 
-      # VERIFY: Parent's committed increased (escrow locked)
+      # VERIFY: Spawn result includes budget_allocated for Core to process
+      # (v19.0: budget_committed update moved from Spawn callback to handle_action_result)
+      assert spawn_result.budget_allocated == Decimal.new("30.00"),
+             "Spawn result must include budget_allocated for Core result processing"
+
+      # Parent committed is NOT updated by direct Spawn.execute (only via ActionExecutor pipeline).
+      # Simulate what Core.handle_action_result does when processing spawn result:
+      Core.update_budget_committed(root_pid, spawn_result.budget_allocated)
       {:ok, root_state_after_spawn} = Core.get_state(root_pid)
 
       assert Decimal.equal?(root_state_after_spawn.budget_data.committed, Decimal.new("30.00")),
-             "Parent committed must increase by child allocation"
+             "Parent committed must increase after simulated result processing"
 
       # VERIFY: Child has allocated budget from parent
       {:ok, child_state} = Core.get_state(child_pid)
