@@ -23,7 +23,6 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorBudgetTest do
 
   use Quoracle.DataCase, async: true
 
-  alias Quoracle.Agent.ConsensusHandler.ActionExecutor
   alias Quoracle.Agent.Core
   alias Quoracle.Budget.Tracker
   alias Quoracle.Costs.AgentCost
@@ -32,6 +31,7 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorBudgetTest do
   alias Test.IsolationHelpers
 
   import Test.AgentTestHelpers
+  import Test.IsolationHelpers, only: [poll_until: 2]
 
   # All capability groups (allows all actions including :spawn_child)
   @all_capability_groups CapabilityGroups.groups()
@@ -145,6 +145,8 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorBudgetTest do
       task: task,
       profile: profile
     } do
+      import Quoracle.Agent.ConsensusTestHelpers, only: [execute_and_collect_result: 2]
+
       # Arrange: Create parent with :root budget
       parent_budget = %{
         mode: :root,
@@ -181,7 +183,10 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorBudgetTest do
           action_counter: 0
       }
 
-      result = ActionExecutor.execute_consensus_action(test_state, action_response, parent_pid)
+      # v35.0: Use async helper with self() as agent_pid (default).
+      # Cast arrives at test process for collection. Budget error path doesn't
+      # interact with real agent, so self() is safe.
+      result = execute_and_collect_result(test_state, action_response)
 
       # Assert: The result history should contain a budget-related error
       result_entries = extract_result_entries(result.model_histories)
@@ -191,17 +196,6 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorBudgetTest do
 
       last_result = List.last(result_entries)
 
-      # The .result field stores the unwrapped result value from add_history_entry_with_action.
-      # add_history_entry_with_action({action_id, {:error, reason}}) stores result: {:error, reason}
-      # Success path (current bug): %{action: "spawn", agent_id: "...", ...}
-      # Error path (after fix): {:error, "Budget is required..."}
-      #
-      # When budget_data is propagated, BudgetValidation returns {:error, :budget_required}
-      # which Spawn.execute converts to {:error, "Budget is required when spawning children..."}
-      #
-      # This assertion FAILS with current code because budget_data is not propagated:
-      # Without budget_data: Spawn sees nil budget -> child gets N/A (success map, not error tuple)
-      # With budget_data: Spawn sees :root budget + no param -> error with "Budget is required"
       assert match?({:error, _}, last_result.result),
              "Spawn should return {:error, reason} when " <>
                "budget_data is propagated. Got result: #{inspect(last_result.result)}. " <>
@@ -233,6 +227,8 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorBudgetTest do
       task: task,
       profile: profile
     } do
+      import Quoracle.Agent.ConsensusTestHelpers, only: [execute_and_collect_result: 2]
+
       # Arrange: Parent with $50 allocated and $40 spent -> $10 available
       parent_budget = %{
         mode: :root,
@@ -271,7 +267,9 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorBudgetTest do
           action_counter: 0
       }
 
-      result = ActionExecutor.execute_consensus_action(test_state, action_response, parent_pid)
+      # v35.0: Use async helper with self() as agent_pid (default).
+      # Budget error path doesn't interact with real agent.
+      result = execute_and_collect_result(test_state, action_response)
 
       # Assert: Should fail with :insufficient_budget
       result_entries = extract_result_entries(result.model_histories)
@@ -279,16 +277,6 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorBudgetTest do
 
       last_result = List.last(result_entries)
 
-      # The .result field stores the unwrapped result from add_history_entry_with_action.
-      # Success path (current bug): %{action: "spawn", agent_id: "...", ...}
-      # Error path (after fix): {:error, :insufficient_budget}
-      #
-      # When spent is propagated, check_parent_budget_sufficient sees available=$10 < $20
-      # and returns {:error, :insufficient_budget}, which passes through Spawn.execute unchanged.
-      #
-      # This assertion FAILS because spent is not propagated through build_execute_opts.
-      # Without spent: available = 50 - 0 - 0 = 50 >= 20, spawn succeeds (BUG)
-      # With spent: available = 50 - 40 - 0 = 10 < 20, spawn fails with :insufficient_budget
       assert match?({:error, :insufficient_budget}, last_result.result),
              "Spawn should fail with {:error, :insufficient_budget} when spent ($40) " <>
                "is propagated. Available should be $10 (50-40-0), but requested $20. " <>
@@ -321,6 +309,8 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorBudgetTest do
       task: task,
       profile: profile
     } do
+      import Quoracle.Agent.ConsensusTestHelpers, only: [execute_and_collect_result: 2]
+
       # Arrange: Parent with :root budget
       parent_budget = %{
         mode: :root,
@@ -352,8 +342,9 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorBudgetTest do
           action_counter: 0
       }
 
-      result_state =
-        ActionExecutor.execute_consensus_action(test_state, action_response, parent_pid)
+      # v35.0: Use async helper with self() as agent_pid (default).
+      # Budget error path doesn't interact with real agent.
+      result_state = execute_and_collect_result(test_state, action_response)
 
       # Assert: Should contain budget-related error
       result_entries = extract_result_entries(result_state.model_histories)
@@ -361,16 +352,6 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorBudgetTest do
 
       last_result = List.last(result_entries)
 
-      # The .result field stores the unwrapped result from add_history_entry_with_action.
-      # Success path (current bug): %{action: "spawn", agent_id: "...", ...}
-      # Error path (after fix): {:error, "Budget is required..."}
-      #
-      # When budget_data is propagated, BudgetValidation returns {:error, :budget_required}
-      # which Spawn.execute converts to {:error, "Budget is required when spawning children..."}
-      #
-      # This assertion FAILS with current code because budget_data is not propagated.
-      # Without budget_data: BudgetValidation sees nil -> child gets N/A (success map, not error)
-      # With budget_data: BudgetValidation sees :root + no param -> :budget_required error
       assert match?({:error, _}, last_result.result),
              "Budgeted parent spawning without budget param should get {:error, reason} " <>
                "through the real ActionExecutor pipeline. " <>
@@ -410,6 +391,8 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorBudgetTest do
       task: task,
       profile: profile
     } do
+      alias Quoracle.Agent.ConsensusHandler.ActionExecutor
+
       # STEP 1: Create budgeted parent agent
       parent_budget = %{
         mode: :root,
@@ -424,6 +407,9 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorBudgetTest do
       _cost = insert_cost(parent_state.agent_id, task.id, Decimal.new("15.00"))
 
       # STEP 2: Spawn child WITH budget through ActionExecutor pipeline
+      # v35.0: Must use real parent_pid as agent_pid because Spawn.execute uses
+      # opts[:agent_pid] for parent_pid → GenServer.call(parent_pid, :update_budget_committed).
+      # Cannot use execute_and_collect_result here; dispatch directly and observe outcomes.
       action_response = %{
         action: :spawn_child,
         params: %{
@@ -444,65 +430,44 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorBudgetTest do
           action_counter: 0
       }
 
-      result_state =
+      # v35.0: Dispatch with real parent_pid so budget escrow works through the
+      # real agent GenServer. The cast goes to parent_pid; we observe via spawn_complete.
+      # v36.0: Register pending_action on parent BEFORE dispatch completes, so that
+      # {:action_result, ...} cast is recognized by handle_action_result (not rejected as unknown).
+      # In production, execute_consensus_action runs inside the GenServer callback, so the
+      # pending_action is part of the state. In this test, we simulate that.
+      action_id = "action_#{parent_state.agent_id}_1"
+      Core.add_pending_action(parent_pid, action_id, :spawn_child, action_response.params)
+
+      _dispatched =
         ActionExecutor.execute_consensus_action(test_state, action_response, parent_pid)
 
-      # Find the spawn result entry with agent_id
-      # Note: result entries have :result field (map) and :content (JSON string)
-      spawn_result_entries =
-        result_state.model_histories
-        |> Map.values()
-        |> List.flatten()
-        |> Enum.filter(fn entry ->
-          Map.get(entry, :type) == :result and is_map(Map.get(entry, :result)) and
-            is_binary(Map.get(Map.get(entry, :result, %{}), :agent_id))
-        end)
-
-      # The spawn should succeed since both budget_data and budget param are present
-      # (note: with current bug, check_parent_budget_sufficient sees nil and returns :ok,
-      #  so the spawn actually succeeds - but parent committed won't be updated properly)
-      assert spawn_result_entries != [],
-             "Spawn should produce result with agent_id. " <>
-               "Result entries: #{inspect(extract_result_entries(result_state.model_histories))}"
-
-      spawn_entry = List.last(spawn_result_entries)
-      child_agent_id = spawn_entry.result.agent_id
-
-      # Wait for background spawn task to fully complete (including budget escrow).
-      # spawn_complete fires AFTER update_budget_committed, unlike PubSub agent_spawned
-      # which fires before. This eliminates the race condition under load.
-      assert_receive {:spawn_complete, ^child_agent_id, {:ok, _child_pid}}, 10_000
+      # Wait for spawn_complete notification (fires AFTER background spawn)
+      assert_receive {:spawn_complete, child_agent_id, {:ok, _child_pid}}, 10_000
 
       # Look up child pid from registry and register cleanup
       child_pid = find_child_pid(child_agent_id, deps.registry)
+      if child_pid, do: register_agent_cleanup(child_pid)
 
-      if child_pid do
-        on_exit(fn ->
-          if Process.alive?(child_pid) do
-            try do
-              GenServer.stop(child_pid, :normal, :infinity)
-            catch
-              :exit, _ -> :ok
-            end
-          end
-        end)
-      end
-
-      # STEP 3: Verify parent's committed increased after child spawn with budget
-      # This FAILS because budget_data is not propagated through build_execute_opts.
-      # Without budget_data in opts, the Spawn code cannot determine the parent's
-      # budget mode and thus cannot perform escrow (lock_allocation).
-      # The parent's committed should be $30.00 after spawning child with $30 budget.
-      # Note: Core.get_state is a GenServer.call which serializes behind any pending
-      # update_budget_committed call in the parent's mailbox.
-      {:ok, updated_parent_state} = Core.get_state(parent_pid)
-
-      # Negative assertion: committed should NOT remain at zero (the broken state)
-      # When budget_data is not propagated, escrow never happens and committed stays at 0
-      refute Decimal.equal?(updated_parent_state.budget_data.committed, Decimal.new("0")),
+      # STEP 3: Verify parent's committed increased after child spawn with budget.
+      # RACE CONDITION FIX: spawn_complete fires BEFORE the Task.Supervisor child
+      # sends {:action_result, ...} cast to Core. The action_result cast triggers
+      # maybe_update_budget_committed which updates budget_data.committed. A single
+      # Core.get_state call after spawn_complete may return before the cast is processed.
+      # Poll until committed updates (event-based sync via GenServer.call serialization).
+      assert :ok =
+               poll_until(
+                 fn ->
+                   {:ok, s} = Core.get_state(parent_pid)
+                   not Decimal.equal?(s.budget_data.committed, Decimal.new("0"))
+                 end,
+                 10_000
+               ),
              "Parent committed should NOT remain at $0 after spawning child with $30 budget. " <>
                "Committed=$0 means escrow (lock_allocation) never happened, which means " <>
                "budget_data was not propagated through build_execute_opts."
+
+      {:ok, updated_parent_state} = Core.get_state(parent_pid)
 
       assert Decimal.equal?(updated_parent_state.budget_data.committed, Decimal.new("30.00")),
              "Parent committed should increase by $30.00 after child spawn. " <>
@@ -530,32 +495,21 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorBudgetTest do
       test_state_2 = %{
         updated_parent_state
         | pending_actions: %{},
-          action_counter: result_state.action_counter
+          action_counter: test_state.action_counter + 1
       }
 
-      result_state_2 =
-        ActionExecutor.execute_consensus_action(test_state_2, action_response_2, parent_pid)
+      # v36.0: Dispatch second spawn and directly receive the result cast.
+      # Using direct receive instead of execute_and_collect_result because
+      # the helper processes inherited model_histories which masks the actual result.
+      _dispatched_state_2 =
+        ActionExecutor.execute_consensus_action(test_state_2, action_response_2, self())
 
-      # Check that the second spawn failed with insufficient_budget
-      result_entries_2 = extract_result_entries(result_state_2.model_histories)
-      assert result_entries_2 != [], "Should have result from second spawn attempt"
+      assert_receive {:"$gen_cast", {:action_result, _action_id_2, result_2, _opts_2}}, 10_000
 
-      last_result_2 = List.last(result_entries_2)
-
-      # The .result field stores the unwrapped result from add_history_entry_with_action.
-      # Success path (current bug): %{action: "spawn", agent_id: "...", ...}
-      # Error path (after fix): {:error, :insufficient_budget}
-      #
-      # When spent is propagated, check_parent_budget_sufficient sees available=$55 < $60
-      # and returns {:error, :insufficient_budget}
-      #
-      # This FAILS if spent is not propagated:
-      # Without spent: available = 100 - 0 - 30 = 70 >= 60, spawn succeeds (BUG)
-      # With spent: available = 100 - 15 - 30 = 55 < 60, fails with :insufficient_budget
-      assert match?({:error, :insufficient_budget}, last_result_2.result),
+      assert match?({:error, :insufficient_budget}, result_2),
              "Second spawn should fail with {:error, :insufficient_budget} when spent ($15) " <>
                "is considered. Available should be $55 (100-15-30), but requested $60. " <>
-               "Got result: #{inspect(last_result_2.result)}"
+               "Got result: #{inspect(result_2)}"
     end
   end
 end

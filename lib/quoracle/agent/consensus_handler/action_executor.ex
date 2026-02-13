@@ -7,7 +7,7 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
   require Logger
   alias Quoracle.Agent.Core
   alias Quoracle.Agent.StateUtils
-  alias Quoracle.Agent.ConsensusHandler.{Helpers, LogHelper}
+  alias Quoracle.Agent.ConsensusHandler.Helpers
 
   @doc """
   Executes a consensus action and updates agent state.
@@ -123,34 +123,83 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
         sandbox_owner: Map.get(state, :sandbox_owner)
       )
 
-    case Quoracle.Actions.Router.execute(
-           router_pid,
-           action_atom,
-           params,
-           state.agent_id,
-           execute_opts
-         ) do
-      {:ok, result} ->
-        handle_success(
-          state,
-          action,
-          action_atom,
-          action_id,
-          params,
-          result,
-          action_response,
-          agent_pid
-        )
+    # v35.0: Add to pending_actions BEFORE dispatch (non-blocking pattern)
+    pending =
+      Map.put(state.pending_actions, action_id, %{
+        type: action_atom,
+        params: params,
+        timestamp: DateTime.utc_now()
+      })
 
-      {:async, ref} ->
-        handle_async(state, action, action_atom, action_id, params, ref, nil, action_response)
+    state = %{state | pending_actions: pending}
 
-      {:async, ref, ack} ->
-        handle_async(state, action, action_atom, action_id, params, ref, ack, action_response)
+    # v35.0: Dispatch to Task.Supervisor instead of blocking on Router.execute
+    # Core returns immediately - result arrives via GenServer.cast({:action_result, ...})
+    dispatch_action(
+      router_pid,
+      action_atom,
+      params,
+      state.agent_id,
+      execute_opts,
+      action_response,
+      agent_pid,
+      action_id
+    )
 
-      {:error, reason} ->
-        handle_error(state, action_atom, action_id, reason)
-    end
+    # Return state immediately - action running in background
+    state
+  end
+
+  # v35.0: Dispatch action execution to Task.Supervisor (non-blocking)
+  # Result sent back to Core via GenServer.cast
+  @spec dispatch_action(pid(), atom(), map(), String.t(), keyword(), map(), pid(), String.t()) ::
+          {:ok, pid()}
+  defp dispatch_action(
+         router_pid,
+         action_atom,
+         params,
+         agent_id,
+         execute_opts,
+         action_response,
+         agent_pid,
+         action_id
+       ) do
+    sandbox_owner = Keyword.get(execute_opts, :sandbox_owner)
+
+    Task.Supervisor.start_child(Quoracle.SpawnTaskSupervisor, fn ->
+      # Allow DB access in background task (test isolation)
+      if sandbox_owner do
+        Ecto.Adapters.SQL.Sandbox.allow(Quoracle.Repo, sandbox_owner, self())
+      end
+
+      result =
+        try do
+          Quoracle.Actions.Router.execute(
+            router_pid,
+            action_atom,
+            params,
+            agent_id,
+            execute_opts
+          )
+        catch
+          :exit, reason ->
+            {:error, {:router_exit, Exception.format_exit(reason)}}
+        end
+
+      # Compute wait handling opts for result processing in Core
+      wait_value = action_response |> Map.get(:wait) |> Helpers.coerce_wait_value()
+      always_sync_list = Quoracle.Actions.Router.ClientAPI.always_sync_actions()
+
+      result_opts = [
+        action_atom: action_atom,
+        wait_value: wait_value,
+        always_sync: action_atom in always_sync_list,
+        action_response: action_response
+      ]
+
+      # Send result back to Core via cast
+      GenServer.cast(agent_pid, {:action_result, action_id, result, result_opts})
+    end)
   end
 
   defp build_execute_opts(state, action_id, agent_pid, action_response) do
@@ -195,212 +244,4 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
   end
 
   defp query_spent_if_budgeted(_budget_data, _agent_id), do: Decimal.new("0")
-
-  defp handle_success(
-         state,
-         action,
-         action_atom,
-         action_id,
-         params,
-         result,
-         action_response,
-         agent_pid
-       ) do
-    Logger.info("Agent #{state.agent_id} executed action: #{action}")
-
-    # Broadcast to UI
-    pubsub = Map.get(state, :pubsub)
-
-    if is_atom(pubsub) and pubsub != :test_pubsub do
-      LogHelper.safe_broadcast_log(
-        state.agent_id,
-        :info,
-        "Executed action: #{action}",
-        %{action: action, params: params},
-        pubsub
-      )
-    end
-
-    # Add to pending actions
-    pending =
-      Map.put(state.pending_actions, action_id, %{
-        type: action,
-        params: params,
-        timestamp: DateTime.utc_now()
-      })
-
-    state = %{state | pending_actions: pending}
-
-    # Track spawned children immediately (don't wait for background task cast)
-    # Child appears in <children> list right away; filter_live_children handles failures
-    state =
-      if action_atom == :spawn_child and is_map(result) and Map.has_key?(result, :agent_id) do
-        child_data = %{
-          agent_id: result.agent_id,
-          spawned_at: Map.get(result, :spawned_at, DateTime.utc_now()),
-          budget_allocated: Map.get(result, :budget_allocated)
-        }
-
-        Map.update(state, :children, [child_data], &[child_data | &1])
-      else
-        state
-      end
-
-    # Check if this is a synchronous result (completed immediately)
-    # DEFAULT TO TRUE - only Shell with async: true explicitly sets sync: false
-    is_sync = Map.get(result, :sync, true)
-    wait_value = Map.get(action_response, :wait)
-
-    # Coerce string "true"/"false" to boolean (LLMs return strings from JSON)
-    wait_value = Helpers.coerce_wait_value(wait_value)
-
-    # Always-sync actions complete instantly - for these, wait: true means
-    # "wait for external event", not "wait for this result"
-    # See AGENT_ConsensusHandler.md §24 for wait parameter semantics
-    always_sync = Quoracle.Actions.Router.ClientAPI.always_sync_actions()
-
-    handle_sync_result(
-      state,
-      action_atom,
-      action_id,
-      result,
-      wait_value,
-      is_sync,
-      always_sync,
-      agent_pid
-    )
-  end
-
-  defp handle_sync_result(
-         state,
-         action_atom,
-         action_id,
-         result,
-         wait_value,
-         is_sync,
-         always_sync,
-         _agent_pid
-       ) do
-    if is_nil(wait_value) do
-      state
-    else
-      # 1. ALWAYS add result to history (fixes async shell bug where ack was missing)
-      state =
-        Quoracle.Agent.ConsensusHandler.process_action_result(
-          state,
-          {action_atom, action_id, result}
-        )
-
-      # 2. Handle pending_actions: delete for sync, mark acked for async
-      state =
-        if is_sync do
-          %{state | pending_actions: Map.delete(state.pending_actions, action_id)}
-        else
-          updated_action = Map.put(state.pending_actions[action_id], :acked, true)
-          %{state | pending_actions: Map.put(state.pending_actions, action_id, updated_action)}
-        end
-
-      # 3. Handle wait logic
-      cond do
-        # Always-sync with wait:true → no trigger (wait for external event)
-        is_sync and wait_value == true and action_atom in always_sync ->
-          state
-
-        # Sync with wait:true → trigger consensus (result is ready)
-        is_sync and wait_value == true ->
-          StateUtils.schedule_consensus_continuation(state)
-
-        # Sync with wait:false/0 → trigger consensus directly
-        # (don't go through handle_wait_parameter which cancels timer)
-        is_sync and wait_value in [false, 0] ->
-          StateUtils.schedule_consensus_continuation(state)
-
-        # :wait action owns its timer - use it instead of creating another
-        action_atom == :wait and is_map(result) and is_reference(result[:timer_id]) ->
-          state = StateUtils.cancel_wait_timer(state)
-          %{state | wait_timer: {result.timer_id, :timed_wait}}
-
-        # Everything else (async, timed waits) → delegate to handle_wait_parameter
-        true ->
-          Quoracle.Agent.ConsensusHandler.handle_wait_parameter(state, action_atom, wait_value)
-      end
-    end
-  end
-
-  defp handle_async(state, action, action_atom, action_id, params, ref, ack, action_response) do
-    Logger.info(
-      "Agent #{state.agent_id} dispatched async action: #{action} (ref: #{inspect(ref)})"
-    )
-
-    # Broadcast to UI
-    pubsub = Map.get(state, :pubsub)
-
-    if is_atom(pubsub) and pubsub != :test_pubsub do
-      LogHelper.safe_broadcast_log(
-        state.agent_id,
-        :info,
-        "Dispatched async action: #{action}",
-        %{action: action, params: params, async_ref: ref},
-        pubsub
-      )
-    end
-
-    # Store the async reference in pending actions
-    pending =
-      Map.put(state.pending_actions, action_id, %{
-        type: action,
-        params: params,
-        async_ref: ref,
-        timestamp: DateTime.utc_now()
-      })
-
-    state = %{state | pending_actions: pending}
-
-    # If acknowledgement provided, add it to history so LLM sees it
-    # This prevents history from ending on an assistant message
-    # Also mark as acked - allows messages to flow while keeping action tracked for completion
-    # (fixes deadlock where daemon commands like `mix phx.server` block all incoming messages)
-    state =
-      if ack do
-        state =
-          Quoracle.Agent.ConsensusHandler.process_action_result(
-            state,
-            {action_atom, action_id, ack}
-          )
-
-        # Mark as acked so MessageHandler doesn't queue messages for this action
-        updated_action = Map.put(state.pending_actions[action_id], :acked, true)
-        %{state | pending_actions: Map.put(state.pending_actions, action_id, updated_action)}
-      else
-        state
-      end
-
-    # Handle wait parameter for async actions
-    wait_value = action_response |> Map.get(:wait) |> Helpers.coerce_wait_value()
-
-    if wait_value do
-      Quoracle.Agent.ConsensusHandler.handle_wait_parameter(state, action_atom, wait_value)
-    else
-      # wait: false or 0 - continue immediately
-      StateUtils.schedule_consensus_continuation(state)
-    end
-  end
-
-  defp handle_error(state, action_atom, action_id, reason) do
-    # Log validation errors at warning level (LLM producing invalid actions)
-    # Log other errors at error level (system failures)
-    LogHelper.log_action_error(reason)
-
-    # Store error in history (LLM memory) - errors bypass wait, continue immediately
-    state =
-      StateUtils.add_history_entry_with_action(
-        state,
-        :result,
-        {action_id, {:error, reason}},
-        action_atom
-      )
-
-    # Continue consensus immediately - errors don't wait
-    StateUtils.schedule_consensus_continuation(state)
-  end
 end

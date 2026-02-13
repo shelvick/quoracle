@@ -4,8 +4,10 @@ defmodule Quoracle.Models.Embeddings do
   Uses config-driven embedding model via ReqLLM (v3.0).
   """
 
+  alias Quoracle.Agent.TokenManager
   alias Quoracle.Models.{ConfigModelSettings, CredentialManager, EmbeddingCache}
-  alias Quoracle.Models.ModelQuery.UsageHelper
+  alias Quoracle.Models.Embeddings.TokenChunker
+  alias Quoracle.Models.ModelQuery.{OptionsBuilder, UsageHelper}
   alias Quoracle.Providers.RetryHelper
   alias Quoracle.Supervisor.PidDiscovery
   alias Quoracle.Costs.Accumulator
@@ -21,10 +23,9 @@ defmodule Quoracle.Models.Embeddings do
   # 1 hour in milliseconds
   @default_cache_ttl 3_600_000
   @max_cache_entries 1000
-  @max_chunk_size 10_000
 
   @doc """
-  Gets embedding for text using azure_text_embedding_3_large model.
+  Gets embedding for text using the configured embedding model.
   Automatically chunks long text and averages embeddings.
 
   Returns:
@@ -209,20 +210,27 @@ defmodule Quoracle.Models.Embeddings do
   end
 
   defp get_embedding_with_chunking(text, options) do
-    # Check if text needs chunking proactively
-    if String.length(text) > @max_chunk_size do
-      # Proactively chunk large text
-      chunks = chunk_text(text)
+    # Resolve model_spec for token limit lookup
+    model_spec = resolve_model_spec(options)
+    effective_limit = TokenChunker.effective_token_limit(model_spec)
+
+    token_count = TokenManager.estimate_tokens(text)
+
+    if token_count > effective_limit do
+      # Text exceeds token limit - chunk by tokens
+      chunks = TokenChunker.chunk_text_by_tokens(text, effective_limit)
       process_chunks(chunks, options)
     else
-      # Text is small enough, try as-is
+      # Text is within token limit, try as-is
       case call_embedding_api(text, options) do
         {:ok, embedding, body} ->
           {:ok, embedding, 1, body}
 
         {:error, :context_length_exceeded} ->
-          # Unexpected, but handle it by chunking
-          chunks = chunk_text(text)
+          # API rejected despite our estimate - force chunking at half the
+          # text's token count so the text is split into at least 2 pieces (R31)
+          reduced_limit = max(div(token_count, 2), 1)
+          chunks = TokenChunker.chunk_text_by_tokens(text, reduced_limit)
           process_chunks(chunks, options)
 
         {:error, reason} ->
@@ -279,12 +287,11 @@ defmodule Quoracle.Models.Embeddings do
       end
     else
       # Check if credentials were injected via options (for testing)
-      # When credentials are passed, use default azure model for ReqLLM lookup
       if Map.has_key?(options, :credentials) do
         credentials = options.credentials
-        # Use azure embedding model for ReqLLM when testing with injected credentials
-        model_name = "azure:text-embedding-3-large"
-        call_azure_embedding(text, credentials, model_name, options)
+        # Use model_spec from credentials; when absent, default based on credential shape
+        model_name = resolve_model_name(credentials)
+        call_embedding_provider(text, credentials, model_name, options)
       else
         # Normal path - get configured model from CONFIG_ModelSettings
         case get_configured_embedding_model() do
@@ -298,7 +305,7 @@ defmodule Quoracle.Models.Embeddings do
                 model_spec = Map.get(credentials, :model_spec, model_id)
 
                 RetryHelper.with_retry(
-                  fn -> call_azure_embedding(text, credentials, model_spec, options) end,
+                  fn -> call_embedding_provider(text, credentials, model_spec, options) end,
                   max_retries: 3,
                   initial_delay: 1000
                 )
@@ -318,69 +325,82 @@ defmodule Quoracle.Models.Embeddings do
     ConfigModelSettings.get_embedding_model()
   end
 
-  defp call_azure_embedding(text, credentials, model_name, options) do
-    # Build request to Azure OpenAI embeddings endpoint using ReqLLM
-    # We call the Azure provider directly to bypass ReqLLM.embed's validate_model
-    # which calls prepare_request with empty opts (causing credential lookup issues)
-    api_key = Map.get(credentials, :api_key)
-    deployment_id = Map.get(credentials, :deployment_id)
-    endpoint_url = Map.get(credentials, :endpoint_url)
+  # Resolve ReqLLM model name from injected credentials.
+  # When model_spec is present, use it directly.
+  # When absent, check for Azure-specific fields to determine provider.
+  @spec resolve_model_name(map()) :: String.t()
+  defp resolve_model_name(credentials) do
+    case Map.get(credentials, :model_spec) do
+      nil ->
+        # Backward compatibility: use Azure provider only if Azure-specific fields present
+        if Map.get(credentials, :endpoint_url) && Map.get(credentials, :deployment_id) do
+          "azure:text-embedding-3-large"
+        else
+          "openai:text-embedding-3-large"
+        end
 
-    if is_nil(api_key) or is_nil(deployment_id) or is_nil(endpoint_url) do
-      {:error, :authentication_failed}
-    else
-      opts = [
-        api_key: api_key,
-        base_url: endpoint_url,
-        deployment: deployment_id
-      ]
-
-      # Support req_cassette plug injection for testing
-      req_opts = if plug = Map.get(options, :plug), do: [plug: plug], else: []
-
-      # Get model and provider, then call prepare_request directly with our opts
-      with {:ok, model} <- ReqLLM.model(model_name),
-           {:ok, provider} <- ReqLLM.provider(model.provider),
-           {:ok, request} <- provider.prepare_request(:embedding, model, text, opts),
-           {:ok, %Req.Response{status: status, body: body}} when status in 200..299 <-
-             Req.request(request, req_opts),
-           {:ok, embedding} <- extract_embedding(body) do
-        {:ok, embedding, body}
-      else
-        {:ok, %Req.Response{status: 401}} ->
-          {:error, :authentication_failed}
-
-        {:ok, %Req.Response{status: 429}} ->
-          {:error, :rate_limit_exceeded}
-
-        {:ok, %Req.Response{status: 400, body: body}} ->
-          body_str = if is_binary(body), do: body, else: inspect(body)
-
-          if String.contains?(body_str, "context_length_exceeded") or
-               String.contains?(body_str, "maximum context length") do
-            {:error, :context_length_exceeded}
-          else
-            {:error, :bad_request}
-          end
-
-        {:ok, %Req.Response{status: status}} when status >= 500 ->
-          {:error, :service_unavailable}
-
-        # Handle ReqLLM error structs with status codes
-        {:error, %{status: 401}} ->
-          {:error, :authentication_failed}
-
-        {:error, %{status: 429}} ->
-          {:error, :rate_limit_exceeded}
-
-        {:error, %{status: status}} when status >= 500 ->
-          {:error, :service_unavailable}
-
-        {:error, error} ->
-          Logger.error("ReqLLM embedding request failed: #{inspect(error)}")
-          {:error, :network_error}
-      end
+      model_spec ->
+        model_spec
     end
+  end
+
+  defp call_embedding_provider(text, credentials, model_name, options) do
+    # Ensure credential has model_spec so OptionsBuilder routes to the correct provider
+    credentials = Map.put_new(credentials, :model_spec, model_name)
+
+    # Build provider-specific opts via OptionsBuilder
+    opts = OptionsBuilder.build_embedding_options(credentials, options)
+
+    # Support req_cassette plug injection for testing (as req_opts, not in provider opts)
+    req_opts = if plug = Map.get(options, :plug), do: [plug: plug], else: []
+
+    # Get model and provider, then call prepare_request directly with our opts
+    with {:ok, model} <- ReqLLM.model(model_name),
+         {:ok, provider} <- ReqLLM.provider(model.provider),
+         {:ok, request} <- provider.prepare_request(:embedding, model, text, opts),
+         {:ok, %Req.Response{status: status, body: body}} when status in 200..299 <-
+           Req.request(request, req_opts),
+         {:ok, embedding} <- extract_embedding(body) do
+      {:ok, embedding, body}
+    else
+      {:ok, %Req.Response{status: 401}} ->
+        {:error, :authentication_failed}
+
+      {:ok, %Req.Response{status: 429}} ->
+        {:error, :rate_limit_exceeded}
+
+      {:ok, %Req.Response{status: 400, body: body}} ->
+        body_str = if is_binary(body), do: body, else: inspect(body)
+
+        if String.contains?(body_str, "context_length_exceeded") or
+             String.contains?(body_str, "maximum context length") do
+          {:error, :context_length_exceeded}
+        else
+          {:error, :bad_request}
+        end
+
+      {:ok, %Req.Response{status: status}} when status >= 500 ->
+        {:error, :service_unavailable}
+
+      # Handle ReqLLM error structs with status codes
+      {:error, %{status: 401}} ->
+        {:error, :authentication_failed}
+
+      {:error, %{status: 429}} ->
+        {:error, :rate_limit_exceeded}
+
+      {:error, %{status: status}} when status >= 500 ->
+        {:error, :service_unavailable}
+
+      {:error, error} ->
+        Logger.error("ReqLLM embedding request failed: #{inspect(error)}")
+        {:error, :network_error}
+    end
+  rescue
+    # Provider raises when required credentials are missing (e.g., nil api_key)
+    e in [ArgumentError, ReqLLM.Error.Invalid.Parameter] ->
+      Logger.debug("Embedding credential validation failed: #{Exception.message(e)}")
+      {:error, :authentication_failed}
   end
 
   defp extract_embedding(%{"data" => [%{"embedding" => embedding} | _]}) do
@@ -389,42 +409,28 @@ defmodule Quoracle.Models.Embeddings do
 
   defp extract_embedding(_), do: {:error, :invalid_response}
 
-  defp chunk_text(text) do
-    # Simple chunking by splitting at ~4000 chars respecting word boundaries
-    # Azure text-embedding-3-large has 8191 token limit
-    # OpenAI's rule of thumb: ~4 chars per token for English
-    # But actual can vary from 2-6 chars/token depending on text
-    # Use 10,000 chars to be safe (10000/4 = 2500 tokens, well under 8191)
-    if String.length(text) <= @max_chunk_size do
-      [text]
-    else
-      # Split into chunks
-      words = String.split(text, ~r/\s+/)
+  # Resolve model_spec from options for token limit lookup.
+  # Checks :model_spec option first, then credentials, then configured model.
+  @spec resolve_model_spec(map()) :: String.t() | nil
+  defp resolve_model_spec(options) do
+    cond do
+      Map.has_key?(options, :model_spec) ->
+        options.model_spec
 
-      chunks =
-        Enum.reduce(words, [[]], fn word, [current | rest] ->
-          current_text = Enum.join(current, " ")
+      Map.has_key?(options, :credentials) ->
+        resolve_model_name(options.credentials)
 
-          if String.length(current_text <> " " <> word) > @max_chunk_size do
-            # Start new chunk
-            [[word], current | rest]
-          else
-            # Add to current chunk
-            [current ++ [word] | rest]
-          end
-        end)
-        |> Enum.map(&Enum.join(&1, " "))
-        |> Enum.reject(&(&1 == ""))
-        |> Enum.reverse()
+      true ->
+        case get_configured_embedding_model() do
+          {:ok, model_id} ->
+            case CredentialManager.get_credentials(model_id) do
+              {:ok, cred} -> Map.get(cred, :model_spec, model_id)
+              _ -> model_id
+            end
 
-      # If any chunk is still too big, recursively split
-      Enum.flat_map(chunks, fn chunk ->
-        if String.length(chunk) > @max_chunk_size do
-          chunk_text(chunk)
-        else
-          [chunk]
+          _ ->
+            nil
         end
-      end)
     end
   end
 

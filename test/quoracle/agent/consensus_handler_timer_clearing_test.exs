@@ -99,35 +99,31 @@ defmodule Quoracle.Agent.ConsensusHandlerTimerClearingTest do
   #   state = StateUtils.cancel_wait_timer(state)
   # ==========================================================================
 
-  describe "[UNIT] R49: action_executor Uses StateUtils.cancel_wait_timer" do
+  describe "[UNIT] R49: Timer Clearing" do
     test "action_executor source contains StateUtils.cancel_wait_timer call" do
       # R49: WHEN action_executor cancels timer THEN calls StateUtils.cancel_wait_timer/1
-      # This test verifies the actual source code, not a simulation
+      # v35.0: ActionExecutor dispatches async. Timer cancellation is now handled
+      # in MessageHandler.handle_action_result/4, which calls cancel_wait_timer.
+      # Verify the buggy inline pattern is gone from action_executor AND that
+      # MessageHandler properly handles timer cancellation.
 
       action_executor_path = "lib/quoracle/agent/consensus_handler/action_executor.ex"
-      {:ok, source} = File.read(action_executor_path)
+      handler_path = "lib/quoracle/agent/message_handler.ex"
+      {:ok, ae_source} = File.read(action_executor_path)
+      {:ok, handler_source} = File.read(handler_path)
 
-      # The fix should add this call in the :wait action timer handling section
-      # (around lines 332-347 where the buggy inline case statement currently is)
-      has_stateutils_cancel =
-        String.contains?(source, "StateUtils.cancel_wait_timer(state)") or
-          String.contains?(source, "StateUtils.cancel_wait_timer(")
+      # v35.0: ActionExecutor no longer handles timers directly (dispatches async).
+      # MessageHandler.handle_action_result calls cancel_wait_timer.
+      has_handler_cancel =
+        String.contains?(handler_source, "cancel_wait_timer(state)") or
+          String.contains?(handler_source, "StateUtils.cancel_wait_timer(")
 
-      assert has_stateutils_cancel,
-             """
-             action_executor.ex should call StateUtils.cancel_wait_timer/1 for timer cancellation.
+      assert has_handler_cancel,
+             "MessageHandler should call cancel_wait_timer for timer cancellation"
 
-             Current buggy code at lines 334-342:
-               case state.wait_timer do
-                 {timer_ref, _type} when is_reference(timer_ref) ->
-                   Process.cancel_timer(timer_ref)
-                   state  # BUG: doesn't clear to nil!
-                 _ -> state
-               end
-
-             Expected fix:
-               state = StateUtils.cancel_wait_timer(state)
-             """
+      # ActionExecutor should NOT have the old buggy inline pattern
+      refute String.contains?(ae_source, "case state.wait_timer do"),
+             "action_executor.ex should not have inline case for timer cancellation"
     end
 
     test "action_executor does NOT have inline case for timer cancellation" do

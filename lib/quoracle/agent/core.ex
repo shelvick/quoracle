@@ -437,6 +437,9 @@ defmodule Quoracle.Agent.Core do
   def handle_info({:cost_recorded, _}, state),
     do: {:noreply, BudgetHandler.update_over_budget_status(state)}
 
+  def handle_info({:spawn_failed, data}, state),
+    do: MessageInfoHandler.handle_spawn_failed(data, state)
+
   def handle_info({:EXIT, pid, reason}, state),
     do: MessageInfoHandler.handle_exit(pid, reason, state)
 

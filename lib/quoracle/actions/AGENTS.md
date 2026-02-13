@@ -15,7 +15,7 @@
 
 **Action Implementations**:
 - Orient: 12-field strategic reflection (144 lines)
-- Spawn: Child agent spawning with downstream_constraints (474 lines, ConfigBuilder 273 lines, Helpers 82 lines, BudgetValidation 113 lines), dismissing flag check (v11.0), child_spawned notification (v12.0), profile parameter (v14.0), budget enforcement for budgeted parents (v17.0: :budget_required error)
+- Spawn: Child agent spawning with downstream_constraints (475 lines, ConfigBuilder 273 lines, Helpers 82 lines, BudgetValidation 113 lines), dismissing flag check (v11.0), child_spawned notification (v12.0), profile parameter (v14.0), budget enforcement for budgeted parents (v17.0: :budget_required error), v19.0 removes Core.update_budget_committed callback (deadlock fix)
 - Wait: Unified wait parameter (142 lines, true/false/number support, interruptible)
 - SendMessage: Parent/child messaging (3-arity)
 - DismissChild: Recursive child termination (249 lines, v4.0), async background dispatch to TreeTerminator, child_dismissed notification, budget reconciliation with absorption records and escrow release
@@ -92,6 +92,10 @@ Actions → Schema for parameter definitions
 
 ## Recent Changes
 
+**Feb 12, 2026 - Action Deadlock Fix (WorkGroupID: fix-20260212-action-deadlock)**:
+- **Spawn v19.0 (475 lines)**: Removed `Core.update_budget_committed(parent_pid, budget_result.escrow_amount)` call from background task (deadlock cause). Budget committed now updated by Core via ActionResultHandler when processing spawn result.
+- **AdjustBudget v2.0 (179 lines)**: `get_parent_state/3` checks `opts[:parent_config]` first with agent_id pin match, falls back to Registry. New `do_adjust/4` dispatcher and `adjust_child_directly/3` for direct calls outside ActionExecutor.
+
 **Feb 11, 2026 - Budget Enforcement (WorkGroupID: fix-20260211-budget-enforcement)**:
 - **Spawn v17.0**: BudgetValidation nil branch now checks parent mode — budgeted parents (:root/:allocated) MUST specify budget for children, returns {:error, :budget_required} with LLM-guiding error message
 - **DismissChild v4.0 (249 lines)**: Budget reconciliation on dismissal
@@ -130,11 +134,12 @@ Actions → Schema for parameter definitions
 - **CapabilityGroups**: file_read, file_write groups (allowed for all except restricted)
 
 **Dec 31, 2025 - Budget UI (WorkGroupID: feat-20251231-191717)**:
-- **AdjustBudget v1.0**: Agent→child budget modification with atomic escrow
+- **AdjustBudget v1.0→v2.0**: Agent→child budget modification with atomic escrow
   - Validates parent has available funds for increases
   - Validates child can accommodate decreases (spent+committed)
   - Uses BUDGET_Escrow.adjust_child_allocation/4 for atomic updates
   - Notifies child agent of budget change via cast
+  - **v2.0 (179 lines)**: Uses opts[:parent_config] instead of Core.get_state(parent_pid) to avoid deadlock; falls back to Registry lookup for direct calls outside ActionExecutor
 - **Schema v23.0**: Added adjust_budget action (17 actions total)
 - **Router v20.0**: Added adjust_budget routing via ActionMapper
 

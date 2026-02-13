@@ -14,9 +14,10 @@ config :quoracle, Quoracle.Repo,
   hostname: "localhost",
   database: "quoracle_test#{System.get_env("MIX_TEST_PARTITION")}",
   pool: Ecto.Adapters.SQL.Sandbox,
-  # Must exceed max_cases (16) + headroom for spawned processes
-  # Increased to 8x to handle heavy parallel test load with 10x determinism runs
-  pool_size: System.schedulers_online() * 8,
+  # Must exceed max_cases (16) + headroom for spawned processes.
+  # Capped at 40 to stay within PostgreSQL max_connections (100) when
+  # dev server is also running (dev pool_size 10 + test 40 + overhead).
+  pool_size: min(System.schedulers_online() * 4, 40),
   # Increase queue timeouts for CI/heavy parallel load scenarios
   queue_target: 5000,
   queue_interval: 30_000

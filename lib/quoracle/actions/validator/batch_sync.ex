@@ -15,11 +15,16 @@ defmodule Quoracle.Actions.Validator.BatchSync do
     atom_params = ValidationHelpers.string_keys_to_atoms(params)
     actions = Map.get(atom_params, :actions, [])
 
-    with :ok <- check_batch_length(actions),
+    with :ok <- check_actions_are_maps(actions),
+         :ok <- check_batch_length(actions),
          :ok <- check_no_nested_batch(actions),
          :ok <- check_all_batchable(actions) do
       check_each_action_valid(actions)
     end
+  end
+
+  defp check_actions_are_maps(actions) do
+    if Enum.all?(actions, &is_map/1), do: :ok, else: {:error, :invalid_action_format}
   end
 
   @doc false

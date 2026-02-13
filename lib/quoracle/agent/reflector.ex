@@ -11,6 +11,7 @@ defmodule Quoracle.Agent.Reflector do
   - state: task progress + situational context (replaced each condensation)
   """
 
+  alias Quoracle.Agent.TokenManager
   alias Quoracle.Utils.ContentStringifier
   alias Quoracle.Utils.JsonExtractor
 
@@ -233,12 +234,19 @@ defmodule Quoracle.Agent.Reflector do
     # Convert prompt to message format expected by ModelQuery
     query_messages = [%{role: "user", content: prompt}]
 
+    # Calculate dynamic max_tokens to prevent context window overflow.
+    # Without this, ReqLLM injects LLMDB limits.output as max_tokens, which
+    # for models like DeepSeek-V3.2 (128K output / 131K context) leaves
+    # insufficient room for the input and causes HTTP 400 errors.
+    max_tokens = calculate_max_tokens(query_messages, model_id)
+
     # Build cost context for ModelQuery (condensation costs tracked separately)
     query_opts = %{
       agent_id: Keyword.get(opts, :agent_id),
       task_id: Keyword.get(opts, :task_id),
       pubsub: Keyword.get(opts, :pubsub),
-      cost_type: "llm_condensation"
+      cost_type: "llm_condensation",
+      max_tokens: max_tokens
     }
 
     case Quoracle.Models.ModelQuery.query_models(query_messages, [model_id], query_opts) do
@@ -253,6 +261,19 @@ defmodule Quoracle.Agent.Reflector do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # Dynamic max_tokens: min(context_window - input_tokens, output_limit)
+  # Mirrors PerModelQuery.calculate_max_tokens/2 for the Reflector code path.
+  @spec calculate_max_tokens(list(map()), String.t()) :: pos_integer()
+  defp calculate_max_tokens(messages, model_id) do
+    context_window = TokenManager.get_model_context_limit(model_id)
+    input_tokens = TokenManager.estimate_all_messages_tokens(messages)
+    output_limit = TokenManager.get_model_output_limit(model_id)
+
+    (context_window - input_tokens)
+    |> max(1)
+    |> min(output_limit)
   end
 
   defp build_reflection_prompt(messages) do

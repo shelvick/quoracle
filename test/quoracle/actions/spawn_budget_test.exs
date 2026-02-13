@@ -119,16 +119,7 @@ defmodule Quoracle.Actions.SpawnBudgetTest do
       {:ok, result} = Spawn.execute(params, parent_state.agent_id, spawn_opts)
       child_pid = wait_for_spawn_complete(result.agent_id)
       assert child_pid, "Child should spawn"
-
-      on_exit(fn ->
-        if child_pid && Process.alive?(child_pid) do
-          try do
-            GenServer.stop(child_pid, :normal, :infinity)
-          catch
-            :exit, _ -> :ok
-          end
-        end
-      end)
+      register_agent_cleanup(child_pid)
 
       # Assert: Child has N/A budget
       {:ok, child_state} = Core.get_state(child_pid)
@@ -165,16 +156,7 @@ defmodule Quoracle.Actions.SpawnBudgetTest do
       {:ok, result} = Spawn.execute(params, parent_state.agent_id, spawn_opts)
       child_pid = wait_for_spawn_complete(result.agent_id)
       assert child_pid, "Child should spawn"
-
-      on_exit(fn ->
-        if child_pid && Process.alive?(child_pid) do
-          try do
-            GenServer.stop(child_pid, :normal, :infinity)
-          catch
-            :exit, _ -> :ok
-          end
-        end
-      end)
+      register_agent_cleanup(child_pid)
 
       # Assert: Child has allocated budget
       {:ok, child_state} = Core.get_state(child_pid)
@@ -250,20 +232,16 @@ defmodule Quoracle.Actions.SpawnBudgetTest do
       {:ok, result} = Spawn.execute(params, parent_state.agent_id, spawn_opts)
       child_pid = wait_for_spawn_complete(result.agent_id)
       assert child_pid, "Child should spawn"
+      register_agent_cleanup(child_pid)
 
-      on_exit(fn ->
-        if child_pid && Process.alive?(child_pid) do
-          try do
-            GenServer.stop(child_pid, :normal, :infinity)
-          catch
-            :exit, _ -> :ok
-          end
-        end
-      end)
-
-      # Assert: Parent's committed increased by child's budget
+      # Assert: Parent committed is NOT updated by direct Spawn.execute
+      # (v19.0: budget_committed update moved to handle_action_result in ActionExecutor pipeline)
+      # Spawn returns budget_allocated in result so Core can update committed when processing result
       {:ok, updated_parent_state} = Core.get_state(parent_pid)
-      assert Decimal.equal?(updated_parent_state.budget_data.committed, Decimal.new("30.00"))
+      assert Decimal.equal?(updated_parent_state.budget_data.committed, Decimal.new("0"))
+
+      # Assert: Spawn result includes budget_allocated for Core to use
+      assert result.budget_allocated == Decimal.new("30.00")
     end
 
     # R29: Invalid Budget Format Rejected [UNIT]
@@ -363,16 +341,7 @@ defmodule Quoracle.Actions.SpawnBudgetTest do
       {:ok, result} = Spawn.execute(params, parent_state.agent_id, spawn_opts)
       child_pid = wait_for_spawn_complete(result.agent_id)
       assert child_pid, "Child should spawn from N/A parent"
-
-      on_exit(fn ->
-        if child_pid && Process.alive?(child_pid) do
-          try do
-            GenServer.stop(child_pid, :normal, :infinity)
-          catch
-            :exit, _ -> :ok
-          end
-        end
-      end)
+      register_agent_cleanup(child_pid)
 
       # Assert: Child has allocated budget even though parent is N/A
       {:ok, child_state} = Core.get_state(child_pid)

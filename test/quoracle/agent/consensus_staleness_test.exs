@@ -368,18 +368,20 @@ defmodule Quoracle.Agent.ConsensusStalenessTest do
   describe "[UNIT] R85: action_executor Uses :trigger_consensus" do
     test "action_executor sends :trigger_consensus via StateUtils helper" do
       # R85: WHEN action_executor triggers consensus THEN sends :trigger_consensus
-      # After fix-20260117-consensus-continuation, ActionExecutor uses the helper
-      # which internally sends :trigger_consensus AND sets consensus_scheduled flag
+      # v35.0: ActionExecutor dispatches async via Task.Supervisor. Consensus
+      # continuation is handled by MessageHandler.handle_action_result_continuation/3
+      # which uses StateUtils.schedule_consensus_continuation.
 
       action_executor_path = "lib/quoracle/agent/consensus_handler/action_executor.ex"
+      handler_path = "lib/quoracle/agent/message_handler.ex"
       {:ok, source} = File.read(action_executor_path)
+      {:ok, handler_source} = File.read(handler_path)
 
-      # ActionExecutor should use StateUtils.schedule_consensus_continuation
-      # which internally sends :trigger_consensus
-      assert String.contains?(source, "StateUtils.schedule_consensus_continuation"),
-             "action_executor.ex should use StateUtils.schedule_consensus_continuation"
+      # v35.0: ActionExecutor dispatches async, MessageHandler handles continuation
+      assert String.contains?(handler_source, "StateUtils.schedule_consensus_continuation"),
+             "MessageHandler should use StateUtils.schedule_consensus_continuation"
 
-      # Should NOT contain old message types
+      # Should NOT contain old message types in either file
       refute String.contains?(source, "send(agent_pid, :request_consensus)"),
              "action_executor.ex should not send :request_consensus (old pattern)"
 

@@ -96,20 +96,24 @@ defmodule Quoracle.Agent.ConsensusContinuationTest do
   end
 
   describe "[UNIT] R9-R10: ActionExecutor Uses Helper" do
-    test "action_executor source uses schedule_consensus_continuation" do
+    test "action_executor dispatches async - continuation handled by MessageHandler" do
+      # v35.0: ActionExecutor dispatches to Task.Supervisor (non-blocking).
+      # Consensus continuation is now handled by MessageHandler.handle_action_result_continuation/3,
+      # which uses StateUtils.schedule_consensus_continuation.
+      # ActionExecutor itself no longer calls schedule_consensus_continuation directly.
       source = File.read!("lib/quoracle/agent/consensus_handler/action_executor.ex")
+      handler_source = File.read!("lib/quoracle/agent/message_handler.ex")
 
-      # Should use the helper
-      assert String.contains?(source, "StateUtils.schedule_consensus_continuation"),
-             "ActionExecutor should use StateUtils.schedule_consensus_continuation"
+      # ActionExecutor dispatches via Task.Supervisor (non-blocking pattern)
+      assert String.contains?(source, "Task.Supervisor.start_child"),
+             "ActionExecutor should dispatch via Task.Supervisor"
 
-      # Count helper calls (should be at least 4 locations)
-      helper_count =
-        Regex.scan(~r/StateUtils\.schedule_consensus_continuation/, source)
-        |> length()
+      assert String.contains?(source, "GenServer.cast(agent_pid, {:action_result"),
+             "ActionExecutor should send results via GenServer.cast"
 
-      assert helper_count >= 4,
-             "ActionExecutor should have at least 4 calls to schedule_consensus_continuation, found #{helper_count}"
+      # MessageHandler handles continuation using the helper
+      assert String.contains?(handler_source, "StateUtils.schedule_consensus_continuation"),
+             "MessageHandler should use StateUtils.schedule_consensus_continuation for continuation"
     end
 
     test "action_executor has no raw trigger_consensus sends" do
@@ -153,7 +157,7 @@ defmodule Quoracle.Agent.ConsensusContinuationTest do
     end
 
     test "orient action with wait:false sets consensus_scheduled flag", %{infra: infra} do
-      alias Quoracle.Agent.ConsensusHandler.ActionExecutor
+      import Quoracle.Agent.ConsensusTestHelpers, only: [execute_and_collect_result: 2]
 
       # Suppress expected error logs from action execution
       capture_log(fn ->
@@ -165,7 +169,8 @@ defmodule Quoracle.Agent.ConsensusContinuationTest do
           wait: false
         }
 
-        result_state = ActionExecutor.execute_consensus_action(state, action_response)
+        # v35.0: Use async helper - dispatches, receives cast, processes through MessageHandler
+        result_state = execute_and_collect_result(state, action_response)
 
         # The key assertion: consensus_scheduled must be set to true
         assert result_state.consensus_scheduled == true,
@@ -177,7 +182,7 @@ defmodule Quoracle.Agent.ConsensusContinuationTest do
     end
 
     test "todo action with wait:false sets consensus_scheduled flag", %{infra: infra} do
-      alias Quoracle.Agent.ConsensusHandler.ActionExecutor
+      import Quoracle.Agent.ConsensusTestHelpers, only: [execute_and_collect_result: 2]
 
       # Suppress expected error logs from action execution
       capture_log(fn ->
@@ -189,7 +194,8 @@ defmodule Quoracle.Agent.ConsensusContinuationTest do
           wait: false
         }
 
-        result_state = ActionExecutor.execute_consensus_action(state, action_response)
+        # v35.0: Use async helper
+        result_state = execute_and_collect_result(state, action_response)
 
         assert result_state.consensus_scheduled == true,
                "Todo action with wait:false should set consensus_scheduled to true"
@@ -199,7 +205,7 @@ defmodule Quoracle.Agent.ConsensusContinuationTest do
     end
 
     test "error case still sets consensus_scheduled flag", %{infra: infra} do
-      alias Quoracle.Agent.ConsensusHandler.ActionExecutor
+      import Quoracle.Agent.ConsensusTestHelpers, only: [execute_and_collect_result: 2]
 
       # Suppress expected error logs from action execution
       capture_log(fn ->
@@ -212,7 +218,8 @@ defmodule Quoracle.Agent.ConsensusContinuationTest do
           wait: false
         }
 
-        result_state = ActionExecutor.execute_consensus_action(state, action_response)
+        # v35.0: Use async helper
+        result_state = execute_and_collect_result(state, action_response)
 
         # Should still set flag even on error path
         assert result_state.consensus_scheduled == true,
@@ -221,7 +228,7 @@ defmodule Quoracle.Agent.ConsensusContinuationTest do
     end
 
     test "R15: all self-contained actions with wait:false auto-continue", %{infra: infra} do
-      alias Quoracle.Agent.ConsensusHandler.ActionExecutor
+      import Quoracle.Agent.ConsensusTestHelpers, only: [execute_and_collect_result: 2]
 
       # Suppress expected error logs from action execution
       capture_log(fn ->
@@ -236,7 +243,8 @@ defmodule Quoracle.Agent.ConsensusContinuationTest do
           flush_mailbox()
 
           action_response = %{action: action, params: params, wait: false}
-          result_state = ActionExecutor.execute_consensus_action(state, action_response)
+          # v35.0: Use async helper
+          result_state = execute_and_collect_result(state, action_response)
 
           assert result_state.consensus_scheduled == true,
                  "Action #{action} did not set consensus_scheduled"

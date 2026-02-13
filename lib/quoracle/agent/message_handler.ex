@@ -8,7 +8,6 @@ defmodule Quoracle.Agent.MessageHandler do
 
   alias Quoracle.Agent.{
     ConsensusHandler,
-    ImageDetector,
     StateUtils,
     MessageFormatter,
     MessageBatcher,
@@ -18,7 +17,7 @@ defmodule Quoracle.Agent.MessageHandler do
     ConsensusContinuationHandler
   }
 
-  alias Quoracle.Agent.MessageHandler.{Persistence, MessageProcessor}
+  alias Quoracle.Agent.MessageHandler.{ActionResultHandler, Persistence, MessageProcessor}
 
   @doc "Drain all pending messages from mailbox (FIFO ordering)."
   @spec drain_mailbox() :: [any()]
@@ -86,7 +85,7 @@ defmodule Quoracle.Agent.MessageHandler do
       # v18.0 R70: Idle agent - DEFER consensus to allow message batching
       # R26-R28: Store structured content with sender info
       message_content = %{
-        from: format_sender_id(sender_id),
+        from: ActionResultHandler.format_sender_id(sender_id),
         content: content
       }
 
@@ -106,29 +105,6 @@ defmodule Quoracle.Agent.MessageHandler do
     end
   end
 
-  # R27: Format :parent atom as "parent" string
-  # R28: Preserve agent_id strings as-is
-  # R73: Format :user atom as "user" string (v18.0)
-  defp format_sender_id(:parent), do: "parent"
-  defp format_sender_id(:user), do: "user"
-  defp format_sender_id(sender_id) when is_binary(sender_id), do: sender_id
-
-  # v12.0 R3-R6: Flush queued messages to history in FIFO order
-  defp flush_queued_messages(%{queued_messages: []} = state), do: state
-
-  defp flush_queued_messages(%{queued_messages: msgs} = state) do
-    msgs
-    |> Enum.reduce(state, fn msg, acc ->
-      StateUtils.add_history_entry(acc, :event, %{
-        from: format_sender_id(msg.sender_id),
-        content: msg.content
-      })
-    end)
-    |> Map.put(:queued_messages, [])
-  end
-
-  defp flush_queued_messages(state), do: state
-
   @doc """
   Unified consensus cycle: flush queued messages, get consensus, merge state, execute action.
   Called by all consensus entry points for consistent message handling.
@@ -141,7 +117,7 @@ defmodule Quoracle.Agent.MessageHandler do
   @spec run_consensus_cycle(map(), fun()) :: {:noreply, map()}
   def run_consensus_cycle(state, execute_action_fn) do
     # Step 1: Flush queued messages into history (THE BUG FIX)
-    state = flush_queued_messages(state)
+    state = ActionResultHandler.flush_queued_messages(state)
 
     # Step 2: Get consensus (handles per-model histories, condensation, etc.)
     case ConsensusHandler.get_action_consensus(state) do
@@ -250,119 +226,23 @@ defmodule Quoracle.Agent.MessageHandler do
   end
 
   @doc """
-  Handle action result processing.
+  Handle action result processing. Delegates to ActionResultHandler.
 
-  ## Options
-    * `:continue` - Whether to trigger next consensus cycle (default: true).
-      Set to false for always-sync actions with wait: true, where the agent
-      wants to wait for an external event rather than continue immediately.
-      See AGENT_ConsensusHandler.md §24 for wait parameter semantics.
+  Cancels wait timer before delegating (R11).
   """
   @spec handle_action_result(map(), String.t(), any(), keyword()) :: {:noreply, map()}
   def handle_action_result(state, action_id, result, opts \\ []) do
     # R11: Cancel any active wait timer (consensus-triggering message)
     state = cancel_wait_timer(state)
-
-    case Map.get(state.pending_actions, action_id) do
-      nil ->
-        # Action not in pending - either already processed (duplicate) or truly unknown
-        # Don't store again to prevent duplicate results in history
-        Logger.warning("Received result for unknown/already-processed action: #{action_id}")
-        {:noreply, state}
-
-      action_info ->
-        # Broadcast action completed or error
-        # Use Map.get for optional fields (works with both structs and maps)
-        pubsub = Map.get(state, :pubsub)
-
-        case result do
-          {:ok, _} = success ->
-            AgentEvents.broadcast_action_completed(state.agent_id, action_id, success, pubsub)
-
-          {:error, _} = error ->
-            AgentEvents.broadcast_action_error(state.agent_id, action_id, error, pubsub)
-
-          _ ->
-            AgentEvents.broadcast_action_completed(state.agent_id, action_id, result, pubsub)
-        end
-
-        # Extract action_type from pending_actions for NO_EXECUTE tracking
-        action_type = Map.get(action_info, :type)
-
-        # Route through ImageDetector to handle multimodal content
-        # Images are stored as :image type, text results as :result type
-        new_state =
-          case ImageDetector.detect(result, action_type) do
-            {:image, multimodal_content} ->
-              # Store image as :image type for multimodal LLM messages
-              StateUtils.add_history_entry(state, :image, multimodal_content)
-
-            {:text, _original_result} ->
-              # Store non-image results as :result type with action tracking
-              if action_type do
-                StateUtils.add_history_entry_with_action(
-                  state,
-                  :result,
-                  {action_id, result},
-                  action_type
-                )
-              else
-                # Fallback for missing action type (shouldn't happen in normal flow)
-                StateUtils.add_history_entry(state, :result, {action_id, result})
-              end
-          end
-
-        # Remove from pending_actions
-        new_state = %{
-          new_state
-          | pending_actions: Map.delete(new_state.pending_actions, action_id)
-        }
-
-        # v12.0 R3-R6: Flush queued messages after action result
-        # Result is already in history, now add queued messages in FIFO order
-        new_state = flush_queued_messages(new_state)
-
-        # Check if we should continue to next consensus
-        # For always-sync actions with wait: true, continue: false means
-        # agent is waiting for external event (reply, child message, etc.)
-        if Keyword.get(opts, :continue, true) do
-          # v16.0 R55-R56: Defer consensus via :trigger_consensus for event batching
-          # This allows events arriving during this message processing to batch
-          new_state = Map.put(new_state, :consensus_scheduled, true)
-          send(self(), :trigger_consensus)
-          {:noreply, new_state}
-        else
-          # Don't continue - agent is waiting for external event
-          {:noreply, new_state}
-        end
-    end
+    ActionResultHandler.handle_action_result(state, action_id, result, opts)
   end
 
   @doc """
-  Handle batch sub-action result - records result directly without pending_actions lookup.
-
-  Used by BatchSync which spawns Routers directly and can't add to pending_actions
-  (would cause deadlock since we're already inside a GenServer.call).
+  Handle batch sub-action result. Delegates to ActionResultHandler.
   """
   @spec handle_batch_action_result(map(), String.t(), atom(), any()) :: {:noreply, map()}
-  def handle_batch_action_result(state, action_id, action_type, result) do
-    # Store result in history with action_type for NO_EXECUTE tracking
-    new_state =
-      case ImageDetector.detect(result, action_type) do
-        {:image, multimodal_content} ->
-          StateUtils.add_history_entry(state, :image, multimodal_content)
-
-        {:text, _original_result} ->
-          StateUtils.add_history_entry_with_action(
-            state,
-            :result,
-            {action_id, result},
-            action_type
-          )
-      end
-
-    {:noreply, new_state}
-  end
+  defdelegate handle_batch_action_result(state, action_id, action_type, result),
+    to: ActionResultHandler
 
   @doc "Handle user message sending."
   @spec handle_send_user_message(map(), String.t()) :: {:noreply, map()}
@@ -433,7 +313,7 @@ defmodule Quoracle.Agent.MessageHandler do
   @retryable_consensus_errors [:all_responses_invalid, :all_models_failed]
   @max_consensus_attempts 3
 
-  # v15.0 REFACTOR: DRY consensus error handling (5 call sites → 1 helper)
+  # v15.0 REFACTOR: DRY consensus error handling (5 call sites -> 1 helper)
   # v22.0: Added retry logic for transient failures
   defp handle_consensus_error(state, reason, context, extra_metadata \\ %{}) do
     Logger.error("Consensus failed #{context}: #{inspect(reason)}")

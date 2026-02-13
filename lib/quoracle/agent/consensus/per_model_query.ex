@@ -315,7 +315,10 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
 
     valid = Enum.filter(parsed, &(&1 != nil))
 
-    if valid == [] do
+    # Validate refined responses before clustering (matches initial consensus paths)
+    {validated, _invalid_count} = Quoracle.Agent.Consensus.filter_invalid_responses(valid)
+
+    if validated == [] do
       clusters = Aggregator.cluster_responses(original_responses)
 
       cost_opts =
@@ -330,7 +333,7 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
       result = Result.format_result(clusters, length(original_responses), round, cost_opts)
       {:ok, result}
     else
-      consensus_fn.(valid, context, round + 1)
+      consensus_fn.(validated, context, round + 1)
     end
   end
 

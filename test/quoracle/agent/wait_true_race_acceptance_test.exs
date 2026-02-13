@@ -16,7 +16,9 @@ defmodule Quoracle.Agent.WaitTrueRaceAcceptanceTest do
   import ExUnit.CaptureLog
   import Test.AgentTestHelpers
 
-  alias Quoracle.Agent.{Core, ContextManager, ConsensusHandler}
+  import Quoracle.Agent.ConsensusTestHelpers, only: [execute_and_collect_result: 2]
+
+  alias Quoracle.Agent.{Core, ContextManager}
 
   describe "acceptance: wait:true result ordering in LLM context" do
     setup %{sandbox_owner: sandbox_owner} do
@@ -52,7 +54,7 @@ defmodule Quoracle.Agent.WaitTrueRaceAcceptanceTest do
       {:ok, parent_state} = Core.get_state(parent_pid)
       assert parent_state.agent_id != nil, "Parent must have initialized"
 
-      # STEP 1: Execute an action with wait:true through ConsensusHandler
+      # STEP 1: Execute an action with wait:true through ActionExecutor
       # This simulates consensus selecting an action - the entry point after LLM decision
       action_response = %{
         action: :orient,
@@ -60,15 +62,12 @@ defmodule Quoracle.Agent.WaitTrueRaceAcceptanceTest do
         wait: true
       }
 
-      # Execute through ConsensusHandler (uses real Router)
+      # v35.0: Execute through async helper (dispatches, receives cast, processes result)
+      # Uses self() as agent_pid so cast arrives at test process for collection.
       # Capture expected auto-correction warning for orient with wait:true
       {updated_state, _log} =
         with_log(fn ->
-          ConsensusHandler.execute_consensus_action(
-            parent_state,
-            action_response,
-            parent_pid
-          )
+          execute_and_collect_result(parent_state, action_response)
         end)
 
       # CRITICAL ASSERTION: Result must be in state immediately after execute returns
@@ -164,9 +163,10 @@ defmodule Quoracle.Agent.WaitTrueRaceAcceptanceTest do
       # Action 1: orient with wait:true (capture expected auto-correction warning)
       action1 = %{action: :orient, params: %{"observations" => "First observation"}, wait: true}
 
+      # v35.0: Use async helper with self() so cast arrives at test process
       {state, _log} =
         with_log(fn ->
-          ConsensusHandler.execute_consensus_action(state, action1, parent_pid)
+          execute_and_collect_result(state, action1)
         end)
 
       # Child 1 message (immediate reply to first action)
@@ -180,9 +180,10 @@ defmodule Quoracle.Agent.WaitTrueRaceAcceptanceTest do
       # Action 2: another orient with wait:true (capture expected auto-correction warning)
       action2 = %{action: :orient, params: %{"observations" => "Second observation"}, wait: true}
 
+      # v35.0: Use async helper with self()
       {state, _log} =
         with_log(fn ->
-          ConsensusHandler.execute_consensus_action(state, action2, parent_pid)
+          execute_and_collect_result(state, action2)
         end)
 
       # Child 2 message (immediate reply to second action)
