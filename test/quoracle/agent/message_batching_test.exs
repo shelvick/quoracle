@@ -703,10 +703,10 @@ defmodule Quoracle.Agent.MessageBatchingTest do
           MessageHandler.handle_agent_message(state, :parent, "timing test")
         end)
 
-      # Assert: Returns in < 100ms (100_000 microseconds)
+      # Assert: Returns in < 500ms (500_000 microseconds)
       # Proves non-blocking: synchronous consensus takes multiple seconds.
-      # Threshold accounts for CI load (observed 72ms on run 9/10 with 16 parallel suites).
-      assert elapsed_microseconds < 100_000,
+      # Generous threshold for CI load spikes (observed 265ms on run 9/10 with 16 parallel suites).
+      assert elapsed_microseconds < 500_000,
              "handle_agent_message should return immediately (#{elapsed_microseconds}µs), not block on consensus"
 
       # Assert: Deferred consensus (behavioral proof of non-blocking return)

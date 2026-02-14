@@ -39,9 +39,9 @@ defmodule Quoracle.Actions.SchemaBatchSyncTest do
 
     # R4: Param Type List
     test "batch_sync actions is list type" do
-      # [UNIT] - WHEN get_schema(:batch_sync) called THEN actions has type {:list, :action_spec}
+      # [UNIT] - WHEN get_schema(:batch_sync) called THEN actions has type {:list, :batchable_action_spec}
       {:ok, schema} = Schema.get_schema(:batch_sync)
-      assert schema.param_types[:actions] == {:list, :action_spec}
+      assert schema.param_types[:actions] == {:list, :batchable_action_spec}
     end
 
     # R5: Consensus Rule

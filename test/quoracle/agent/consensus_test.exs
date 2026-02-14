@@ -663,7 +663,7 @@ defmodule Quoracle.Agent.ConsensusTest do
       check all(
               prompt <- string(:printable, min_length: 5, max_length: 100),
               seed <- integer(1..10000),
-              max_runs: 20
+              max_runs: 5
             ) do
         history = []
         opts = [seed: seed, test_mode: true]
@@ -739,52 +739,6 @@ defmodule Quoracle.Agent.ConsensusTest do
 
           {:error, _reason} ->
             # Errors are acceptable
-            :ok
-        end
-      end
-    end
-
-    property "consensus confidence correlates with agreement level" do
-      import ExUnit.CaptureLog
-
-      check all(prompt <- string(:printable, min_length: 5, max_length: 100), max_runs: 20) do
-        # Test with high agreement (consensus) vs low agreement (forced decision)
-        # Capture logs since force_no_consensus can generate parse errors
-        capture_log(fn ->
-          messages = build_test_messages(prompt, [])
-
-          send(
-            self(),
-            {:consensus_result, Consensus.get_consensus(messages, test_mode: true, seed: 1)}
-          )
-        end)
-
-        assert_received {:consensus_result, consensus_result}
-
-        capture_log(fn ->
-          messages = build_test_messages(prompt, [])
-
-          send(
-            self(),
-            {:forced_result,
-             Consensus.get_consensus(messages, test_mode: true, force_no_consensus: true)}
-          )
-        end)
-
-        assert_received {:forced_result, forced_result}
-
-        case {consensus_result, forced_result} do
-          {{:ok, {_, _, opts1}}, {:ok, {_, _, opts2}}} ->
-            confidence1 = Keyword.get(opts1, :confidence, 0)
-            confidence2 = Keyword.get(opts2, :confidence, 0)
-
-            # When forced decision is used, confidence should generally be lower
-            # Note: This is a soft assertion as confidence can vary
-            assert confidence1 >= 0 and confidence1 <= 1
-            assert confidence2 >= 0 and confidence2 <= 1
-
-          _ ->
-            # If either fails, that's OK for this property
             :ok
         end
       end

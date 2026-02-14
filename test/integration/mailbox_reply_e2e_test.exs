@@ -101,8 +101,8 @@ defmodule Quoracle.Integration.MailboxReplyE2ETest do
       |> render_submit()
 
       # Verify the agent received something (won't trigger consensus without models)
-      # Just ensure no crashes occur
-      refute_receive {:EXIT, _, _}, 1000
+      # Just ensure no crashes occur - reply processing is synchronous in handle_event
+      refute_receive {:EXIT, _, _}, 500
     end)
 
     # Cleanup happens via on_exit callbacks (agents first, then DynSup)

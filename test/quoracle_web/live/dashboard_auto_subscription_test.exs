@@ -6,11 +6,9 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
   """
   use QuoracleWeb.ConnCase, async: true
   import Phoenix.LiveViewTest, except: [live_isolated: 2, live_isolated: 3]
-  import Test.AgentTestHelpers
 
   describe "auto-subscription to agent logs" do
-    setup %{conn: conn, sandbox_owner: sandbox_owner} do
-      # Create isolated dependencies
+    setup %{conn: conn} do
       pubsub_name = :"test_pubsub_#{System.unique_integer([:positive])}"
       registry_name = :"test_registry_#{System.unique_integer([:positive])}"
       dynsup_name = :"test_dynsup_#{System.unique_integer([:positive])}"
@@ -21,31 +19,7 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
       {:ok, _dynsup} =
         start_supervised({Quoracle.Agent.DynSup, name: dynsup_name}, shutdown: :infinity)
 
-      # Get test profile for task creation - use unique name to avoid ON CONFLICT contention
-      profile = create_test_profile()
-
-      # Create real task in DB for tests to use
-      {:ok, {task, task_agent_pid}} =
-        Quoracle.Tasks.TaskManager.create_task(
-          %{profile: profile.name},
-          %{task_description: "Auto-subscription test task"},
-          sandbox_owner: sandbox_owner,
-          dynsup: dynsup_name,
-          registry: registry_name,
-          pubsub: pubsub_name
-        )
-
-      # Wait for agent initialization
-      assert {:ok, _state} = Quoracle.Agent.Core.get_state(task_agent_pid)
-
-      # Ensure agent and all children terminate before sandbox owner exits
-      register_agent_cleanup(task_agent_pid,
-        cleanup_tree: true,
-        registry: registry_name,
-        sandbox_owner: sandbox_owner
-      )
-
-      %{conn: conn, pubsub: pubsub_name, registry: registry_name, dynsup: dynsup_name, task: task}
+      %{conn: conn, pubsub: pubsub_name, registry: registry_name, dynsup: dynsup_name}
     end
 
     # ARC_FUNC_01: Dashboard subscribes to existing agents on mount
@@ -53,8 +27,7 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
       conn: conn,
       pubsub: pubsub,
       registry: registry,
-      dynsup: dynsup,
-      task: _task
+      dynsup: dynsup
     } do
       # Register some existing agents in Registry
       agent1_id = "agent_#{System.unique_integer([:positive])}"
@@ -91,8 +64,7 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
       conn: conn,
       pubsub: pubsub,
       registry: registry,
-      dynsup: dynsup,
-      task: task
+      dynsup: dynsup
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -100,6 +72,7 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
         )
 
       agent_id = "new_agent_#{System.unique_integer([:positive])}"
+      fake_task_id = Ecto.UUID.generate()
 
       # Send agent_spawned event
       send(
@@ -107,7 +80,7 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
         {:agent_spawned,
          %{
            agent_id: agent_id,
-           task_id: task.id,
+           task_id: fake_task_id,
            parent_id: nil
          }}
       )
@@ -126,8 +99,7 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
       conn: conn,
       pubsub: pubsub,
       registry: registry,
-      dynsup: dynsup,
-      task: task
+      dynsup: dynsup
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -135,6 +107,7 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
         )
 
       agent_id = "temp_agent_#{System.unique_integer([:positive])}"
+      fake_task_id = Ecto.UUID.generate()
 
       # First spawn agent to subscribe
       send(
@@ -142,7 +115,7 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
         {:agent_spawned,
          %{
            agent_id: agent_id,
-           task_id: task.id,
+           task_id: fake_task_id,
            parent_id: nil
          }}
       )
@@ -175,8 +148,7 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
       conn: conn,
       pubsub: pubsub,
       registry: registry,
-      dynsup: dynsup,
-      task: _task
+      dynsup: dynsup
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -226,8 +198,7 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
       conn: conn,
       pubsub: pubsub,
       registry: registry,
-      dynsup: dynsup,
-      task: _task
+      dynsup: dynsup
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -277,8 +248,7 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
       conn: conn,
       pubsub: pubsub,
       registry: registry,
-      dynsup: dynsup,
-      task: _task
+      dynsup: dynsup
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -319,8 +289,7 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
       conn: conn,
       pubsub: pubsub,
       registry: registry,
-      dynsup: dynsup,
-      task: _task
+      dynsup: dynsup
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -357,8 +326,7 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
       conn: conn,
       pubsub: pubsub,
       registry: registry,
-      dynsup: dynsup,
-      task: _task
+      dynsup: dynsup
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -428,8 +396,7 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
       conn: conn,
       pubsub: pubsub,
       registry: registry,
-      dynsup: dynsup,
-      task: _task
+      dynsup: dynsup
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -447,8 +414,7 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
       conn: conn,
       pubsub: pubsub,
       registry: registry,
-      dynsup: dynsup,
-      task: _task
+      dynsup: dynsup
     } do
       # Register agent with expected pattern
       Registry.register(registry, {:agent, "test_agent"}, %{

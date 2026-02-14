@@ -449,9 +449,15 @@ defmodule Quoracle.MCP.ErrorContextTest do
       MCPTestHelpers.emit_client_error(:decode_failed, collector: collector)
 
       entries = ErrorContext.get_context(collector)
-      # Filter for our specific event (parallel tests may emit other telemetry events)
-      client_errors = Enum.filter(entries, &(&1.type == :client_error))
-      assert [entry] = client_errors
+      # Filter for our specific event by type AND message content
+      # (parallel tests may emit client_error events without target_collector)
+      entry =
+        Enum.find(entries, fn e ->
+          e.type == :client_error and e.message == "decode_failed"
+        end)
+
+      assert entry != nil,
+             "Expected client_error with decode_failed, got: #{inspect(entries)}"
 
       assert entry.type == :client_error
       assert entry.source == :telemetry

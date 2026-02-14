@@ -19,6 +19,7 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
     StateUtils
   }
 
+  alias Quoracle.Agent.ConsensusHandler.LogHelper
   alias Quoracle.PubSub.AgentEvents
 
   @doc """
@@ -116,6 +117,7 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
   defp process_action_result(state, action_id, result, opts, action_info) do
     # Broadcast action completed or error
     pubsub = Map.get(state, :pubsub)
+    action_type = Map.get(action_info, :type)
 
     case result do
       {:ok, _} = success ->
@@ -128,8 +130,8 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
         AgentEvents.broadcast_action_completed(state.agent_id, action_id, result, pubsub)
     end
 
-    # Extract action_type from pending_actions for NO_EXECUTE tracking
-    action_type = Map.get(action_info, :type)
+    # Broadcast action result to UI log panel
+    broadcast_action_result_log(pubsub, state.agent_id, action_type, action_id, result)
 
     # Route through ImageDetector to handle multimodal content
     # Images are stored as :image type, text results as :result type
@@ -165,6 +167,9 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
 
     # v35.0 R67: Update budget_committed for spawn_child results
     new_state = maybe_update_budget_committed(new_state, result, opts)
+
+    # v25.0: Track shell Router for check_id routing
+    new_state = maybe_track_shell_router(new_state, result, opts)
 
     # v12.0 R3-R6: Flush queued messages after action result
     # Result is already in history, now add queued messages in FIFO order
@@ -214,6 +219,33 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
 
   defp maybe_update_budget_committed(state, _result, _opts), do: state
 
+  # v25.0: Track shell Router PID in shell_routers for check_id routing.
+  # Keyed by command_id from async shell result (what the LLM uses in check_id).
+  @spec maybe_track_shell_router(map(), any(), keyword()) :: map()
+  defp maybe_track_shell_router(state, {:ok, %{command_id: cmd_id, async: true}}, opts)
+       when is_binary(cmd_id) do
+    router_pid = Keyword.get(opts, :router_pid)
+
+    if router_pid && is_pid(router_pid) && Process.alive?(router_pid) do
+      %{state | shell_routers: Map.put(state.shell_routers, cmd_id, router_pid)}
+    else
+      state
+    end
+  end
+
+  defp maybe_track_shell_router(state, {:ok, %{command_id: cmd_id, status: :running}}, opts)
+       when is_binary(cmd_id) do
+    router_pid = Keyword.get(opts, :router_pid)
+
+    if router_pid && is_pid(router_pid) && Process.alive?(router_pid) do
+      %{state | shell_routers: Map.put(state.shell_routers, cmd_id, router_pid)}
+    else
+      state
+    end
+  end
+
+  defp maybe_track_shell_router(state, _result, _opts), do: state
+
   # v35.0 R4: Extended wait parameter handling for non-blocking dispatch
   defp handle_action_result_continuation(new_state, result, opts) do
     action_atom = Keyword.get(opts, :action_atom)
@@ -231,8 +263,9 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
           {:noreply, new_state}
         end
 
-      # Always-sync with wait:true -> wait for external event (no consensus)
-      always_sync and wait_value == true ->
+      # Always-sync with wait:true AND success -> wait for external event (no consensus)
+      # Error results fall through to continue consensus (agent would stall forever otherwise)
+      always_sync and wait_value == true and match?({:ok, _}, result) ->
         {:noreply, new_state}
 
       # :wait action with timer result -> set wait_timer
@@ -268,4 +301,29 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
 
   # Extract timer reference from result
   defp get_timer_from_result({:ok, result}) when is_map(result), do: result.timer_id
+
+  # Broadcast action result to UI log panel (guard-based to satisfy dialyzer)
+  defp broadcast_action_result_log(pubsub, agent_id, action_type, action_id, {:error, reason})
+       when is_atom(pubsub) and pubsub != :test_pubsub do
+    LogHelper.safe_broadcast_log(
+      agent_id,
+      :error,
+      "Action failed: #{action_type}",
+      %{action: action_type, action_id: action_id, error: reason},
+      pubsub
+    )
+  end
+
+  defp broadcast_action_result_log(pubsub, agent_id, action_type, action_id, _result)
+       when is_atom(pubsub) and pubsub != :test_pubsub do
+    LogHelper.safe_broadcast_log(
+      agent_id,
+      :info,
+      "Action completed: #{action_type}",
+      %{action: action_type, action_id: action_id},
+      pubsub
+    )
+  end
+
+  defp broadcast_action_result_log(_pubsub, _agent_id, _action_type, _action_id, _result), do: :ok
 end

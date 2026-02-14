@@ -335,7 +335,16 @@ defmodule Quoracle.Actions.Validator do
 
   defp validate_type(value, :any), do: {:ok, value}
 
-  # Action spec validation for batch_sync - validates and transforms each action in the list
+  # Action spec validation for batch actions - validates and transforms each action in the list
+  # :batchable_action_spec (batch_sync) and :async_action_spec (batch_async) use distinct
+  # types for JSON schema enum generation, but share the same structural validation.
+  # Batchability is enforced separately by BatchSync/BatchAsync validators.
+  defp validate_type(value, :batchable_action_spec) when is_map(value),
+    do: validate_type(value, :action_spec)
+
+  defp validate_type(value, :async_action_spec) when is_map(value),
+    do: validate_type(value, :action_spec)
+
   defp validate_type(value, :action_spec) when is_map(value) do
     action_type = BatchSyncValidator.get_action_type(value)
     action_params = BatchSyncValidator.get_action_params(value)

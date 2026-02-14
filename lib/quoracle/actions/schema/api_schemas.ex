@@ -376,7 +376,7 @@ defmodule Quoracle.Actions.Schema.ApiSchemas do
       required_params: [:actions],
       optional_params: [],
       param_types: %{
-        actions: {:list, :action_spec}
+        actions: {:list, :batchable_action_spec}
       },
       param_descriptions: %{
         actions:
@@ -390,7 +390,7 @@ defmodule Quoracle.Actions.Schema.ApiSchemas do
       required_params: [:actions],
       optional_params: [],
       param_types: %{
-        actions: {:list, :action_spec}
+        actions: {:list, :async_action_spec}
       },
       param_descriptions: %{
         actions:

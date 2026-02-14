@@ -25,7 +25,7 @@ defmodule Quoracle.Consensus.PromptBuilder.ResponseFormat do
     """
     ## Response Format
 
-    IMPORTANT: Think through your reasoning BEFORE deciding on an action - then put that reasoning in the "reasoning" field of your JSON response. This ensures thoughtful decisions rather than post-hoc rationalization. Do NOT write any text outside the JSON object.
+    IMPORTANT: Your entire response must be a single, raw JSON object — nothing else. Think through your reasoning BEFORE deciding on an action, then put that reasoning in the "reasoning" field. Do NOT write any text outside the JSON object. No explanations, no markdown, no commentary.
 
     #{response_json_schema()}
 
@@ -50,7 +50,7 @@ defmodule Quoracle.Consensus.PromptBuilder.ResponseFormat do
   @spec response_json_schema() :: String.t()
   def response_json_schema do
     """
-    Response JSON Schema:
+    <response_schema>
     {
       "type": "object",
       "properties": {
@@ -88,6 +88,7 @@ defmodule Quoracle.Consensus.PromptBuilder.ResponseFormat do
       "required": ["reasoning", "action", "params"],
       "additionalProperties": false
     }
+    </response_schema>
     """
     |> String.trim()
   end
@@ -198,7 +199,7 @@ defmodule Quoracle.Consensus.PromptBuilder.ResponseFormat do
     - Include the "wait" parameter for all actions except :wait
     - Optionally include "auto_complete_todo": true to mark first TODO as done after action succeeds
     - Provide clear reasoning for your decision
-    - No preamble or postamble. No Markdown formatting. Respond with the clean JSON and **nothing else**!
+    - Your response MUST be a single raw JSON object. No preamble, no postamble, no markdown code fences, no explanation. Start with { and end with }.
     """
     |> String.trim()
   end

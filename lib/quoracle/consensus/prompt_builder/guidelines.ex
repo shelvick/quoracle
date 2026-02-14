@@ -198,8 +198,13 @@ defmodule Quoracle.Consensus.PromptBuilder.Guidelines do
     if :spawn_child in allowed_actions do
       """
 
-      **Appropriate Check-In Intervals for Children**
-      When using timer-based check-ins (wait: N) to monitor child agents, or requesting periodic status updates, use appropriate intervals -- **20 MINUTES MINIMUM (wait: 1200) between YOUR MESSAGE and the EXPECTED RESPONSE**. Quoracle operations can take several minutes - LLM calls, shell commands, and multi-step tasks all need time.
+      **Parent-Child Communication Timing**
+      Agents process messages in consensus rounds (3-5 min each). A message sent mid-round queues until the NEXT round, and the response takes another full round. Minimum round-trip: **2 rounds (6-10 min)** for a simple exchange. If your child must consult ITS children first, each depth level adds another round-trip.
+
+      - Minimum check-in: **wait: 1200** (20 min). If child has its own children: **wait: 2400+**
+      - NEVER request responses in "5 minutes" or "10 minutes" — physically impossible
+      - Prefer `wait: true` (block until reply) over short timers when awaiting a specific response
+      - Have children report on completion rather than polling on a timer
       """
     else
       ""
@@ -233,7 +238,8 @@ defmodule Quoracle.Consensus.PromptBuilder.Guidelines do
       When you have multiple independent actions to perform, batch them instead of executing one at a time.
 
       **`batch_sync`** — Sequential execution, results immediate, stops on first error.
-      Best for fast actions (todo, orient, send_message, spawn_child):
+      ONLY for fast actions: todo, orient, send_message, spawn_child, file_read, file_write, generate_secret, search_secrets, dismiss_child, adjust_budget, record_cost, learn_skills, create_skill.
+      **DO NOT put execute_shell, fetch_web, call_api, call_mcp, answer_engine, or generate_images in batch_sync — they will be rejected.** Use batch_async for those.
 
       ```json
       {
@@ -248,8 +254,8 @@ defmodule Quoracle.Consensus.PromptBuilder.Guidelines do
       ```
 
       **`batch_async`** — Parallel execution, errors isolated, results delivered as messages when each completes.
-      Best for slow actions (shell commands, web fetches, API calls, MCP calls).
-      **Prefer `batch_async` when you have 2+ independent slow actions** — they run simultaneously, so 3 actions taking 10s each complete in ~10s total instead of ~30s with batch_sync. One failure won't block the others:
+      For slow actions: execute_shell, fetch_web, call_api, call_mcp, answer_engine, generate_images (and any other action except wait/batch_sync/batch_async).
+      **Prefer `batch_async` when you have 2+ independent slow actions** — they run simultaneously, so 3 actions taking 10s each complete in ~10s total instead of ~30s. One failure won't block the others:
 
       ```json
       {
@@ -265,8 +271,8 @@ defmodule Quoracle.Consensus.PromptBuilder.Guidelines do
       ```
 
       **When NOT to batch:**
-      - Action B needs the output of action A—execute them separately
-      - You need to monitor or terminate a shell command—use regular execute_shell
+      - Action B needs the output of action A — execute them separately
+      - You need to monitor or terminate a shell command — use regular execute_shell
       """
     else
       ""
