@@ -1,8 +1,8 @@
 defmodule Quoracle.Agent.ReflectorTest do
   @moduledoc """
   Tests for AGENT_Reflector - LLM extraction of lessons and state.
-  WorkGroupID: ace-20251207-140000
-  Packet: 2 (Reflector Module)
+  WorkGroupID: ace-20251207-140000, fix-20260213-reflector-retry-malformed
+  Packet: 2 (Reflector Module), Packet 1 (Retry on Malformed)
 
   Tests R1-R12 from AGENT_Reflector.md spec:
   - R1: Basic extraction from valid LLM response
@@ -17,6 +17,14 @@ defmodule Quoracle.Agent.ReflectorTest do
   - R10: Same model used for reflection (integration)
   - R11: Empty extraction result is valid
   - R12: Injectable delay function for retries
+
+  Tests R22-R27 from AGENT_Reflector.md v3.0 spec:
+  - R22: Retry on empty text response
+  - R23: Retry on non-JSON text response
+  - R24: Retry on JSON with invalid schema
+  - R25: Distinct error after malformed exhaustion
+  - R26: Successful retry recovery after malformed response
+  - R27: Shared retry budget between transport and malformed failures
   """
   use ExUnit.Case, async: true
 
@@ -368,6 +376,225 @@ defmodule Quoracle.Agent.ReflectorTest do
       assert_receive {:delay_called, _ms}
     end
   end
+
+  # ===========================================================================
+  # R22-R28: Retry on Malformed LLM Responses (v3.0)
+  # WorkGroupID: fix-20260213-reflector-retry-malformed
+  #
+  # These tests use injectable query_fn (NOT test_mode) to exercise the real
+  # retry loop. The query_fn returns {:ok, malformed_text} to simulate a
+  # successful HTTP response with unusable content.
+  # ===========================================================================
+
+  describe "R22: Retry on Empty Response" do
+    test "retries when LLM returns empty text response" do
+      messages = sample_messages()
+      model_id = "anthropic:claude-sonnet-4"
+
+      call_count = :counters.new(1, [:atomics])
+
+      # query_fn always returns empty string (successful HTTP, no content)
+      query_fn = fn _messages, _model_id, _opts ->
+        :counters.add(call_count, 1, 1)
+        {:ok, ""}
+      end
+
+      opts = [
+        query_fn: query_fn,
+        max_retries: 2,
+        delay_fn: fn _ms -> :ok end
+      ]
+
+      result = Reflector.reflect(messages, model_id, opts)
+
+      # Should have retried: 1 initial + 2 retries = 3 total calls
+      assert :counters.get(call_count, 1) == 3
+
+      # Final error should indicate malformed exhaustion, not transport failure
+      assert {:error, :malformed_response_after_retries} = result
+    end
+  end
+
+  describe "R23: Retry on Non-JSON Response" do
+    test "retries when LLM returns non-JSON text response" do
+      messages = sample_messages()
+      model_id = "anthropic:claude-sonnet-4"
+
+      call_count = :counters.new(1, [:atomics])
+
+      # query_fn returns prose text (no JSON at all)
+      query_fn = fn _messages, _model_id, _opts ->
+        :counters.add(call_count, 1, 1)
+        {:ok, "I analyzed the conversation and found some interesting patterns."}
+      end
+
+      opts = [
+        query_fn: query_fn,
+        max_retries: 2,
+        delay_fn: fn _ms -> :ok end
+      ]
+
+      result = Reflector.reflect(messages, model_id, opts)
+
+      # Should have retried: 1 initial + 2 retries = 3 total calls
+      assert :counters.get(call_count, 1) == 3
+
+      # Final error should indicate malformed exhaustion
+      assert {:error, :malformed_response_after_retries} = result
+    end
+  end
+
+  describe "R24: Retry on Invalid Schema" do
+    test "retries when LLM returns JSON with invalid schema" do
+      messages = sample_messages()
+      model_id = "anthropic:claude-sonnet-4"
+
+      call_count = :counters.new(1, [:atomics])
+
+      # query_fn returns valid JSON but missing required "lessons"/"state" fields
+      query_fn = fn _messages, _model_id, _opts ->
+        :counters.add(call_count, 1, 1)
+        {:ok, ~s({"wrong": "schema", "no_lessons": true})}
+      end
+
+      opts = [
+        query_fn: query_fn,
+        max_retries: 2,
+        delay_fn: fn _ms -> :ok end
+      ]
+
+      result = Reflector.reflect(messages, model_id, opts)
+
+      # Should have retried: 1 initial + 2 retries = 3 total calls
+      assert :counters.get(call_count, 1) == 3
+
+      # Final error should indicate malformed exhaustion
+      assert {:error, :malformed_response_after_retries} = result
+    end
+  end
+
+  describe "R25: Distinct Error After Malformed Exhaustion" do
+    test "returns malformed_response_after_retries when all retries produce bad output" do
+      messages = sample_messages()
+      model_id = "anthropic:claude-sonnet-4"
+
+      # Each attempt returns a different kind of malformed response
+      call_count = :counters.new(1, [:atomics])
+
+      query_fn = fn _messages, _model_id, _opts ->
+        count = :counters.get(call_count, 1)
+        :counters.add(call_count, 1, 1)
+
+        case count do
+          # Attempt 0: empty text
+          0 -> {:ok, ""}
+          # Attempt 1: prose (no JSON)
+          1 -> {:ok, "Let me think about this..."}
+          # Attempt 2: invalid schema
+          _ -> {:ok, ~s({"not_lessons": []})}
+        end
+      end
+
+      opts = [
+        query_fn: query_fn,
+        max_retries: 2,
+        delay_fn: fn _ms -> :ok end
+      ]
+
+      result = Reflector.reflect(messages, model_id, opts)
+
+      # Must be the distinct :malformed_response_after_retries error,
+      # NOT :reflection_failed (which is for transport errors)
+      assert {:error, :malformed_response_after_retries} = result
+    end
+  end
+
+  describe "R26: Successful Retry Recovery" do
+    test "recovers when retry produces valid response after initial malformed response" do
+      messages = sample_messages()
+      model_id = "anthropic:claude-sonnet-4"
+
+      call_count = :counters.new(1, [:atomics])
+
+      valid_json =
+        mock_reflection_response(
+          [%{type: :factual, content: "Recovered lesson"}],
+          [%{summary: "Back on track"}]
+        )
+
+      # First call returns empty (malformed), second returns valid JSON
+      query_fn = fn _messages, _model_id, _opts ->
+        count = :counters.get(call_count, 1)
+        :counters.add(call_count, 1, 1)
+
+        if count == 0 do
+          {:ok, ""}
+        else
+          {:ok, valid_json}
+        end
+      end
+
+      opts = [
+        query_fn: query_fn,
+        max_retries: 2,
+        delay_fn: fn _ms -> :ok end
+      ]
+
+      result = Reflector.reflect(messages, model_id, opts)
+
+      # Should succeed on second attempt
+      assert {:ok, %{lessons: [lesson], state: [state_entry]}} = result
+      assert lesson.content == "Recovered lesson"
+      assert state_entry.summary == "Back on track"
+
+      # Exactly 2 calls: initial (malformed) + 1 retry (success)
+      assert :counters.get(call_count, 1) == 2
+    end
+  end
+
+  describe "R27: Shared Retry Budget" do
+    test "shares retry budget between transport and malformed failures" do
+      messages = sample_messages()
+      model_id = "anthropic:claude-sonnet-4"
+
+      call_count = :counters.new(1, [:atomics])
+
+      # Mix of transport failure and malformed responses:
+      # Attempt 0: transport error ({:error, :timeout})
+      # Attempt 1: malformed response ({:ok, "no json here"})
+      # Attempt 2: malformed response ({:ok, "still no json"})
+      # Total = 3 calls, budget exhausted (max_retries: 2)
+      query_fn = fn _messages, _model_id, _opts ->
+        count = :counters.get(call_count, 1)
+        :counters.add(call_count, 1, 1)
+
+        case count do
+          0 -> {:error, :timeout}
+          1 -> {:ok, "no json here"}
+          _ -> {:ok, "still no json"}
+        end
+      end
+
+      opts = [
+        query_fn: query_fn,
+        max_retries: 2,
+        delay_fn: fn _ms -> :ok end
+      ]
+
+      result = Reflector.reflect(messages, model_id, opts)
+
+      # Total calls = 3 (1 initial + 2 retries), shared budget exhausted
+      assert :counters.get(call_count, 1) == 3
+
+      # Last failure was malformed (attempt 2), so final error reflects that.
+      # maybe_retry returns based on the last failure_type, which is :malformed.
+      assert {:error, :malformed_response_after_retries} = result
+    end
+  end
+
+  # ===========================================================================
+  # Edge Cases (existing)
+  # ===========================================================================
 
   describe "Edge Cases" do
     test "handles single message" do

@@ -7,7 +7,7 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
   require Logger
   alias Quoracle.Agent.Core
   alias Quoracle.Agent.StateUtils
-  alias Quoracle.Agent.ConsensusHandler.Helpers
+  alias Quoracle.Agent.ConsensusHandler.{Helpers, LogHelper}
 
   @doc """
   Executes a consensus action and updates agent state.
@@ -112,16 +112,28 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
 
     execute_opts = build_execute_opts(state, action_id, agent_pid, action_response)
 
-    # Spawn per-action Router (v28.0) - Router terminates after action completes
-    {:ok, router_pid} =
-      Quoracle.Actions.Router.start_link(
-        action_type: action_atom,
-        action_id: action_id,
-        agent_id: state.agent_id,
-        agent_pid: agent_pid,
-        pubsub: Map.get(state, :pubsub),
-        sandbox_owner: Map.get(state, :sandbox_owner)
-      )
+    # v25.0: Route check_id through existing Router from shell_routers,
+    # or spawn a new per-action Router for normal actions
+    check_id = Helpers.extract_shell_check_id(params, action_atom)
+
+    {router_pid, state} =
+      if check_id do
+        # Route through existing Router that has shell_command state
+        shell_routers = Map.get(state, :shell_routers, %{})
+
+        case Map.get(shell_routers, check_id) do
+          nil ->
+            # No Router found — spawn new one (will correctly get :command_not_found)
+            spawn_and_monitor_router(state, action_atom, action_id, agent_pid)
+
+          existing_pid ->
+            # Use existing Router — it has the shell_command state
+            {existing_pid, state}
+        end
+      else
+        # Normal flow: spawn new per-action Router
+        spawn_and_monitor_router(state, action_atom, action_id, agent_pid)
+      end
 
     # v35.0: Add to pending_actions BEFORE dispatch (non-blocking pattern)
     pending =
@@ -132,6 +144,19 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
       })
 
     state = %{state | pending_actions: pending}
+
+    # Broadcast action execution to UI log panel (restored after async refactor)
+    pubsub = Map.get(state, :pubsub)
+
+    if is_atom(pubsub) and pubsub != :test_pubsub do
+      LogHelper.safe_broadcast_log(
+        state.agent_id,
+        :info,
+        "Executing action: #{action_atom}",
+        %{action: action_atom, params: params},
+        pubsub
+      )
+    end
 
     # v35.0: Dispatch to Task.Supervisor instead of blocking on Router.execute
     # Core returns immediately - result arrives via GenServer.cast({:action_result, ...})
@@ -194,7 +219,8 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
         action_atom: action_atom,
         wait_value: wait_value,
         always_sync: action_atom in always_sync_list,
-        action_response: action_response
+        action_response: action_response,
+        router_pid: router_pid
       ]
 
       # Send result back to Core via cast
@@ -244,4 +270,23 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
   end
 
   defp query_spent_if_budgeted(_budget_data, _agent_id), do: Decimal.new("0")
+
+  # v25.0: Spawn a new Router and monitor it, adding to active_routers
+  @spec spawn_and_monitor_router(map(), atom(), String.t(), pid()) :: {pid(), map()}
+  defp spawn_and_monitor_router(state, action_atom, action_id, agent_pid) do
+    {:ok, router_pid} =
+      Quoracle.Actions.Router.start_link(
+        action_type: action_atom,
+        action_id: action_id,
+        agent_id: state.agent_id,
+        agent_pid: agent_pid,
+        pubsub: Map.get(state, :pubsub),
+        sandbox_owner: Map.get(state, :sandbox_owner)
+      )
+
+    monitor_ref = Process.monitor(router_pid)
+    active_routers = Map.get(state, :active_routers, %{})
+    state = Map.put(state, :active_routers, Map.put(active_routers, monitor_ref, router_pid))
+    {router_pid, state}
+  end
 end

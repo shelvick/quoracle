@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2026-02-14
+
+### Fixed
+
+- **Action executor regressions** — Fixed three regressions: error-state stall
+  preventing recovery, shell action `check_id` misrouting, and Router process
+  leak on action completion.
+- **Malformed LLM response handling** — Reflector now retries when LLM responses
+  fail to parse, instead of stalling.
+- **Flaky deadlock test** — Fixed non-deterministic batch_sync test.
+
+### Changed
+
+- **LLM prompt robustness** — Strengthened JSON output instructions for weaker
+  models, clarified batch_sync/batch_async exclusions, added enum constraints
+  to action JSON schemas, and improved parent-child timing guidance.
+- **Dynamic max_tokens safety margin** — Token estimation now includes a 5%
+  safety margin to prevent truncation.
+- **Action lifecycle log broadcasts** — Restored action lifecycle events to the
+  UI log panel.
+- **Reflector refactor** — Extracted `retry_ctx` map to reduce function arity;
+  deduplicated `extract_check_or_terminate_id` and removed dead code.
+- **Test performance** — Deleted redundant tests, reduced timeouts, and
+  simplified setup for faster test suite execution.
+
 ## [0.1.8] - 2026-02-13
 
 ### Added

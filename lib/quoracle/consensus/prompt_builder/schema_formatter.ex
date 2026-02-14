@@ -291,12 +291,35 @@ defmodule Quoracle.Consensus.PromptBuilder.SchemaFormatter do
   def format_param_type(:number), do: "number"
   def format_param_type(:any), do: "any"
 
-  # Action spec for batch_sync - object with action and params
-  def format_param_type(:action_spec) do
+  # Action spec for batch_sync - enum constraint prevents LLMs using non-batchable actions
+  def format_param_type(:batchable_action_spec) do
+    allowed = Quoracle.Actions.Schema.ActionList.batchable_actions()
+
     %{
       "type" => "object",
       "properties" => %{
-        "action" => %{"type" => "string", "description" => "Action name (must be batchable)"},
+        "action" => %{
+          "type" => "string",
+          "enum" => Enum.map(allowed, &Atom.to_string/1)
+        },
+        "params" => %{"type" => "object", "description" => "Action parameters"}
+      },
+      "required" => ["action", "params"]
+    }
+  end
+
+  # Action spec for batch_async - all actions except wait/batch_sync/batch_async
+  def format_param_type(:async_action_spec) do
+    excluded = Quoracle.Actions.Schema.ActionList.async_excluded_actions()
+    allowed = Quoracle.Actions.Schema.ActionList.actions() -- excluded
+
+    %{
+      "type" => "object",
+      "properties" => %{
+        "action" => %{
+          "type" => "string",
+          "enum" => Enum.map(allowed, &Atom.to_string/1)
+        },
         "params" => %{"type" => "object", "description" => "Action parameters"}
       },
       "required" => ["action", "params"]

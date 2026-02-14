@@ -17,6 +17,11 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
   # Minimum output budget before forcing proactive condensation
   @output_floor 4096
 
+  # Safety margin for token estimation variance across tokenizers.
+  # cl100k_base undercounts for non-GPT models (e.g., GLM, DeepSeek) by ~1-5%.
+  # Combined with LLMDB context window inaccuracies, this prevents overflow rejections.
+  @token_safety_margin 0.05
+
   # Delegate helper functions
   defdelegate context_length_error?(error), to: Helpers
 
@@ -111,14 +116,16 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
   end
 
   # Calculates dynamic max_tokens based on available context space.
-  # Formula: max_tokens = min(context_window - input_tokens, output_limit)
+  # Formula: max_tokens = min(context_window - buffered_input, output_limit)
+  # Applies @token_safety_margin to estimated input tokens to absorb tokenizer variance.
   @spec calculate_max_tokens(list(map()), String.t()) :: pos_integer()
   defp calculate_max_tokens(messages, model_id) do
     context_window = TokenManager.get_model_context_limit(model_id)
     input_tokens = TokenManager.estimate_all_messages_tokens(messages)
     output_limit = TokenManager.get_model_output_limit(model_id)
 
-    available_output = max(context_window - input_tokens, 1)
+    buffered_input = ceil(input_tokens * (1 + @token_safety_margin))
+    available_output = max(context_window - buffered_input, 1)
     min(available_output, output_limit)
   end
 
@@ -129,7 +136,8 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
   defp maybe_proactive_condense(messages, state, model_id, opts) do
     context_window = TokenManager.get_model_context_limit(model_id)
     input_tokens = TokenManager.estimate_all_messages_tokens(messages)
-    available_output = context_window - input_tokens
+    buffered_input = ceil(input_tokens * (1 + @token_safety_margin))
+    available_output = context_window - buffered_input
 
     if available_output < @output_floor do
       # Condense and rebuild messages
@@ -138,7 +146,8 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
 
       # Check if condensation was sufficient
       post_input_tokens = TokenManager.estimate_all_messages_tokens(rebuilt_messages)
-      post_available = context_window - post_input_tokens
+      post_buffered = ceil(post_input_tokens * (1 + @token_safety_margin))
+      post_available = context_window - post_buffered
 
       if post_available < @output_floor do
         Logger.warning(

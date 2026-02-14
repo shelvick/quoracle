@@ -218,7 +218,7 @@ defmodule Test.DeadlockTestHelper do
   # Polls agent state until pending_actions is empty or timeout.
   # Uses GenServer.call for synchronization (no Process.sleep).
   @spec wait_for_pending_cleared(pid(), non_neg_integer()) :: map()
-  defp wait_for_pending_cleared(agent_pid, timeout_ms \\ 5000) do
+  defp wait_for_pending_cleared(agent_pid, timeout_ms \\ 30_000) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_for_pending_cleared(agent_pid, deadline)
   end

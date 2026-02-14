@@ -175,18 +175,10 @@ defmodule Quoracle.Consensus.MaxRefinementRoundsTest do
 
   # R97: Within max allows refinement (integration-level round counting)
   # max=5 allows more rounds than max=2
+  # R96 already verifies max=2 → 9 queries, so we only run max=5 here and compare
   describe "within max allows refinement (R97)" do
     test "max=5 allows more rounds than max=2" do
       query_fn = counting_diverse_query_fn(self())
-
-      # max=2: forces at round 3 → 9 queries
-      state_max2 = build_consensus_state(2)
-
-      capture_log(fn ->
-        {:ok, _, _} = Consensus.get_consensus_with_state(state_max2, model_query_fn: query_fn)
-      end)
-
-      count_max2 = drain_query_count()
 
       # max=5: allows refinement past round 3 → 18 queries
       state_max5 = build_consensus_state(5)
@@ -197,9 +189,8 @@ defmodule Quoracle.Consensus.MaxRefinementRoundsTest do
 
       count_max5 = drain_query_count()
 
-      # max=5 must allow more rounds than max=2
-      # Current: both 12 (ignores state max)
-      assert count_max5 > count_max2
+      # max=5 must allow more rounds than max=2 (which produces 9 queries per R96)
+      assert count_max5 > 9
     end
   end
 

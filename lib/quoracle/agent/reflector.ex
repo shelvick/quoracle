@@ -105,36 +105,51 @@ defmodule Quoracle.Agent.Reflector do
 
   # Real mode: query LLM with retries
   defp handle_reflection(messages, model_id, opts) do
-    max_retries = Keyword.get(opts, :max_retries, @default_max_retries)
-    delay_fn = Keyword.get(opts, :delay_fn, &default_delay/1)
-    query_fn = Keyword.get(opts, :query_fn, &default_query/3)
+    retry_ctx = %{
+      query_fn: Keyword.get(opts, :query_fn, &default_query/3),
+      delay_fn: Keyword.get(opts, :delay_fn, &default_delay/1),
+      max_retries: Keyword.get(opts, :max_retries, @default_max_retries),
+      attempt: 0,
+      opts: opts
+    }
 
-    do_reflect_with_retry(messages, model_id, query_fn, delay_fn, max_retries, 0, opts)
+    do_reflect_with_retry(messages, model_id, retry_ctx)
   end
 
-  defp do_reflect_with_retry(messages, model_id, query_fn, delay_fn, max_retries, attempt, opts) do
-    case query_fn.(messages, model_id, opts) do
+  defp do_reflect_with_retry(messages, model_id, %{query_fn: query_fn, attempt: attempt} = ctx) do
+    case query_fn.(messages, model_id, ctx.opts) do
       {:ok, response} ->
-        parse_response(response)
+        case parse_response(response) do
+          {:ok, _result} = success ->
+            success
+
+          {:error, :malformed_response} ->
+            Logger.warning("Reflector malformed response on attempt #{attempt + 1}: #{response}")
+            maybe_retry(messages, model_id, ctx, :malformed)
+        end
 
       {:error, _reason} ->
-        if attempt < max_retries do
-          # Exponential backoff: 100ms, 200ms, 400ms...
-          backoff_ms = (100 * :math.pow(2, attempt)) |> round()
-          delay_fn.(backoff_ms)
+        maybe_retry(messages, model_id, ctx, :transport)
+    end
+  end
 
-          do_reflect_with_retry(
-            messages,
-            model_id,
-            query_fn,
-            delay_fn,
-            max_retries,
-            attempt + 1,
-            opts
-          )
-        else
-          {:error, :reflection_failed}
-        end
+  defp maybe_retry(
+         messages,
+         model_id,
+         %{attempt: attempt, max_retries: max_retries} = ctx,
+         failure_type
+       ) do
+    if attempt < max_retries do
+      # Exponential backoff: 100ms, 200ms, 400ms...
+      backoff_ms = (100 * :math.pow(2, attempt)) |> round()
+      ctx.delay_fn.(backoff_ms)
+
+      do_reflect_with_retry(messages, model_id, %{ctx | attempt: attempt + 1})
+    else
+      case failure_type do
+        :malformed -> {:error, :malformed_response_after_retries}
+        :transport -> {:error, :reflection_failed}
+      end
     end
   end
 

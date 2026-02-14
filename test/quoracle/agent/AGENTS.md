@@ -59,6 +59,14 @@
 ## Context Token Injection Tests (Added 2026-01-22)
 - consensus_handler/context_injector_test.exs: 22 tests (R1-R11 + edge cases), token count injection, comma formatting, per-model history
 
+## Action Executor Regression Tests (Added 2026-02-14)
+- action_executor_regressions_test.exs: 15 tests (R1-R14 + R5b), 1060 lines, async: true
+  - Bug 1 (error stall): R1, R2, R3, R4 — always-sync error + wait:true continues consensus
+  - Bug 2 (shell routing): R5, R5b, R6, R7, R8, R9 — shell_routers population, check_id/terminate routing, cleanup
+  - Bug 3 (Router leak): R10, R11 — Router monitoring and active_routers tracking
+  - TestActionHandler: R12 — shell_routers keyed by command_id not action_id
+  - System: R13 (failed spawn recovery), R14 (shell + check_id round-trip)
+
 ## Removed Files
 core_injection_test.exs, config_manager_injection_test.exs, dyn_sup_injection_test.exs (redundant after isolation)
 

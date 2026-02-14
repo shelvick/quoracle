@@ -362,7 +362,8 @@ defmodule Quoracle.Actions.ShellNotificationFixTest do
       refute Process.alive?(agent_pid)
 
       # Since agent is dead, we should NOT receive any notifications
-      refute_receive {:action_result, _, _}, 1500
+      # Router handles agent death synchronously via DOWN monitor
+      refute_receive {:action_result, _, _}, 500
       refute_receive {:shell_completed, _, _}, 100
 
       # Router should handle gracefully (didn't crash when trying to notify dead agent)

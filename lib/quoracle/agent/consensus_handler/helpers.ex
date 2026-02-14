@@ -74,6 +74,19 @@ defmodule Quoracle.Agent.ConsensusHandler.Helpers do
   def coerce_wait_value("false"), do: false
   def coerce_wait_value(other), do: other
 
+  @doc """
+  Extract check_id from shell action params for routing through existing Router.
+
+  Shell termination uses `check_id` + `terminate: true`, not a separate param.
+  Returns the check_id value for shell actions, nil for all other actions.
+  """
+  @spec extract_shell_check_id(map(), atom()) :: String.t() | nil
+  def extract_shell_check_id(params, :execute_shell) when is_map(params) do
+    Map.get(params, "check_id") || Map.get(params, :check_id)
+  end
+
+  def extract_shell_check_id(_params, _action_atom), do: nil
+
   @doc "Prepend text to message content, handling both binary and multimodal (list) formats."
   @spec prepend_to_content(String.t(), binary() | list()) :: binary() | list()
   def prepend_to_content(prefix, content) when is_list(content) do
