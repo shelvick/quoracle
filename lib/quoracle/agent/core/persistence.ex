@@ -108,16 +108,32 @@ defmodule Quoracle.Agent.Core.Persistence do
   end
 
   @doc """
-  Extract parent agent_id from parent_pid using Registry.
+  Extract parent agent_id from parent_pid using Registry, with fallback to state.parent_id.
 
-  Returns nil if no parent or parent not found in Registry.
+  Priority order:
+  1. Registry lookup (live parent PID) — most reliable for running agents
+  2. state.parent_id (persisted string) — fallback for dead/nil PIDs after pause/resume
+
+  Returns nil only for true root agents (both parent_pid and state.parent_id are nil).
   """
   @spec extract_parent_agent_id(pid() | nil, map()) :: String.t() | nil
-  def extract_parent_agent_id(nil, _state), do: nil
+  def extract_parent_agent_id(nil, state) do
+    # Parent PID is nil (root agent or restored agent without live parent)
+    # Fall back to state.parent_id for restored agents
+    Map.get(state, :parent_id)
+  end
 
   def extract_parent_agent_id(parent_pid, state) do
     registry = state.registry
-    RegistryQueries.get_agent_id_from_pid(parent_pid, registry)
+
+    case RegistryQueries.get_agent_id_from_pid(parent_pid, registry) do
+      nil ->
+        # Parent PID not in Registry (dead after pause) — fall back to state.parent_id
+        Map.get(state, :parent_id)
+
+      agent_id ->
+        agent_id
+    end
   end
 
   # ========== ACE STATE PERSISTENCE (delegated to ACEState module) ==========

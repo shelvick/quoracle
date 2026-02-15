@@ -24,7 +24,8 @@ defmodule Quoracle.Agent.Core.Initialization do
     # Handle new format with dependency injection options
     normalized = ConfigManager.normalize_config(config)
 
-    # Check for forced init error (for testing)
+    # Test infrastructure: force_init_error allows tests to simulate agent init failures
+    # without requiring invalid config. Used by task_restorer_test (R11/R13), dyn_sup_test.
     if normalized[:force_init_error] do
       {:stop, :forced_init_error}
     else

@@ -434,4 +434,217 @@ defmodule Quoracle.Agent.CorePersistenceTest do
       assert agent_id == nil
     end
   end
+
+  # ============================================================
+  # v36.0: Fix extract_parent_agent_id Fallback (fix-20260214-pause-resume-pipeline)
+  # Tests for preferring state.parent_id over Registry PID lookup.
+  # Prevents child agents from being persisted with parent_id = nil
+  # when parent dies during pause (Registry returns nil for dead PIDs).
+  # ============================================================
+
+  alias Quoracle.Agent.Core.Persistence
+
+  describe "R1-R5: parent_id fallback (v36.0)" do
+    setup %{sandbox_owner: sandbox_owner} do
+      deps = create_isolated_deps()
+      {:ok, task} = Repo.insert(Task.changeset(%Task{}, %{prompt: "Test", status: "running"}))
+
+      # Spawn parent agent for tests that need it
+      parent_config = %{
+        agent_id: "v36-parent",
+        task_id: task.id,
+        parent_pid: nil,
+        initial_prompt: "Parent",
+        test_mode: true,
+        sandbox_owner: sandbox_owner
+      }
+
+      {:ok, parent_pid} =
+        spawn_agent_with_cleanup(deps.dynsup, parent_config,
+          registry: deps.registry,
+          pubsub: deps.pubsub
+        )
+
+      [
+        task_id: task.id,
+        parent_pid: parent_pid,
+        registry: deps.registry,
+        dynsup: deps.dynsup,
+        pubsub: deps.pubsub,
+        sandbox_owner: sandbox_owner
+      ]
+    end
+
+    @tag :unit
+    test "R1: returns state.parent_id when parent PID is dead",
+         %{
+           registry: registry,
+           parent_pid: parent_pid
+         } do
+      # Kill the parent so Registry lookup would return nil
+      ref = Process.monitor(parent_pid)
+      GenServer.stop(parent_pid, :normal, :infinity)
+
+      receive do
+        {:DOWN, ^ref, :process, ^parent_pid, _} -> :ok
+      after
+        5000 -> flunk("Parent did not terminate")
+      end
+
+      # Build a state map with state.parent_id set but parent_pid dead
+      child_state = %{
+        parent_pid: parent_pid,
+        parent_id: "v36-parent",
+        registry: registry
+      }
+
+      # extract_parent_agent_id should prefer state.parent_id over Registry lookup
+      # Currently it uses Registry lookup which returns nil for dead PIDs
+      result = Persistence.extract_parent_agent_id(parent_pid, child_state)
+
+      assert result == "v36-parent",
+             "Should return state.parent_id when parent PID is dead. Got: #{inspect(result)}"
+    end
+
+    @tag :unit
+    test "R2: root agent returns nil when both are nil",
+         %{registry: registry} do
+      # Root agents have both parent_pid = nil and parent_id = nil.
+      # The new code changes the nil clause to check state.parent_id,
+      # but when both are nil it must still return nil.
+      root_state = %{
+        parent_pid: nil,
+        parent_id: nil,
+        registry: registry
+      }
+
+      result = Persistence.extract_parent_agent_id(nil, root_state)
+
+      assert result == nil,
+             "Root agent should return nil parent_id. Got: #{inspect(result)}"
+    end
+
+    @tag :unit
+    test "R2b: returns state.parent_id when parent_pid nil but parent_id set",
+         %{registry: registry} do
+      # New behavior in nil-pid clause: when parent_pid is nil but
+      # state.parent_id is set (e.g., restored agent without live parent PID),
+      # should return the parent_id string from state instead of nil.
+      # Currently extract_parent_agent_id(nil, _state) always returns nil,
+      # ignoring state entirely.
+      state_with_parent_id = %{
+        parent_pid: nil,
+        parent_id: "restored-parent-id",
+        registry: registry
+      }
+
+      result = Persistence.extract_parent_agent_id(nil, state_with_parent_id)
+
+      assert result == "restored-parent-id",
+             "Should return state.parent_id even when parent_pid is nil. Got: #{inspect(result)}"
+    end
+
+    @tag :unit
+    test "R3: falls back to Registry when state.parent_id is nil",
+         %{
+           registry: registry,
+           parent_pid: parent_pid
+         } do
+      # Backward compatibility: when state.parent_id is nil (legacy agent)
+      # but parent_pid is alive in Registry, should use Registry lookup.
+      # This verifies the new code's fallback path preserves existing behavior.
+      legacy_state = %{
+        parent_pid: parent_pid,
+        parent_id: nil,
+        registry: registry
+      }
+
+      result = Persistence.extract_parent_agent_id(parent_pid, legacy_state)
+
+      assert result == "v36-parent",
+             "Should fall back to Registry lookup when state.parent_id is nil. Got: #{inspect(result)}"
+    end
+
+    @tag :integration
+    test "R4: persist_agent saves correct parent_id from state",
+         %{
+           dynsup: dynsup,
+           registry: registry,
+           pubsub: pubsub,
+           task_id: task_id,
+           parent_pid: parent_pid,
+           sandbox_owner: sandbox_owner
+         } do
+      # Spawn child with parent_pid pointing to live parent and parent_id in config
+      child_config = %{
+        agent_id: "r4-child",
+        task_id: task_id,
+        parent_pid: parent_pid,
+        parent_id: "v36-parent",
+        initial_prompt: "Child",
+        test_mode: true,
+        sandbox_owner: sandbox_owner
+      }
+
+      {:ok, _child_pid} =
+        spawn_agent_with_cleanup(dynsup, child_config,
+          registry: registry,
+          dynsup: dynsup,
+          pubsub: pubsub
+        )
+
+      # Verify child agent persisted with correct parent_id string
+      {:ok, child_agent} = TaskManager.get_agent("r4-child")
+
+      assert child_agent.parent_id == "v36-parent",
+             "Child should have parent_id from state. Got: #{inspect(child_agent.parent_id)}"
+    end
+
+    @tag :integration
+    test "R5: child persisted with correct parent_id even when parent is dead",
+         %{
+           dynsup: dynsup,
+           registry: registry,
+           pubsub: pubsub,
+           task_id: task_id,
+           parent_pid: parent_pid,
+           sandbox_owner: sandbox_owner
+         } do
+      # Kill the parent first (simulates pause scenario)
+      ref = Process.monitor(parent_pid)
+      GenServer.stop(parent_pid, :normal, :infinity)
+
+      receive do
+        {:DOWN, ^ref, :process, ^parent_pid, _} -> :ok
+      after
+        5000 -> flunk("Parent did not terminate")
+      end
+
+      # Now spawn child with parent_pid pointing to dead parent
+      # but parent_id string set correctly from config
+      child_config = %{
+        agent_id: "r5-child",
+        task_id: task_id,
+        parent_pid: parent_pid,
+        parent_id: "v36-parent",
+        initial_prompt: "Orphan child",
+        test_mode: true,
+        sandbox_owner: sandbox_owner
+      }
+
+      {:ok, _child_pid} =
+        spawn_agent_with_cleanup(dynsup, child_config,
+          registry: registry,
+          dynsup: dynsup,
+          pubsub: pubsub
+        )
+
+      # Verify child agent persisted with correct parent_id even though parent is dead
+      # Currently this would persist with parent_id = nil because Registry lookup fails
+      {:ok, child_agent} = TaskManager.get_agent("r5-child")
+
+      assert child_agent.parent_id == "v36-parent",
+             "Child should preserve parent_id even when parent is dead. Got: #{inspect(child_agent.parent_id)}"
+    end
+  end
 end

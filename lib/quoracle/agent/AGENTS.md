@@ -7,7 +7,7 @@
 - Core.BudgetHandler: Budget GenServer callbacks (198 lines), adjust_child_budget/4, handle_release_child_budget/3 (v34.0), update_over_budget_status/1 (non-monotonic since v34.0)
 - Core.ChildrenTracker: Children state management (63 lines), handle_child_spawned/2, handle_child_dismissed/2, handle_child_restored/2 (v2.1)
 - Core.Initialization: Init and DB setup (154 lines), extracted for 500-line limit (2025-10-17)
-- Core.Persistence: DB persistence (365 lines), model_histories + ACE state serialization, delegates ACE to submodule
+- Core.Persistence: DB persistence (149 lines), extract_parent_agent_id with Registry→state.parent_id fallback (v36.0), delegates ACE to submodule
 - Core.Persistence.ACEState: ACE state serialization (332 lines), context_lessons + model_states + model_histories (v5.0), extracted for 500-line limit
 - Core.MessageInfoHandler: Info message dispatch (329 lines), handle_wait_expired/2 with v21.0 staleness check, handle_trigger_consensus/1 (v19.0 unified handler), handle_agent_message_2tuple/3tuple, handle_down/4, handle_exit/3, handle_spawn_failed/2 (v35.0: logs warning, records failure in history, removes child, schedules consensus)
 - RegistryQueries: Registry queries (77 lines), composite value extraction
