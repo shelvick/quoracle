@@ -10,6 +10,7 @@ defmodule Quoracle.Tasks.TaskRestorer do
   alias Quoracle.Tasks.TaskManager
   alias Quoracle.Agent.DynSup
   alias Quoracle.Agent.RegistryQueries
+  alias Quoracle.Tasks.TaskRestorer.ConflictResolver
 
   @doc """
   Pause task by terminating all running agents.
@@ -60,24 +61,14 @@ defmodule Quoracle.Tasks.TaskRestorer do
               :desc
             )
 
-          # Step 5: Terminate each agent
-          # kill: true → Process.exit(:kill) for immediate termination (used by delete_task)
-          # kill: false → send(:stop_requested) for graceful shutdown (used by pause)
+          # Step 5: Terminate each agent and track stopped IDs
+          # kill: true -> Process.exit(:kill) for immediate termination (used by delete_task)
+          # kill: false -> send(:stop_requested) for graceful shutdown (used by pause)
           kill? = Keyword.get(opts, :kill, false)
+          already_stopped = send_stop_to_agents(sorted_agents, kill?)
 
-          Enum.each(sorted_agents, fn {agent_id, meta} ->
-            if Process.alive?(meta.pid) do
-              if kill? do
-                Process.exit(meta.pid, :kill)
-                Logger.debug("Killed agent #{agent_id}")
-              else
-                send(meta.pid, :stop_requested)
-                Logger.debug("Sent :stop_requested to agent #{agent_id}")
-              end
-            else
-              Logger.debug("Agent #{agent_id} already terminated")
-            end
-          end)
+          # Step 6: Post-pause sweep - catch in-flight spawns that registered after initial query
+          sweep_late_registrations(task_id, registry, already_stopped, kill?)
 
           # Return immediately - terminations happen asynchronously
           Logger.info("Task #{task_id} pausing (#{length(agents)} agents terminating async)")
@@ -89,6 +80,9 @@ defmodule Quoracle.Tasks.TaskRestorer do
   @doc """
   Restore task by rebuilding agent tree from database.
 
+  Uses resilient restoration (v6.0) that continues past individual agent
+  failures, skips failed agents' subtrees, and auto-resolves Registry conflicts.
+
   ## Parameters
   - `task_id` - Task UUID to restore
   - `registry` - Registry instance for restored agents (required)
@@ -96,14 +90,12 @@ defmodule Quoracle.Tasks.TaskRestorer do
   - `opts` - Options keyword list
 
   ## Returns
-  - `{:ok, root_pid}` - Task restored successfully with root agent PID
-  - `{:error, reason}` - Restoration failed
-  - `{:error, {:partial_restore, successful_agents, failed_agent, reason}}` - Some agents restored
+  - `{:ok, root_pid}` - Task restored successfully (may be partial success with warnings)
+  - `{:error, :all_agents_failed}` - All agents failed to restore
+  - `{:error, reason}` - Restoration failed for other reasons
   """
   @spec restore_task(String.t(), atom(), atom(), keyword()) ::
-          {:ok, pid()}
-          | {:error, term()}
-          | {:error, {:partial_restore, list(String.t()), String.t(), term()}}
+          {:ok, pid()} | {:error, term()}
   def restore_task(task_id, registry, pubsub, opts \\ []) do
     sandbox_owner = Keyword.get(opts, :sandbox_owner)
     # Step 1: Get DynSup PID (from opts or application)
@@ -113,7 +105,10 @@ defmodule Quoracle.Tasks.TaskRestorer do
       {:error, :dynsup_not_found}
     else
       # Step 2: Query database for all agents for this task
-      db_agents = TaskManager.get_agents_for_task(task_id)
+      # Only restore agents with "running" status — stopped/paused agents are not restored
+      db_agents =
+        TaskManager.get_agents_for_task(task_id)
+        |> Enum.filter(&(&1.status == "running"))
 
       case db_agents do
         [] ->
@@ -124,82 +119,206 @@ defmodule Quoracle.Tasks.TaskRestorer do
           # This ensures parents are always restored before children, regardless of timestamps
           sorted_agents = topological_sort(agents)
 
-          # Step 4: Restore agents sequentially
+          # Step 4: Restore agents sequentially (resilient - continues past failures)
           initial_state = %{
             restored_pids: %{},
             restored_agents: [],
+            failed_agents: [],
+            skipped_agents: [],
             dynsup_pid: dynsup_pid
           }
 
           result =
-            Enum.reduce_while(
+            Enum.reduce(
               sorted_agents,
-              {:ok, initial_state},
-              fn db_agent, {:ok, state} ->
-                # Get parent PID if agent has parent
-                parent_pid =
-                  case db_agent.parent_id do
-                    nil -> nil
-                    parent_id -> Map.get(state.restored_pids, parent_id)
+              initial_state,
+              fn db_agent, state ->
+                # Skip if parent failed (entire subtree skipped)
+                if db_agent.parent_id && db_agent.parent_id in state.failed_agents do
+                  Logger.warning(
+                    "Skipping agent #{db_agent.agent_id}: parent #{db_agent.parent_id} failed"
+                  )
+
+                  %{state | skipped_agents: [db_agent.agent_id | state.skipped_agents]}
+                else
+                  # Get parent PID if agent has parent
+                  parent_pid =
+                    case db_agent.parent_id do
+                      nil -> nil
+                      parent_id -> Map.get(state.restored_pids, parent_id)
+                    end
+
+                  # Restore agent
+                  agent_opts = [
+                    registry: registry,
+                    pubsub: pubsub,
+                    parent_pid_override: parent_pid,
+                    sandbox_owner: sandbox_owner
+                  ]
+
+                  case ConflictResolver.restore_agent_with_retry(
+                         state.dynsup_pid,
+                         db_agent,
+                         agent_opts,
+                         registry
+                       ) do
+                    {:ok, pid} ->
+                      Logger.debug("Restored agent #{db_agent.agent_id}")
+
+                      %{
+                        state
+                        | restored_pids: Map.put(state.restored_pids, db_agent.agent_id, pid),
+                          restored_agents: [db_agent.agent_id | state.restored_agents]
+                      }
+
+                    {:error, reason} ->
+                      Logger.error(
+                        "Failed to restore agent #{db_agent.agent_id}: #{inspect(reason)}"
+                      )
+
+                      %{state | failed_agents: [db_agent.agent_id | state.failed_agents]}
                   end
-
-                # Restore agent
-                agent_opts = [
-                  registry: registry,
-                  pubsub: pubsub,
-                  parent_pid_override: parent_pid,
-                  sandbox_owner: sandbox_owner
-                ]
-
-                case DynSup.restore_agent(state.dynsup_pid, db_agent, agent_opts) do
-                  {:ok, pid} ->
-                    Logger.debug("Restored agent #{db_agent.agent_id}")
-
-                    # Track restored PID and agent_id
-                    updated_state = %{
-                      restored_pids: Map.put(state.restored_pids, db_agent.agent_id, pid),
-                      restored_agents: [db_agent.agent_id | state.restored_agents],
-                      dynsup_pid: state.dynsup_pid
-                    }
-
-                    {:cont, {:ok, updated_state}}
-
-                  {:error, reason} ->
-                    Logger.error(
-                      "Failed to restore agent #{db_agent.agent_id}: #{inspect(reason)}"
-                    )
-
-                    # Return partial success info
-                    error = {:partial_restore, state.restored_agents, db_agent.agent_id, reason}
-                    {:halt, {:error, error}}
                 end
               end
             )
 
           # Step 5: Handle result
-          case result do
-            {:ok, state} ->
-              # All agents restored successfully
-              root_pid = find_root_pid(state.restored_pids, sorted_agents)
-
-              # Step 6: Rebuild children lists in parent agents
-              # Use original agents list (not sorted) to catch orphans with missing parents
-              rebuild_children_lists(state.restored_pids, agents)
-
-              TaskManager.update_task_status(task_id, "running")
-
-              Logger.info(
-                "Task #{task_id} restored successfully (#{length(state.restored_agents)} agents)"
-              )
-
-              {:ok, root_pid}
-
-            {:error, _} = error ->
-              # Partial or complete failure
-              error
-          end
+          handle_restore_result(result, sorted_agents, agents, task_id, registry)
       end
     end
+  end
+
+  # Handle the result of restoration based on success/failure counts
+  @spec handle_restore_result(map(), list(), list(), String.t(), atom()) ::
+          {:ok, pid()} | {:error, term()}
+  defp handle_restore_result(result, sorted_agents, agents, task_id, registry) do
+    case result do
+      %{restored_agents: [], failed_agents: failed} when failed != [] ->
+        # Total failure - no agents restored
+        {:error, :all_agents_failed}
+
+      %{failed_agents: []} = state ->
+        # Full success - all agents restored
+        root_pid = find_root_pid(state.restored_pids, sorted_agents)
+
+        # Step 6: Rebuild children lists in parent agents
+        # Use original agents list (not sorted) to catch orphans with missing parents
+        rebuild_children_lists(state.restored_pids, agents)
+
+        # Step 7: Cleanup orphans that survived from previous session
+        cleanup_orphans(task_id, state.restored_pids, registry)
+
+        TaskManager.update_task_status(task_id, "running")
+
+        Logger.info(
+          "Task #{task_id} restored successfully (#{length(state.restored_agents)} agents)"
+        )
+
+        {:ok, root_pid}
+
+      %{failed_agents: failed} = state ->
+        # Partial success - some agents failed but tree is usable
+        root_pid = find_root_pid(state.restored_pids, sorted_agents)
+
+        # Rebuild children lists for successfully restored agents
+        rebuild_children_lists(state.restored_pids, agents)
+
+        # Cleanup orphans
+        cleanup_orphans(task_id, state.restored_pids, registry)
+
+        TaskManager.update_task_status(task_id, "running")
+
+        Logger.error("Partial restore: #{length(failed)} agents failed: #{inspect(failed)}")
+
+        {:ok, root_pid}
+    end
+  end
+
+  # Send stop signals to agents and return MapSet of stopped agent IDs
+  @spec send_stop_to_agents(list(), boolean()) :: MapSet.t()
+  defp send_stop_to_agents(sorted_agents, kill?) do
+    Enum.reduce(sorted_agents, MapSet.new(), fn {agent_id, meta}, already_stopped ->
+      if Process.alive?(meta.pid) do
+        if kill? do
+          Process.exit(meta.pid, :kill)
+          Logger.debug("Killed agent #{agent_id}")
+        else
+          send(meta.pid, :stop_requested)
+          Logger.debug("Sent :stop_requested to agent #{agent_id}")
+        end
+      else
+        Logger.debug("Agent #{agent_id} already terminated")
+      end
+
+      MapSet.put(already_stopped, agent_id)
+    end)
+  end
+
+  # Post-pause sweep: catch in-flight spawns that registered after initial query
+  @spec sweep_late_registrations(String.t(), atom(), MapSet.t(), boolean()) :: :ok
+  defp sweep_late_registrations(task_id, registry, already_stopped, kill?) do
+    # Re-query Registry for any new agents that registered between first query and stops
+    new_agents = RegistryQueries.list_agents_for_task(task_id, registry)
+
+    Enum.each(new_agents, fn {agent_id, meta} ->
+      unless MapSet.member?(already_stopped, agent_id) do
+        if Process.alive?(meta.pid) do
+          if kill? do
+            Process.exit(meta.pid, :kill)
+          else
+            send(meta.pid, :stop_requested)
+          end
+
+          Logger.debug("Sweep: sent stop to late-registered agent #{agent_id}")
+        end
+      end
+    end)
+
+    :ok
+  end
+
+  # Cleanup orphan agents that survived from previous session.
+  # After restoration, find any live agents for this task that were NOT
+  # part of the restoration set and terminate them.
+  @spec cleanup_orphans(String.t(), map(), atom()) :: :ok
+  defp cleanup_orphans(task_id, restored_pids, registry) do
+    # Find any live agents for this task that weren't part of the restoration set
+    live_agents = RegistryQueries.list_agents_for_task(task_id, registry)
+    restored_ids = Map.keys(restored_pids)
+
+    orphans =
+      Enum.reject(live_agents, fn {agent_id, _meta} ->
+        agent_id in restored_ids
+      end)
+
+    Enum.each(orphans, fn {agent_id, meta} ->
+      Logger.warning("Terminating orphan agent #{agent_id} (not in restoration set)")
+
+      if Process.alive?(meta.pid) do
+        try do
+          GenServer.stop(meta.pid, :normal, :infinity)
+        catch
+          :exit, _ -> :ok
+        end
+      end
+
+      # Update DB status so Dashboard doesn't show it as active
+      case TaskManager.get_agent(agent_id) do
+        {:ok, agent} ->
+          agent
+          |> Ecto.Changeset.change(status: "stopped")
+          |> Quoracle.Repo.update()
+
+        _ ->
+          :ok
+      end
+    end)
+
+    if Enum.any?(orphans) do
+      Logger.info("Cleaned up #{length(orphans)} orphan agents for task #{task_id}")
+    end
+
+    :ok
   end
 
   @doc false

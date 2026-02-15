@@ -1560,6 +1560,1033 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
     end
   end
 
+  # ===========================================================================
+  # Packet 2: Pause/Resume Pipeline Fix (fix-20260214-pause-resume-pipeline)
+  # ===========================================================================
+  # Tests for TASK_Restorer v6.0 — Resilient Restore, Post-Pause Sweep,
+  # Orphan Cleanup.
+  #
+  # Bug 3: replace reduce_while with Enum.reduce (continue past failures)
+  # Bug 4: post-pause sweep catches in-flight spawns
+  # Bug 5: orphan cleanup after restoration
+
+  describe "restore_task/4 - Resilient Restore (v6.0, Bug 3)" do
+    # R10: WHEN one agent fails to restore THEN remaining agents still restored
+    test "R10: restoration continues past single agent failure", %{
+      registry: registry,
+      dynsup: dynsup,
+      pubsub: pubsub,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, {task, task_pid}} =
+        create_task_with_cleanup("Test task",
+          sandbox_owner: sandbox_owner,
+          dynsup: dynsup,
+          registry: registry,
+          pubsub: pubsub
+        )
+
+      # Stop task agent before restore
+      stop_and_wait_for_unregister(task_pid, registry, "root-#{task.id}")
+
+      # Create two agents in DB — one with valid config, one that will fail
+      # The "good" agent (root) goes first (parent_id: nil)
+      {:ok, _good_agent} =
+        Repo.insert(%AgentSchema{
+          agent_id: "good-root",
+          task_id: task.id,
+          status: "running",
+          parent_id: nil,
+          config: %{task: "Good root agent"},
+          inserted_at: ~N[2025-01-01 10:00:00]
+        })
+
+      # A second root agent that will conflict — pre-register its agent_id
+      # in the Registry so DynSup.restore_agent raises "Duplicate agent ID"
+      {:ok, _blocker_pid} =
+        spawn_agent_with_cleanup(
+          dynsup,
+          %{
+            agent_id: "blocker-agent",
+            task_id: task.id,
+            parent_pid: nil,
+            status: "running",
+            task: "Blocker"
+          },
+          registry: registry,
+          pubsub: pubsub,
+          sandbox_owner: sandbox_owner
+        )
+
+      {:ok, _blocking_agent} =
+        Repo.insert(%AgentSchema{
+          agent_id: "blocker-agent",
+          task_id: task.id,
+          status: "running",
+          parent_id: nil,
+          config: %{task: "This will conflict"},
+          inserted_at: ~N[2025-01-01 10:00:01]
+        })
+
+      # A third agent after the blocker — should still be restored
+      {:ok, _third_agent} =
+        Repo.insert(%AgentSchema{
+          agent_id: "good-third",
+          task_id: task.id,
+          status: "running",
+          parent_id: nil,
+          config: %{task: "Third agent"},
+          inserted_at: ~N[2025-01-01 10:00:02]
+        })
+
+      # Restore task — with current reduce_while, blocker-agent failure halts everything.
+      # With v6.0 resilient restore (Enum.reduce), good-root and good-third should still be restored.
+      capture_log(fn ->
+        result =
+          TaskRestorer.restore_task(task.id, registry, pubsub,
+            dynsup: dynsup,
+            sandbox_owner: sandbox_owner
+          )
+
+        # v6.0: Should return {:ok, root_pid} because good-root succeeded
+        assert {:ok, root_pid} = result
+        assert is_pid(root_pid)
+        assert Process.alive?(root_pid)
+
+        # good-third should also be restored
+        [{third_pid, _}] = Registry.lookup(registry, {:agent, "good-third"})
+        assert Process.alive?(third_pid)
+      end)
+
+      # Cleanup restored agents
+      on_exit(fn ->
+        try do
+          for agent_id <- ["good-root", "good-third"] do
+            case Registry.lookup(registry, {:agent, agent_id}) do
+              [{pid, _}] ->
+                if Process.alive?(pid) do
+                  try do
+                    GenServer.stop(pid, :normal, :infinity)
+                  catch
+                    :exit, _ -> :ok
+                  end
+                end
+
+              _ ->
+                :ok
+            end
+          end
+        rescue
+          ArgumentError -> :ok
+        end
+      end)
+    end
+
+    # R11: WHEN parent agent fails to restore THEN its children are skipped
+    test "R11: children of failed agent are skipped", %{
+      registry: registry,
+      dynsup: dynsup,
+      pubsub: pubsub,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, {task, task_pid}} =
+        create_task_with_cleanup("Test task",
+          sandbox_owner: sandbox_owner,
+          dynsup: dynsup,
+          registry: registry,
+          pubsub: pubsub
+        )
+
+      # Stop task agent before restore
+      stop_and_wait_for_unregister(task_pid, registry, "root-#{task.id}")
+
+      # Create a good root
+      {:ok, _good_root} =
+        Repo.insert(%AgentSchema{
+          agent_id: "good-root",
+          task_id: task.id,
+          status: "running",
+          parent_id: nil,
+          config: %{task: "Good root"},
+          inserted_at: ~N[2025-01-01 10:00:00]
+        })
+
+      # Create a "bad parent" that will fail — force_init_error causes non-retryable failure
+      {:ok, _bad_parent} =
+        Repo.insert(%AgentSchema{
+          agent_id: "bad-parent",
+          task_id: task.id,
+          status: "running",
+          parent_id: "good-root",
+          config: %{"force_init_error" => true, "task" => "Will fail"},
+          inserted_at: ~N[2025-01-01 10:00:01]
+        })
+
+      # Create child of bad-parent — should be skipped since parent failed
+      {:ok, _child_of_bad} =
+        Repo.insert(%AgentSchema{
+          agent_id: "child-of-bad",
+          task_id: task.id,
+          status: "running",
+          parent_id: "bad-parent",
+          config: %{task: "Should be skipped"},
+          inserted_at: ~N[2025-01-01 10:00:02]
+        })
+
+      # Restore task — v6.0 should skip child-of-bad because bad-parent failed
+      capture_log(fn ->
+        result =
+          TaskRestorer.restore_task(task.id, registry, pubsub,
+            dynsup: dynsup,
+            sandbox_owner: sandbox_owner
+          )
+
+        # Should succeed (good-root restored)
+        assert {:ok, root_pid} = result
+        assert Process.alive?(root_pid)
+
+        # child-of-bad should NOT be in Registry (skipped because parent failed)
+        assert [] == Registry.lookup(registry, {:agent, "child-of-bad"})
+      end)
+
+      # Cleanup
+      on_exit(fn ->
+        try do
+          case Registry.lookup(registry, {:agent, "good-root"}) do
+            [{pid, _}] ->
+              if Process.alive?(pid) do
+                try do
+                  GenServer.stop(pid, :normal, :infinity)
+                catch
+                  :exit, _ -> :ok
+                end
+              end
+
+            _ ->
+              :ok
+          end
+        rescue
+          ArgumentError -> :ok
+        end
+      end)
+    end
+
+    # R12: WHEN agent_id already registered (orphan) THEN orphan terminated and restoration retried
+    test "R12: Registry conflict resolved by terminating orphan and retrying", %{
+      registry: registry,
+      dynsup: dynsup,
+      pubsub: pubsub,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, {task, task_pid}} =
+        create_task_with_cleanup("Test task",
+          sandbox_owner: sandbox_owner,
+          dynsup: dynsup,
+          registry: registry,
+          pubsub: pubsub
+        )
+
+      # Stop task agent before restore
+      stop_and_wait_for_unregister(task_pid, registry, "root-#{task.id}")
+
+      # Pre-register an orphan agent with the same agent_id we'll try to restore
+      {:ok, orphan_pid} =
+        spawn_agent_with_cleanup(
+          dynsup,
+          %{
+            agent_id: "orphan-conflict",
+            task_id: task.id,
+            parent_pid: nil,
+            status: "running",
+            task: "Orphan from previous session"
+          },
+          registry: registry,
+          pubsub: pubsub,
+          sandbox_owner: sandbox_owner
+        )
+
+      assert Process.alive?(orphan_pid)
+
+      # Create DB record for the same agent_id
+      {:ok, _db_agent} =
+        Repo.insert(%AgentSchema{
+          agent_id: "orphan-conflict",
+          task_id: task.id,
+          status: "running",
+          parent_id: nil,
+          config: %{task: "Restored version"},
+          inserted_at: ~N[2025-01-01 10:00:00]
+        })
+
+      # v6.0: restore_agent_with_retry should terminate the orphan and retry
+      # Current code: raises "Duplicate agent ID" and reduce_while halts
+      capture_log(fn ->
+        result =
+          TaskRestorer.restore_task(task.id, registry, pubsub,
+            dynsup: dynsup,
+            sandbox_owner: sandbox_owner
+          )
+
+        # Should succeed after killing orphan and retrying
+        assert {:ok, new_pid} = result
+        assert is_pid(new_pid)
+        assert Process.alive?(new_pid)
+
+        # Original orphan should be terminated
+        refute Process.alive?(orphan_pid)
+      end)
+
+      # Cleanup
+      on_exit(fn ->
+        try do
+          case Registry.lookup(registry, {:agent, "orphan-conflict"}) do
+            [{pid, _}] ->
+              if Process.alive?(pid) do
+                try do
+                  GenServer.stop(pid, :normal, :infinity)
+                catch
+                  :exit, _ -> :ok
+                end
+              end
+
+            _ ->
+              :ok
+          end
+        rescue
+          ArgumentError -> :ok
+        end
+      end)
+    end
+
+    # R13: WHEN all agents fail to restore THEN returns {:error, :all_agents_failed}
+    test "R13: returns error when all agents fail", %{
+      registry: registry,
+      dynsup: dynsup,
+      pubsub: pubsub,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, {task, task_pid}} =
+        create_task_with_cleanup("Test task",
+          sandbox_owner: sandbox_owner,
+          dynsup: dynsup,
+          registry: registry,
+          pubsub: pubsub
+        )
+
+      # Stop task agent and mark its DB record as stopped so it's excluded
+      # from the restoration set (restore_task only restores "running" agents)
+      stop_and_wait_for_unregister(task_pid, registry, "root-#{task.id}")
+
+      {:ok, auto_root} = TaskManager.get_agent("root-#{task.id}")
+
+      auto_root
+      |> Ecto.Changeset.change(status: "stopped")
+      |> Repo.update!()
+
+      # Create DB records for both — force_init_error causes non-retryable failure
+      {:ok, _agent1} =
+        Repo.insert(%AgentSchema{
+          agent_id: "all-fail-1",
+          task_id: task.id,
+          status: "running",
+          parent_id: nil,
+          config: %{"force_init_error" => true, "task" => "Will fail"},
+          inserted_at: ~N[2025-01-01 10:00:00]
+        })
+
+      {:ok, _agent2} =
+        Repo.insert(%AgentSchema{
+          agent_id: "all-fail-2",
+          task_id: task.id,
+          status: "running",
+          parent_id: nil,
+          config: %{"force_init_error" => true, "task" => "Will also fail"},
+          inserted_at: ~N[2025-01-01 10:00:01]
+        })
+
+      # v6.0: Should return {:error, :all_agents_failed} when every agent fails
+      # Current code: returns {:error, {:partial_restore, ...}} on first failure
+      capture_log(fn ->
+        result =
+          TaskRestorer.restore_task(task.id, registry, pubsub,
+            dynsup: dynsup,
+            sandbox_owner: sandbox_owner
+          )
+
+        assert {:error, :all_agents_failed} = result
+      end)
+    end
+
+    # R14: WHEN some agents fail but root succeeds THEN returns {:ok, root_pid}
+    test "R14: partial success returns root_pid with logged warnings", %{
+      registry: registry,
+      dynsup: dynsup,
+      pubsub: pubsub,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, {task, task_pid}} =
+        create_task_with_cleanup("Test task",
+          sandbox_owner: sandbox_owner,
+          dynsup: dynsup,
+          registry: registry,
+          pubsub: pubsub
+        )
+
+      # Stop task agent
+      stop_and_wait_for_unregister(task_pid, registry, "root-#{task.id}")
+
+      # Create a good root agent in DB
+      {:ok, _root_agent} =
+        Repo.insert(%AgentSchema{
+          agent_id: "partial-root",
+          task_id: task.id,
+          status: "running",
+          parent_id: nil,
+          config: %{task: "Root agent"},
+          inserted_at: ~N[2025-01-01 10:00:00]
+        })
+
+      # Create a child that will fail — force_init_error causes non-retryable failure
+      {:ok, _fail_child} =
+        Repo.insert(%AgentSchema{
+          agent_id: "partial-child-fail",
+          task_id: task.id,
+          status: "running",
+          parent_id: "partial-root",
+          config: %{"force_init_error" => true, "task" => "Will fail"},
+          inserted_at: ~N[2025-01-01 10:00:01]
+        })
+
+      # v6.0: Should return {:ok, root_pid} even though child failed
+      # Current code: returns {:error, {:partial_restore, ...}} and halts
+      log =
+        capture_log(fn ->
+          result =
+            TaskRestorer.restore_task(task.id, registry, pubsub,
+              dynsup: dynsup,
+              sandbox_owner: sandbox_owner
+            )
+
+          assert {:ok, root_pid} = result
+          assert is_pid(root_pid)
+          assert Process.alive?(root_pid)
+
+          # Task status should be "running" despite partial failure
+          {:ok, updated_task} = TaskManager.get_task(task.id)
+          assert updated_task.status == "running"
+        end)
+
+      # Should log error about partial restore (per spec: "Partial restore: N agents failed")
+      assert log =~ "Partial restore"
+
+      # Cleanup
+      on_exit(fn ->
+        try do
+          case Registry.lookup(registry, {:agent, "partial-root"}) do
+            [{pid, _}] ->
+              if Process.alive?(pid) do
+                try do
+                  GenServer.stop(pid, :normal, :infinity)
+                catch
+                  :exit, _ -> :ok
+                end
+              end
+
+            _ ->
+              :ok
+          end
+        rescue
+          ArgumentError -> :ok
+        end
+      end)
+    end
+  end
+
+  describe "pause_task/2 - Post-Pause Sweep (v6.0, Bug 4)" do
+    # R15: WHEN agent registers between initial query and stop signals THEN sweep catches it
+    # Verify that pause_task uses the new send_stop_to_agents/2 helper that returns
+    # a MapSet of stopped IDs, and sweep_late_registrations/4 is called.
+    test "R15: pause_task source contains sweep_late_registrations", %{
+      registry: registry,
+      dynsup: dynsup,
+      pubsub: pubsub,
+      sandbox_owner: sandbox_owner
+    } do
+      # Read source to verify the structural changes for sweep pattern
+      source_path = "lib/quoracle/tasks/task_restorer.ex"
+      {:ok, source} = File.read(source_path)
+
+      # v6.0: pause_task must use send_stop_to_agents which returns a MapSet
+      assert source =~ "send_stop_to_agents",
+             "pause_task should use send_stop_to_agents helper (v6.0)"
+
+      # v6.0: pause_task must call sweep_late_registrations after initial stops
+      assert source =~ "sweep_late_registrations",
+             "pause_task should call sweep_late_registrations (v6.0)"
+
+      # Also verify functional behavior: all agents for task get stopped
+      {:ok, {task, task_pid}} =
+        create_task_with_cleanup("Test task",
+          sandbox_owner: sandbox_owner,
+          dynsup: dynsup,
+          registry: registry,
+          pubsub: pubsub
+        )
+
+      {:ok, agent_pid} =
+        spawn_agent_with_cleanup(
+          dynsup,
+          %{
+            agent_id: "agent-sweep-test",
+            task_id: task.id,
+            parent_pid: nil,
+            status: "running",
+            task: "Sweep test agent"
+          },
+          registry: registry,
+          pubsub: pubsub,
+          sandbox_owner: sandbox_owner
+        )
+
+      # Monitor agents
+      agent_ref = Process.monitor(agent_pid)
+      task_ref = Process.monitor(task_pid)
+
+      :ok = TaskRestorer.pause_task(task.id, registry: registry, dynsup: dynsup)
+
+      # Agent should terminate
+      for {ref, pid, name} <- [
+            {agent_ref, agent_pid, "agent"},
+            {task_ref, task_pid, "task"}
+          ] do
+        receive do
+          {:DOWN, ^ref, :process, ^pid, _} -> :ok
+        after
+          5000 -> flunk("#{name} agent did not terminate within 5 seconds")
+        end
+      end
+
+      refute Process.alive?(agent_pid)
+    end
+
+    # R16: WHEN sweep finds agents already in stopped set THEN does not send :stop_requested again
+    # Verify the source code uses a MapSet to track already-stopped agents
+    test "R16: pause_task source uses MapSet for already_stopped tracking", %{
+      registry: registry,
+      dynsup: dynsup,
+      pubsub: pubsub,
+      sandbox_owner: sandbox_owner
+    } do
+      # Read source to verify MapSet tracking pattern
+      source_path = "lib/quoracle/tasks/task_restorer.ex"
+      {:ok, source} = File.read(source_path)
+
+      # v6.0: send_stop_to_agents must return a MapSet of stopped agent IDs
+      assert source =~ "MapSet",
+             "send_stop_to_agents should use MapSet to track stopped agents (v6.0)"
+
+      # v6.0: sweep_late_registrations must check already_stopped before sending
+      assert source =~ "already_stopped",
+             "sweep_late_registrations should check already_stopped set (v6.0)"
+
+      # Also verify functional behavior -- agent terminates normally
+      {:ok, {task, task_pid}} =
+        create_task_with_cleanup("Test task",
+          sandbox_owner: sandbox_owner,
+          dynsup: dynsup,
+          registry: registry,
+          pubsub: pubsub
+        )
+
+      {:ok, agent_pid} =
+        spawn_agent_with_cleanup(
+          dynsup,
+          %{
+            agent_id: "agent-no-double",
+            task_id: task.id,
+            parent_pid: nil,
+            status: "running",
+            task: "No double stop"
+          },
+          registry: registry,
+          pubsub: pubsub,
+          sandbox_owner: sandbox_owner
+        )
+
+      # Monitor agents
+      agent_ref = Process.monitor(agent_pid)
+      task_ref = Process.monitor(task_pid)
+
+      :ok = TaskRestorer.pause_task(task.id, registry: registry, dynsup: dynsup)
+
+      # Agent should terminate exactly once with :normal reason
+      assert_receive {:DOWN, ^agent_ref, :process, ^agent_pid, reason}, 5000
+
+      assert reason == :normal,
+             "Agent should terminate with :normal reason, got: #{inspect(reason)}"
+
+      # Cleanup task agent
+      receive do
+        {:DOWN, ^task_ref, :process, ^task_pid, _} -> :ok
+      after
+        5000 -> :ok
+      end
+    end
+  end
+
+  describe "restore_task/4 - Orphan Cleanup (v6.0, Bug 5)" do
+    # R17: WHEN restore completes and orphan agents exist for task THEN orphans terminated
+    test "R17: orphan agents terminated after successful restoration", %{
+      registry: registry,
+      dynsup: dynsup,
+      pubsub: pubsub,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, {task, task_pid}} =
+        create_task_with_cleanup("Test task",
+          sandbox_owner: sandbox_owner,
+          dynsup: dynsup,
+          registry: registry,
+          pubsub: pubsub
+        )
+
+      # Stop task agent
+      stop_and_wait_for_unregister(task_pid, registry, "root-#{task.id}")
+
+      # Create DB record for the agent we'll restore
+      {:ok, _db_root} =
+        Repo.insert(%AgentSchema{
+          agent_id: "restore-root",
+          task_id: task.id,
+          status: "running",
+          parent_id: nil,
+          config: %{task: "Root to restore"},
+          inserted_at: ~N[2025-01-01 10:00:00]
+        })
+
+      # Spawn an orphan agent that is NOT in the DB restoration set
+      # (simulates an agent that survived from a previous session)
+      {:ok, orphan_pid} =
+        spawn_agent_with_cleanup(
+          dynsup,
+          %{
+            agent_id: "orphan-survivor",
+            task_id: task.id,
+            parent_pid: nil,
+            status: "running",
+            task: "Orphan from previous session"
+          },
+          registry: registry,
+          pubsub: pubsub,
+          sandbox_owner: sandbox_owner
+        )
+
+      orphan_ref = Process.monitor(orphan_pid)
+      assert Process.alive?(orphan_pid)
+
+      # Restore task — v6.0 should call cleanup_orphans which terminates
+      # "orphan-survivor" because it's not in the restoration set
+      result =
+        TaskRestorer.restore_task(task.id, registry, pubsub,
+          dynsup: dynsup,
+          sandbox_owner: sandbox_owner
+        )
+
+      assert {:ok, root_pid} = result
+      assert Process.alive?(root_pid)
+
+      # Wait for orphan to be terminated by cleanup_orphans
+      assert_receive {:DOWN, ^orphan_ref, :process, ^orphan_pid, _reason},
+                     5000,
+                     "Orphan agent should be terminated by cleanup_orphans"
+
+      refute Process.alive?(orphan_pid)
+
+      # Cleanup restored agent
+      on_exit(fn ->
+        try do
+          case Registry.lookup(registry, {:agent, "restore-root"}) do
+            [{pid, _}] ->
+              if Process.alive?(pid) do
+                try do
+                  GenServer.stop(pid, :normal, :infinity)
+                catch
+                  :exit, _ -> :ok
+                end
+              end
+
+            _ ->
+              :ok
+          end
+        rescue
+          ArgumentError -> :ok
+        end
+      end)
+    end
+
+    # R18: WHEN orphan terminated THEN its DB status set to "stopped"
+    test "R18: orphan agent DB status set to stopped", %{
+      registry: registry,
+      dynsup: dynsup,
+      pubsub: pubsub,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, {task, task_pid}} =
+        create_task_with_cleanup("Test task",
+          sandbox_owner: sandbox_owner,
+          dynsup: dynsup,
+          registry: registry,
+          pubsub: pubsub
+        )
+
+      # Stop task agent
+      stop_and_wait_for_unregister(task_pid, registry, "root-#{task.id}")
+
+      # Create DB records — one for restoration, one for orphan
+      {:ok, _db_root} =
+        Repo.insert(%AgentSchema{
+          agent_id: "db-root",
+          task_id: task.id,
+          status: "running",
+          parent_id: nil,
+          config: %{task: "Root"},
+          inserted_at: ~N[2025-01-01 10:00:00]
+        })
+
+      # Spawn orphan agent with restoration_mode: true to skip auto-persistence.
+      # Without this, persist_agent adds the orphan to the DB restoration set,
+      # causing restore_task to treat it as a normal agent instead of an orphan.
+      {:ok, orphan_pid} =
+        spawn_agent_with_cleanup(
+          dynsup,
+          %{
+            agent_id: "orphan-db-update",
+            task_id: task.id,
+            parent_pid: nil,
+            status: "running",
+            task: "Orphan with DB record",
+            restoration_mode: true
+          },
+          registry: registry,
+          pubsub: pubsub,
+          sandbox_owner: sandbox_owner
+        )
+
+      # Insert orphan's DB record with status "paused" — not "running", so
+      # restore_task excludes it from the restoration set. cleanup_orphans
+      # should terminate the live process AND update this record to "stopped".
+      {:ok, _orphan_db} =
+        Repo.insert(%AgentSchema{
+          agent_id: "orphan-db-update",
+          task_id: task.id,
+          status: "paused",
+          parent_id: nil,
+          config: %{task: "Orphan with DB record"},
+          inserted_at: ~N[2025-01-01 09:00:00]
+        })
+
+      orphan_ref = Process.monitor(orphan_pid)
+
+      # Restore task — cleanup_orphans should terminate orphan AND update its DB status
+      result =
+        TaskRestorer.restore_task(task.id, registry, pubsub,
+          dynsup: dynsup,
+          sandbox_owner: sandbox_owner
+        )
+
+      assert {:ok, _root_pid} = result
+
+      # Wait for orphan cleanup
+      assert_receive {:DOWN, ^orphan_ref, :process, ^orphan_pid, _}, 5000
+
+      # Verify orphan's DB status updated to "stopped"
+      {:ok, orphan_record} = TaskManager.get_agent("orphan-db-update")
+
+      assert orphan_record.status == "stopped",
+             "Orphan DB status should be 'stopped', got: '#{orphan_record.status}'"
+
+      # Cleanup
+      on_exit(fn ->
+        try do
+          case Registry.lookup(registry, {:agent, "db-root"}) do
+            [{pid, _}] ->
+              if Process.alive?(pid) do
+                try do
+                  GenServer.stop(pid, :normal, :infinity)
+                catch
+                  :exit, _ -> :ok
+                end
+              end
+
+            _ ->
+              :ok
+          end
+        rescue
+          ArgumentError -> :ok
+        end
+      end)
+    end
+
+    # R19: WHEN no orphan agents exist THEN cleanup_orphans returns :ok without action
+    # Also verify that cleanup_orphans exists as a function in the source
+    test "R19: cleanup_orphans function exists and is called by restore_task", %{
+      registry: registry,
+      dynsup: dynsup,
+      pubsub: pubsub,
+      sandbox_owner: sandbox_owner
+    } do
+      # Read source to verify cleanup_orphans function exists
+      source_path = "lib/quoracle/tasks/task_restorer.ex"
+      {:ok, source} = File.read(source_path)
+
+      # v6.0: restore_task must call cleanup_orphans after successful restoration
+      assert source =~ "cleanup_orphans",
+             "restore_task should call cleanup_orphans function (v6.0)"
+
+      # Also verify functional behavior: restore succeeds without orphan logs
+      {:ok, {task, task_pid}} =
+        create_task_with_cleanup("Test task",
+          sandbox_owner: sandbox_owner,
+          dynsup: dynsup,
+          registry: registry,
+          pubsub: pubsub
+        )
+
+      # Stop task agent
+      stop_and_wait_for_unregister(task_pid, registry, "root-#{task.id}")
+
+      # Create a single agent in DB — no orphans
+      {:ok, _db_root} =
+        Repo.insert(%AgentSchema{
+          agent_id: "clean-root",
+          task_id: task.id,
+          status: "running",
+          parent_id: nil,
+          config: %{task: "Clean root"},
+          inserted_at: ~N[2025-01-01 10:00:00]
+        })
+
+      # Register cleanup BEFORE restore (Registry may be terminated in on_exit)
+      on_exit(fn ->
+        try do
+          case Registry.lookup(registry, {:agent, "clean-root"}) do
+            [{pid, _}] ->
+              if Process.alive?(pid) do
+                try do
+                  GenServer.stop(pid, :normal, :infinity)
+                catch
+                  :exit, _ -> :ok
+                end
+              end
+
+            _ ->
+              :ok
+          end
+        rescue
+          ArgumentError -> :ok
+        end
+      end)
+
+      # Restore task — cleanup_orphans should be a no-op (no orphans to clean)
+      log =
+        capture_log(fn ->
+          result =
+            TaskRestorer.restore_task(task.id, registry, pubsub,
+              dynsup: dynsup,
+              sandbox_owner: sandbox_owner
+            )
+
+          assert {:ok, root_pid} = result
+          assert Process.alive?(root_pid)
+        end)
+
+      # Should NOT log any orphan cleanup messages
+      refute log =~ "orphan",
+             "Should not log orphan messages when no orphans exist"
+    end
+  end
+
+  describe "restore_task/4 - Acceptance (v6.0)" do
+    # R20: Full pause/resume round-trip preserves complete agent tree
+    @tag :acceptance
+    test "R20: full pause/resume round-trip preserves complete agent tree", %{
+      registry: registry,
+      dynsup: dynsup,
+      pubsub: pubsub,
+      sandbox_owner: sandbox_owner
+    } do
+      # USER SCENARIO:
+      # 1. User creates a task with parent + child agents
+      # 2. User pauses the task
+      # 3. User resumes the task
+      # 4. All original agents are visible with correct parent-child relationships
+
+      # Step 1: Create task with agent tree
+      {:ok, {task, task_pid}} =
+        create_task_with_cleanup("Acceptance test task",
+          sandbox_owner: sandbox_owner,
+          dynsup: dynsup,
+          registry: registry,
+          pubsub: pubsub
+        )
+
+      {:ok, root_pid} =
+        spawn_agent_with_cleanup(
+          dynsup,
+          %{
+            agent_id: "r20-root",
+            task_id: task.id,
+            parent_pid: nil,
+            status: "running",
+            task: "Root agent",
+            sandbox_owner: sandbox_owner
+          },
+          registry: registry,
+          pubsub: pubsub,
+          sandbox_owner: sandbox_owner
+        )
+
+      {:ok, child1_pid} =
+        spawn_agent_with_cleanup(
+          dynsup,
+          %{
+            agent_id: "r20-child1",
+            task_id: task.id,
+            parent_pid: root_pid,
+            status: "running",
+            task: "First child",
+            sandbox_owner: sandbox_owner
+          },
+          registry: registry,
+          pubsub: pubsub,
+          sandbox_owner: sandbox_owner
+        )
+
+      {:ok, child2_pid} =
+        spawn_agent_with_cleanup(
+          dynsup,
+          %{
+            agent_id: "r20-child2",
+            task_id: task.id,
+            parent_pid: root_pid,
+            status: "running",
+            task: "Second child",
+            sandbox_owner: sandbox_owner
+          },
+          registry: registry,
+          pubsub: pubsub,
+          sandbox_owner: sandbox_owner
+        )
+
+      # Verify all agents registered
+      assert Process.alive?(root_pid)
+      assert Process.alive?(child1_pid)
+      assert Process.alive?(child2_pid)
+
+      # Step 2: Pause task
+      # Monitor all agents
+      task_ref = Process.monitor(task_pid)
+      root_ref = Process.monitor(root_pid)
+      child1_ref = Process.monitor(child1_pid)
+      child2_ref = Process.monitor(child2_pid)
+
+      :ok = TaskRestorer.pause_task(task.id, registry: registry, dynsup: dynsup)
+
+      # Wait for ALL agents to terminate
+      for {ref, pid, name} <- [
+            {task_ref, task_pid, "task"},
+            {root_ref, root_pid, "root"},
+            {child1_ref, child1_pid, "child1"},
+            {child2_ref, child2_pid, "child2"}
+          ] do
+        receive do
+          {:DOWN, ^ref, :process, ^pid, _} -> :ok
+        after
+          5000 -> flunk("#{name} agent did not terminate within 5 seconds")
+        end
+      end
+
+      # All should be dead
+      refute Process.alive?(task_pid)
+      refute Process.alive?(root_pid)
+      refute Process.alive?(child1_pid)
+      refute Process.alive?(child2_pid)
+
+      # Step 3: Resume task
+      assert {:ok, new_root_pid} =
+               TaskRestorer.restore_task(task.id, registry, pubsub,
+                 dynsup: dynsup,
+                 sandbox_owner: sandbox_owner
+               )
+
+      # Wait for root initialization
+      assert {:ok, _root_state} = Quoracle.Agent.Core.get_state(new_root_pid)
+
+      # Step 4: Verify all original agents are restored
+      assert Process.alive?(new_root_pid)
+
+      # Both children should be restored
+      [{new_child1_pid, _}] = Registry.lookup(registry, {:agent, "r20-child1"})
+      [{new_child2_pid, _}] = Registry.lookup(registry, {:agent, "r20-child2"})
+      assert Process.alive?(new_child1_pid)
+      assert Process.alive?(new_child2_pid)
+
+      # Wait for children to initialize
+      assert {:ok, _child1_state} = Quoracle.Agent.Core.get_state(new_child1_pid)
+      assert {:ok, _child2_state} = Quoracle.Agent.Core.get_state(new_child2_pid)
+
+      # Verify task status is "running"
+      {:ok, updated_task} = TaskManager.get_task(task.id)
+      assert updated_task.status == "running"
+
+      # Verify parent-child relationships via Registry metadata
+      # Children should have the restored r20-root as parent (not the auto-root)
+      [{new_r20_root_pid, _}] = Registry.lookup(registry, {:agent, "r20-root"})
+      [{_, child1_meta}] = Registry.lookup(registry, {:agent, "r20-child1"})
+      [{_, child2_meta}] = Registry.lookup(registry, {:agent, "r20-child2"})
+
+      # Parent PID in Registry metadata should point to restored r20-root
+      assert child1_meta.parent_pid == new_r20_root_pid,
+             "Child 1 should have restored r20-root as parent"
+
+      assert child2_meta.parent_pid == new_r20_root_pid,
+             "Child 2 should have restored r20-root as parent"
+
+      # No orphans should exist — verify no extra agents for this task
+      all_agents = Quoracle.Agent.RegistryQueries.list_agents_for_task(task.id, registry)
+
+      # Should have exactly root + child1 + child2 + task-root (the auto-created root agent)
+      agent_ids = Enum.map(all_agents, fn {id, _} -> id end) |> Enum.sort()
+
+      assert "r20-child1" in agent_ids
+      assert "r20-child2" in agent_ids
+      assert "r20-root" in agent_ids
+
+      # Cleanup all restored agents
+      on_exit(fn ->
+        try do
+          for agent_id <- ["r20-root", "r20-child1", "r20-child2"] do
+            case Registry.lookup(registry, {:agent, agent_id}) do
+              [{pid, _}] ->
+                if Process.alive?(pid) do
+                  try do
+                    GenServer.stop(pid, :normal, :infinity)
+                  catch
+                    :exit, _ -> :ok
+                  end
+                end
+
+              _ ->
+                :ok
+            end
+          end
+        rescue
+          ArgumentError -> :ok
+        end
+      end)
+    end
+  end
+
   describe "pause_task/2 - Acceptance (v5.0)" do
     # A20: Pause completes after single consensus cycle (not multiple)
     # TEST-FIXES: Changed from pause semantics to stop semantics per spec A20

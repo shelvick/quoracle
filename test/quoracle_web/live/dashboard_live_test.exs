@@ -12,6 +12,15 @@ defmodule QuoracleWeb.DashboardLiveTest do
 
   import Test.AgentTestHelpers
 
+  # DB-only task helper: creates a task record without spawning an agent.
+  # Use when tests inject their own agents via {:agent_spawned, ...} messages
+  # and need to be the first writer of root_agent_id (first-writer-wins guard).
+  defp create_db_only_task(prompt) do
+    %Quoracle.Tasks.Task{}
+    |> Quoracle.Tasks.Task.changeset(%{prompt: prompt, status: "running"})
+    |> Quoracle.Repo.insert!()
+  end
+
   setup %{sandbox_owner: sandbox_owner} do
     # Create isolated dependencies for test isolation
     # NOTE: No DB queries in setup! Profile is created by create_task_with_cleanup in test bodies
@@ -139,14 +148,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
       dynsup: dynsup,
       sandbox_owner: sandbox_owner
     } do
-      # Create real task in DB first (with automatic cleanup)
-      {:ok, {task, _task_agent_pid}} =
-        create_task_with_cleanup("Selection test task",
-          sandbox_owner: sandbox_owner,
-          dynsup: dynsup,
-          registry: registry,
-          pubsub: pubsub
-        )
+      # DB-only task: no real agent spawned, so test agent becomes root
+      task = create_db_only_task("Selection test task")
 
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -187,14 +190,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
       dynsup: dynsup,
       sandbox_owner: sandbox_owner
     } do
-      # Create real task in DB first (with automatic cleanup)
-      {:ok, {task, _task_agent_pid}} =
-        create_task_with_cleanup("Log filter test task",
-          sandbox_owner: sandbox_owner,
-          dynsup: dynsup,
-          registry: registry,
-          pubsub: pubsub
-        )
+      # DB-only task: no real agent spawned, so test agent becomes root
+      task = create_db_only_task("Log filter test task")
 
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -352,14 +349,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
       dynsup: dynsup,
       sandbox_owner: sandbox_owner
     } do
-      # Create real task in DB first (with automatic cleanup)
-      {:ok, {task, _task_agent_pid}} =
-        create_task_with_cleanup("Agent spawn test task",
-          sandbox_owner: sandbox_owner,
-          dynsup: dynsup,
-          registry: registry,
-          pubsub: pubsub
-        )
+      # DB-only task: no real agent spawned, so test agent becomes root
+      task = create_db_only_task("Agent spawn test task")
 
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -394,14 +385,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
       dynsup: dynsup,
       sandbox_owner: sandbox_owner
     } do
-      # Create real task in DB first (with automatic cleanup)
-      {:ok, {task, _task_agent_pid}} =
-        create_task_with_cleanup("Status test task",
-          sandbox_owner: sandbox_owner,
-          dynsup: dynsup,
-          registry: registry,
-          pubsub: pubsub
-        )
+      # DB-only task: no real agent spawned, so test agent becomes root
+      task = create_db_only_task("Status test task")
 
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -448,14 +433,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
       dynsup: dynsup,
       sandbox_owner: sandbox_owner
     } do
-      # Create real task in DB first (with automatic cleanup)
-      {:ok, {task, _task_agent_pid}} =
-        create_task_with_cleanup("Hierarchy test task",
-          sandbox_owner: sandbox_owner,
-          dynsup: dynsup,
-          registry: registry,
-          pubsub: pubsub
-        )
+      # DB-only task: no real agent spawned, so test agent becomes root
+      task = create_db_only_task("Hierarchy test task")
 
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -535,14 +514,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
       dynsup: dynsup,
       sandbox_owner: sandbox_owner
     } do
-      # Create real task in DB first (with automatic cleanup)
-      {:ok, {task, _task_agent_pid}} =
-        create_task_with_cleanup("Reconnect test task",
-          sandbox_owner: sandbox_owner,
-          dynsup: dynsup,
-          registry: registry,
-          pubsub: pubsub
-        )
+      # DB-only task: no real agent spawned, so test agent becomes root
+      task = create_db_only_task("Reconnect test task")
 
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -748,14 +721,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
       dynsup: dynsup,
       sandbox_owner: sandbox_owner
     } do
-      # Create real task in DB first (with automatic cleanup)
-      {:ok, {task, _task_agent_pid}} =
-        create_task_with_cleanup("TaskTree test task",
-          sandbox_owner: sandbox_owner,
-          dynsup: dynsup,
-          registry: registry,
-          pubsub: pubsub
-        )
+      # DB-only task: no real agent spawned, so test agent becomes root
+      task = create_db_only_task("TaskTree test task")
 
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -791,14 +758,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
       dynsup: dynsup,
       sandbox_owner: sandbox_owner
     } do
-      # Create real task in DB first (with automatic cleanup)
-      {:ok, {task, _task_agent_pid}} =
-        create_task_with_cleanup("LogView test task",
-          sandbox_owner: sandbox_owner,
-          dynsup: dynsup,
-          registry: registry,
-          pubsub: pubsub
-        )
+      # DB-only task: no real agent spawned, so test agent becomes root
+      task = create_db_only_task("LogView test task")
 
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -1009,14 +970,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
            dynsup: dynsup,
            sandbox_owner: sandbox_owner
          } do
-      # Create task in database with "running" status (with automatic cleanup)
-      {:ok, {task, _task_agent_pid}} =
-        create_task_with_cleanup("Task with live agents",
-          sandbox_owner: sandbox_owner,
-          dynsup: dynsup,
-          registry: registry,
-          pubsub: pubsub
-        )
+      # DB-only task: no real agent spawned, so test agent becomes root
+      task = create_db_only_task("Task with live agents")
 
       # Mount Dashboard
       {:ok, view, _html} =
@@ -2589,14 +2544,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
       dynsup: dynsup,
       sandbox_owner: sandbox_owner
     } do
-      # Create real task to get valid UUID
-      {:ok, {task, _agent_pid}} =
-        create_task_with_cleanup("R26 state test",
-          sandbox_owner: sandbox_owner,
-          dynsup: dynsup,
-          registry: registry,
-          pubsub: pubsub
-        )
+      # DB-only task: no real agent spawned, so test agents control root_agent_id
+      task = create_db_only_task("R26 state test")
 
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -2621,17 +2570,6 @@ defmodule QuoracleWeb.DashboardLiveTest do
       # Process any queued PubSub messages
       render(view)
 
-      # Ensure current_task_id is set by manually sending root agent event
-      root_payload = %{
-        agent_id: "setup-root",
-        task_id: task.id,
-        parent_id: nil,
-        timestamp: DateTime.utc_now()
-      }
-
-      send(view.pid, {:agent_spawned, root_payload})
-      render(view)
-
       # Simulate restoration broadcast order: child BEFORE parent
       # This is the race condition that causes the bug
 
@@ -2653,7 +2591,7 @@ defmodule QuoracleWeb.DashboardLiveTest do
       send(view.pid, {:agent_spawned, child_payload})
       render(view)
 
-      # Parent arrives second
+      # Parent arrives second (becomes root via first-writer-wins since no prior root)
       send(view.pid, {:agent_spawned, parent_payload})
       render(view)
 
@@ -2693,14 +2631,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
       dynsup: dynsup,
       sandbox_owner: sandbox_owner
     } do
-      # Create real task to get valid UUID
-      {:ok, {task, _agent_pid}} =
-        create_task_with_cleanup("R27 deep hierarchy test",
-          sandbox_owner: sandbox_owner,
-          dynsup: dynsup,
-          registry: registry,
-          pubsub: pubsub
-        )
+      # DB-only task: no real agent spawned, so test agents control root_agent_id
+      task = create_db_only_task("R27 deep hierarchy test")
 
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
@@ -2723,17 +2655,6 @@ defmodule QuoracleWeb.DashboardLiveTest do
       end)
 
       # Process any queued PubSub messages
-      render(view)
-
-      # Ensure current_task_id is set by manually sending root agent event
-      root_payload = %{
-        agent_id: "setup-root",
-        task_id: task.id,
-        parent_id: nil,
-        timestamp: DateTime.utc_now()
-      }
-
-      send(view.pid, {:agent_spawned, root_payload})
       render(view)
 
       # Simulate 3-level hierarchy arriving in REVERSE order (worst case race)
@@ -3132,6 +3053,245 @@ defmodule QuoracleWeb.DashboardLiveTest do
       # Verify original budget unchanged
       {:ok, reloaded_task} = Quoracle.Tasks.TaskManager.get_task(task.id)
       assert reloaded_task.budget_limit == Decimal.new("100.00")
+    end
+  end
+
+  # ============================================================
+  # v12.0: Guard root_agent_id Assignment (fix-20260214-pause-resume-pipeline)
+  # Tests for first-writer-wins guard on root_agent_id in handle_agent_spawned.
+  # Prevents orphaned agents (with incorrectly nil parent_id) from overwriting
+  # the real root_agent_id during task restoration.
+  # ============================================================
+
+  describe "R6-R9: root_agent_id guard (v12.0)" do
+    alias Quoracle.Tasks.Task, as: TaskSchema
+
+    # Helper to create a DB-only task (no real agent spawned)
+    defp create_db_task(prompt) do
+      %TaskSchema{}
+      |> TaskSchema.changeset(%{prompt: prompt, status: "running"})
+      |> Quoracle.Repo.insert!()
+    end
+
+    # R6: First-Writer-Wins for Root Agent ID [UNIT]
+    test "R6: first-writer-wins prevents overwrite", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      # Create DB-only task (no real agent spawned)
+      task = create_db_task("R6 first-writer-wins test")
+
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      render(view)
+
+      # First root agent broadcasts with nil parent_id — sets root_agent_id
+      first_root_payload = %{
+        agent_id: "real-root-agent",
+        task_id: task.id,
+        parent_id: nil,
+        timestamp: DateTime.utc_now()
+      }
+
+      send(view.pid, {:agent_spawned, first_root_payload})
+      render(view)
+
+      # Verify root_agent_id is set to the first root
+      socket_assigns = :sys.get_state(view.pid).socket.assigns
+      task_state = socket_assigns.tasks[task.id]
+      assert task_state[:root_agent_id] == "real-root-agent"
+
+      # Second agent with nil parent_id broadcasts (orphan during restoration)
+      orphan_payload = %{
+        agent_id: "orphan-fake-root",
+        task_id: task.id,
+        parent_id: nil,
+        timestamp: DateTime.utc_now()
+      }
+
+      send(view.pid, {:agent_spawned, orphan_payload})
+      render(view)
+
+      # root_agent_id should NOT be overwritten by the second agent
+      socket_assigns = :sys.get_state(view.pid).socket.assigns
+      task_state = socket_assigns.tasks[task.id]
+
+      assert task_state[:root_agent_id] == "real-root-agent",
+             "root_agent_id should not be overwritten by second nil-parent agent. " <>
+               "Got: #{inspect(task_state[:root_agent_id])}"
+    end
+
+    # R7: Root Agent ID Set on First Nil Parent [UNIT]
+    # Backward compatibility: first nil-parent agent correctly sets root_agent_id
+    test "R7: root_agent_id set on first nil parent", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      # Create DB-only task (no real agent spawned)
+      task = create_db_task("R7 first nil parent test")
+
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      render(view)
+
+      # Send root agent broadcast with nil parent_id
+      root_payload = %{
+        agent_id: "r7-root-agent",
+        task_id: task.id,
+        parent_id: nil,
+        timestamp: DateTime.utc_now()
+      }
+
+      send(view.pid, {:agent_spawned, root_payload})
+      render(view)
+
+      # root_agent_id should be set to this agent
+      socket_assigns = :sys.get_state(view.pid).socket.assigns
+      task_state = socket_assigns.tasks[task.id]
+
+      assert task_state[:root_agent_id] == "r7-root-agent",
+             "root_agent_id should be set for first nil-parent agent. " <>
+               "Got: #{inspect(task_state[:root_agent_id])}"
+    end
+
+    # R9: Correct Root After Pause/Resume with Orphan [INTEGRATION]
+    test "R9: orphan does not hijack root_agent_id", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      # Create DB-only task (no real agent)
+      task = create_db_task("R9 orphan hijack test")
+
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      render(view)
+
+      # Simulate restoration sequence:
+      # 1. All agents terminated (root_agent_id cleared)
+      # 2. Real root broadcasts first (sets root_agent_id)
+      # 3. Orphan agent broadcasts with nil parent_id (should NOT overwrite)
+
+      # Step 1: Spawn and terminate all agents to clear root_agent_id
+      initial_root_payload = %{
+        agent_id: "r9-initial-root",
+        task_id: task.id,
+        parent_id: nil,
+        timestamp: DateTime.utc_now()
+      }
+
+      send(view.pid, {:agent_spawned, initial_root_payload})
+      render(view)
+
+      terminate_payload = %{
+        agent_id: "r9-initial-root",
+        task_id: task.id,
+        timestamp: DateTime.utc_now()
+      }
+
+      send(view.pid, {:agent_terminated, terminate_payload})
+      render(view)
+
+      # Verify root_agent_id is cleared (existing behavior)
+      socket_assigns = :sys.get_state(view.pid).socket.assigns
+      assert socket_assigns.tasks[task.id][:root_agent_id] == nil
+
+      # Step 2: Real root restored first
+      real_root_payload = %{
+        agent_id: "r9-real-root",
+        task_id: task.id,
+        parent_id: nil,
+        timestamp: DateTime.utc_now()
+      }
+
+      send(view.pid, {:agent_spawned, real_root_payload})
+      render(view)
+
+      # Verify root_agent_id set to real root
+      socket_assigns = :sys.get_state(view.pid).socket.assigns
+      assert socket_assigns.tasks[task.id][:root_agent_id] == "r9-real-root"
+
+      # Step 3: Orphan agent broadcasts with nil parent_id
+      # (this simulates Bug 1 - child persisted with parent_id=nil)
+      orphan_payload = %{
+        agent_id: "r9-orphan",
+        task_id: task.id,
+        parent_id: nil,
+        timestamp: DateTime.utc_now()
+      }
+
+      send(view.pid, {:agent_spawned, orphan_payload})
+      render(view)
+
+      # root_agent_id should still point to the real root, NOT the orphan
+      socket_assigns = :sys.get_state(view.pid).socket.assigns
+
+      assert socket_assigns.tasks[task.id][:root_agent_id] == "r9-real-root",
+             "Orphan should not hijack root_agent_id during restoration. " <>
+               "Expected: r9-real-root, " <>
+               "Got: #{inspect(socket_assigns.tasks[task.id][:root_agent_id])}"
     end
   end
 end

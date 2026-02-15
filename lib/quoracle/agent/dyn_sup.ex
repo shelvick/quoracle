@@ -390,9 +390,15 @@ defmodule Quoracle.Agent.DynSup do
 
   defp atomize_prompt_fields(value), do: value
 
-  # Known config keys that are persisted with atom keys but come back as strings from JSONB
-  # Keys that should be atomized when restoring from DB (all are internal, controlled values)
-  @config_keys ~w(test_mode initial_prompt model_pool profile_description capability_groups)
+  # Known config keys that are persisted with atom keys but come back as strings from JSONB.
+  # Keys that should be atomized when restoring from DB (all are internal, controlled values).
+  #
+  # NOTE: force_init_error is test infrastructure — used by tests to simulate agent init
+  # failures (e.g., R11/R13 in task_restorer_test, dyn_sup_test). It flows through
+  # ConfigManager → Initialization → config_builder and must be atomized here because
+  # tests insert DB records with string-keyed JSONB configs containing this flag.
+  # Removal would require a test-only config overlay pattern across 6+ modules.
+  @config_keys ~w(test_mode initial_prompt model_pool profile_description capability_groups force_init_error)
 
   defp atomize_config_keys(nil), do: %{}
 

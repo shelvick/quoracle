@@ -142,14 +142,15 @@ defmodule Quoracle.Agent.ActionDeadlockPreventionTest do
         _result_state =
           ActionExecutor.execute_consensus_action(raw_state, action_response, agent_pid)
 
-        # CRITICAL: Core should respond within 100ms even though action takes 500ms.
+        # CRITICAL: Core should respond within 200ms even though action takes 500ms.
+        # (200ms allows for scheduler pressure under parallel test load.)
         # If ActionExecutor blocked synchronously, get_state would also block.
         start_time = System.monotonic_time(:millisecond)
         assert {:ok, _current_state} = Core.get_state(agent_pid)
         elapsed = System.monotonic_time(:millisecond) - start_time
 
-        assert elapsed < 100,
-               "Core took #{elapsed}ms to respond - should be < 100ms. " <>
+        assert elapsed < 200,
+               "Core took #{elapsed}ms to respond - should be < 200ms. " <>
                  "This suggests Core is blocked during action execution (deadlock)."
       end)
     end

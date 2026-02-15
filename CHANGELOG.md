@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.10] - 2026-02-14
+
+### Fixed
+
+- **Parent ID lost after pause/resume** — Child agents now correctly persist
+  their parent ID when the parent process has exited, preventing nil parent_id
+  after restoration.
+- **Root agent hijack on restore** — Dashboard now uses first-writer-wins guard
+  on root_agent_id, preventing orphaned agents from overwriting the root during
+  task restoration.
+- **Restore halts on single agent failure** — TaskRestorer now continues past
+  individual agent failures instead of aborting the entire restoration.
+- **In-flight spawns missed during pause** — Post-pause sweep catches agents
+  that register after the initial Registry query, ensuring all agents are
+  stopped before persistence.
+- **Orphaned agents from previous session** — New cleanup pass terminates
+  agents surviving from a prior session that were not part of the restoration
+  set.
+
 ## [0.1.9] - 2026-02-14
 
 ### Fixed

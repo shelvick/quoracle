@@ -161,14 +161,7 @@ defmodule QuoracleWeb.DashboardLive.EventHandlers do
            sandbox_owner: socket.assigns[:sandbox_owner]
          ) do
       {:ok, _root_pid} ->
-        # Update task status in database
-        # Wrap in try/catch for test cleanup race condition
-        try do
-          Quoracle.Tasks.TaskManager.update_task_status(task_id, "running")
-        catch
-          :exit, _ -> :ok
-        end
-
+        # TaskRestorer.handle_restore_result already sets task status to "running" in DB
         # Update local state if task exists (agents will be added via spawn events)
         updated_tasks =
           if Map.has_key?(socket.assigns.tasks, task_id) do

@@ -12,7 +12,7 @@
   - build_agent_alive_map/1: Build agent_id => alive status map
 - Subscriptions: safe_subscribe with MapSet tracking, auto-subscribe to agent todos topic, task message topics
 - EventHandlers: submit_prompt, pause/resume_task, delete_task, select_agent
-- MessageHandlers: agent_spawned/terminated, log_entry, task_message, agent_message, todos_updated (2025-12), send_direct_message (2025-11), link_orphaned_children (2025-12)
+- MessageHandlers: agent_spawned/terminated (v12.0: first-writer-wins root_agent_id guard), log_entry, task_message, agent_message, todos_updated (2025-12), send_direct_message (2025-11), link_orphaned_children (2025-12)
 - TestHelpers: Test-specific handlers
 
 ## SecretManagementLive (5-module architecture, 2025-10-24)
@@ -79,4 +79,9 @@
 ## Dependencies
 TaskManager, TaskRestorer, RegistryQueries, Core, PubSub, UI.TaskTree, UI.LogView, UI.Mailbox
 
-Test coverage: 48 dashboard_live_test (incl. 6 restored child visibility R22-R27), 16 dashboard_delete_integration_test, 16 dashboard_3panel_integration_test, 16 buffer_integration_test (UI persistence R17-R24, R35-R42)
+## Pause/Resume Pipeline Fix (2026-02-15, fix-20260214-pause-resume-pipeline)
+- **MessageHandlers v12.0**: First-writer-wins guard on root_agent_id — prevents orphaned agents from overwriting real root during restoration
+- **EventHandlers**: Removed redundant TaskManager.update_task_status("running") after restore (TaskRestorer.handle_restore_result already does this)
+- Pattern: `if is_nil(task[:root_agent_id])` guards root_agent_id assignment
+
+Test coverage: 51 dashboard_live_test (48 base + 3 new R6-R9), 16 dashboard_delete_integration_test, 16 dashboard_3panel_integration_test, 16 buffer_integration_test (UI persistence R17-R24, R35-R42)

@@ -3,7 +3,7 @@
 ## Modules
 - ClientAPI: GenServer wrappers (209 lines, 17 functions with @spec), get_state/1, handle_message/2, adjust_child_budget/4
 - Initialization: Init and DB setup (154 lines), start_link opts normalization
-- Persistence: DB persistence (365 lines), model_histories + ACE state serialization
+- Persistence: DB persistence (149 lines), extract_parent_agent_id with state.parent_id fallback (v36.0), delegates ACE to submodule
 - Persistence.ACEState: ACE state serialization (332 lines), context_lessons + model_states
 - MessageInfoHandler: Info message dispatch (329 lines), handle_trigger_consensus/1, handle_down/4, handle_spawn_failed/2
 - TodoHandler: Per-agent task list management (57 lines)

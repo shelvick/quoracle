@@ -104,12 +104,21 @@ defmodule QuoracleWeb.DashboardLive.MessageHandlers do
         {socket.assigns.tasks, socket, socket.assigns.current_task_id}
       else
         # Update task status and subscribe
+        # First-writer-wins guard: only set root_agent_id if not already set.
+        # Prevents orphaned agents (with incorrectly nil parent_id) from
+        # overwriting the real root_agent_id during task restoration.
         updated_task =
           if is_nil(parent_id) do
-            task
-            |> Map.put(:status, "running")
-            |> Map.put(:live, true)
-            |> Map.put(:root_agent_id, agent_id)
+            base =
+              task
+              |> Map.put(:status, "running")
+              |> Map.put(:live, true)
+
+            if is_nil(task[:root_agent_id]) do
+              Map.put(base, :root_agent_id, agent_id)
+            else
+              base
+            end
           else
             task
             |> Map.put(:status, "running")

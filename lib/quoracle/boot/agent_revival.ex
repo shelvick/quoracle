@@ -91,17 +91,9 @@ defmodule Quoracle.Boot.AgentRevival do
     try do
       case TaskRestorer.restore_task(task.id, registry, pubsub, restore_opts) do
         {:ok, root_pid} ->
+          # v6.0: Partial success also returns {:ok, root_pid} with logged errors
           Logger.info("Boot: Restored task #{task.id} (root: #{inspect(root_pid)})")
           {:ok, root_pid}
-
-        {:error, {:partial_restore, restored, failed_agent, reason}} ->
-          # Partial restoration - some agents restored, one failed
-          Logger.error(
-            "Boot: Task #{task.id} partially restored " <>
-              "(#{length(restored)} agents OK, failed at #{failed_agent}: #{inspect(reason)})"
-          )
-
-          {:error, :partial_restore}
 
         {:error, reason} ->
           Logger.error("Boot: Failed to restore task #{task.id}: #{inspect(reason)}")

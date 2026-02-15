@@ -6,6 +6,7 @@
 ## Key Functions
 - restore_running_tasks/0: Production entry point, uses global Registry/PubSub
 - restore_running_tasks/1: Testable with DI (registry, pubsub, sandbox_owner opts)
+- restore_task_safely/4: Per-task try/rescue/catch wrapper, v6.0 handles partial success ({:ok, root_pid} with logged errors)
 
 ## Patterns
 - Always returns :ok (fire-and-forget, never crashes boot)
