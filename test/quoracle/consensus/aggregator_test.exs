@@ -5,7 +5,9 @@ defmodule Quoracle.Consensus.AggregatorTest do
 
   # Uses Task.async (not Task.async_stream) which works fine with DataCase shared mode
   use Quoracle.DataCase, async: true
-  alias Quoracle.Consensus.Aggregator
+  alias Quoracle.Agent.Consensus
+  alias Quoracle.Consensus.{Aggregator, Result}
+  alias Quoracle.Consensus.ActionParser
 
   # DataCase already handles sandbox setup with shared mode
 
@@ -89,6 +91,83 @@ defmodule Quoracle.Consensus.AggregatorTest do
     test "handles empty responses list" do
       clusters = Aggregator.cluster_responses([])
       assert clusters == []
+    end
+
+    test "clusters wait actions with different wait values together (percentile merge)" do
+      # Bug fix: Models proposing :wait with different durations (30, true, 60)
+      # were producing different fingerprints and splitting into 3 clusters of 1,
+      # preventing consensus. They should cluster together since wait uses {:percentile, 50}.
+      responses = [
+        %{action: :wait, params: %{wait: 30}, reasoning: "wait 30s"},
+        %{action: :wait, params: %{wait: true}, reasoning: "wait indefinitely"},
+        %{action: :wait, params: %{wait: 60}, reasoning: "wait 60s"}
+      ]
+
+      clusters = Aggregator.cluster_responses(responses)
+      assert length(clusters) == 1
+      assert hd(clusters).count == 3
+    end
+
+    test "clusters actions with different mode_selection param values together" do
+      # fetch_web's follow_redirects uses :mode_selection — different boolean values
+      # should cluster together, not split.
+      responses = [
+        %{
+          action: :fetch_web,
+          params: %{url: "https://example.com", follow_redirects: true},
+          reasoning: "fetch with redirects"
+        },
+        %{
+          action: :fetch_web,
+          params: %{url: "https://example.com", follow_redirects: false},
+          reasoning: "fetch without redirects"
+        },
+        %{
+          action: :fetch_web,
+          params: %{url: "https://example.com", follow_redirects: true},
+          reasoning: "fetch page"
+        }
+      ]
+
+      clusters = Aggregator.cluster_responses(responses)
+      assert length(clusters) == 1
+      assert hd(clusters).count == 3
+    end
+
+    test "clusters fetch_web with different timeout values together (percentile)" do
+      # timeout uses {:percentile, 50} — different timeout values should cluster
+      responses = [
+        %{
+          action: :fetch_web,
+          params: %{url: "https://example.com", timeout: 5000},
+          reasoning: "fetch"
+        },
+        %{
+          action: :fetch_web,
+          params: %{url: "https://example.com", timeout: 10000},
+          reasoning: "fetch"
+        },
+        %{
+          action: :fetch_web,
+          params: %{url: "https://example.com", timeout: 30000},
+          reasoning: "fetch"
+        }
+      ]
+
+      clusters = Aggregator.cluster_responses(responses)
+      assert length(clusters) == 1
+      assert hd(clusters).count == 3
+    end
+
+    test "still separates actions with different exact_match params" do
+      # :exact_match params (like url, command) must still split clusters
+      responses = [
+        %{action: :fetch_web, params: %{url: "https://a.com"}, reasoning: "fetch a"},
+        %{action: :fetch_web, params: %{url: "https://b.com"}, reasoning: "fetch b"}
+      ]
+
+      clusters = Aggregator.cluster_responses(responses)
+      assert length(clusters) == 2
     end
   end
 
@@ -1010,6 +1089,142 @@ defmodule Quoracle.Consensus.AggregatorTest do
 
       # Without accumulator, returns plain float
       assert is_float(result)
+    end
+  end
+
+  # =============================================================================
+  # Mergeable Param Clustering — Integration Tests
+  # Fix: percentile/mode_selection params no longer split clusters
+  # =============================================================================
+
+  describe "[INTEGRATION] mergeable param clustering" do
+    test "wait actions with different durations merge" do
+      # 3 models propose :wait with different durations.
+      # Previously: 3 clusters of 1, no consensus. Now: 1 cluster, consensus.
+      responses = [
+        %{action: :wait, params: %{wait: 30}, reasoning: "wait 30s"},
+        %{action: :wait, params: %{wait: 45}, reasoning: "wait 45s"},
+        %{action: :wait, params: %{wait: 60}, reasoning: "wait a minute"}
+      ]
+
+      clusters = Aggregator.cluster_responses(responses)
+      assert length(clusters) == 1
+      cluster = hd(clusters)
+      assert cluster.count == 3
+
+      # Majority found
+      assert {:majority, ^cluster} = Aggregator.find_majority_cluster(clusters, 3)
+
+      # format_result produces consensus with merged wait value
+      {outcome, merged, _opts} = Result.format_result(clusters, 3, 1)
+      assert outcome == :consensus
+      assert merged.action == :wait
+
+      # Percentile 50 of [30, 45, 60] = 45 (median)
+      assert merged.params.wait == 45
+
+      # Must not produce forced_decision or split clusters
+      refute length(clusters) > 1
+    end
+
+    test "percentile + mode_selection merge in fetch_web" do
+      # Both percentile (timeout) and mode_selection (follow_redirects)
+      # merge within a single action type.
+      responses = [
+        %{
+          action: :fetch_web,
+          params: %{url: "https://example.com", timeout: 5000, follow_redirects: true},
+          reasoning: "fetch with 5s timeout"
+        },
+        %{
+          action: :fetch_web,
+          params: %{url: "https://example.com", timeout: 30000, follow_redirects: false},
+          reasoning: "fetch with 30s timeout"
+        },
+        %{
+          action: :fetch_web,
+          params: %{url: "https://example.com", timeout: 10000, follow_redirects: true},
+          reasoning: "fetch with 10s timeout"
+        }
+      ]
+
+      clusters = Aggregator.cluster_responses(responses)
+      assert length(clusters) == 1
+      assert hd(clusters).count == 3
+
+      {outcome, merged, _opts} = Result.format_result(clusters, 3, 1)
+      assert outcome == :consensus
+      assert merged.action == :fetch_web
+      assert merged.params.url == "https://example.com"
+
+      # Timeout: percentile 50 of [5000, 10000, 30000] = 10000
+      assert merged.params.timeout == 10000
+
+      # follow_redirects: mode_selection (true 2x, false 1x → true)
+      assert merged.params.follow_redirects == true
+
+      # Must not split into multiple clusters
+      refute length(clusters) > 1
+    end
+
+    test "exact_match params still prevent clustering" do
+      # Different exact_match params must still split clusters.
+      responses = [
+        %{action: :fetch_web, params: %{url: "https://a.com", timeout: 5000}, reasoning: "a"},
+        %{action: :fetch_web, params: %{url: "https://a.com", timeout: 30000}, reasoning: "a"},
+        %{action: :fetch_web, params: %{url: "https://b.com", timeout: 5000}, reasoning: "b"}
+      ]
+
+      clusters = Aggregator.cluster_responses(responses)
+
+      # url is :exact_match — different URLs must split
+      assert length(clusters) == 2
+      refute length(clusters) == 1
+
+      # a.com responses cluster (timeout differs but is percentile)
+      a_cluster = Enum.find(clusters, fn c -> hd(c.actions).params.url == "https://a.com" end)
+      assert a_cluster.count == 2
+
+      # b.com is separate
+      b_cluster = Enum.find(clusters, fn c -> hd(c.actions).params.url == "https://b.com" end)
+      assert b_cluster.count == 1
+    end
+  end
+
+  # =============================================================================
+  # Acceptance: Full pipeline from raw LLM JSON to consensus decision
+  # =============================================================================
+
+  describe "[ACCEPTANCE] LLM response to consensus" do
+    @tag :acceptance
+    test "LLM wait responses with differing values converge" do
+      # Full pipeline: model output → parse → validate → cluster → result
+      raw_responses = [
+        %{content: ~s({"action": "wait", "params": {"wait": 30}, "reasoning": "wait 30s"})},
+        %{content: ~s({"action": "wait", "params": {"wait": 45}, "reasoning": "wait 45s"})},
+        %{content: ~s({"action": "wait", "params": {"wait": 60}, "reasoning": "wait 60s"})}
+      ]
+
+      # Step 1: Parse (ActionParser — system entry for model output)
+      parsed = ActionParser.parse_llm_responses(raw_responses)
+      refute Enum.any?(parsed, &is_nil/1)
+
+      # Step 2: Validate (Consensus.filter_invalid_responses — validation gate)
+      {valid, 0} = Consensus.filter_invalid_responses(parsed)
+      assert length(valid) == 3
+
+      # Step 3: Cluster + Result (observable consensus outcome)
+      clusters = Aggregator.cluster_responses(valid)
+      {outcome, merged, _opts} = Result.format_result(clusters, 3, 1)
+
+      # Positive: consensus reached, median wait value selected
+      assert outcome == :consensus
+      assert merged.action == :wait
+      assert merged.params.wait == 45
+
+      # Negative: must NOT split into multiple clusters or force decision
+      refute outcome == :forced_decision
+      refute length(clusters) > 1
     end
   end
 end

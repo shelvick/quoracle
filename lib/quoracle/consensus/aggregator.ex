@@ -367,15 +367,21 @@ defmodule Quoracle.Consensus.Aggregator do
     # For each parameter, apply the consensus rule to create a normalized signature
     Enum.reduce(schema.required_params ++ schema.optional_params, %{}, fn param, acc ->
       # Handle both string and atom keys since LLM responses have string keys
+      # Use fetch/2 to distinguish false from missing (false is a valid value)
       param_str = Atom.to_string(param)
-      value = Map.get(params, param) || Map.get(params, param_str)
 
-      if value do
+      value =
+        case Map.fetch(params, param) do
+          {:ok, v} -> v
+          :error -> Map.get(params, param_str)
+        end
+
+      if is_nil(value) do
+        acc
+      else
         rule = schema.consensus_rules[param]
         normalized = normalize_param_for_signature(value, rule)
         Map.put(acc, param, normalized)
-      else
-        acc
       end
     end)
   end
@@ -392,8 +398,9 @@ defmodule Quoracle.Consensus.Aggregator do
         normalize_semantic_string(value, threshold)
 
       :mode_selection ->
-        # Values that need mode selection are kept as-is
-        value
+        # Mode selection picks most common value during merge —
+        # different values should cluster together, not split
+        :_mode_mergeable
 
       :union_merge ->
         # Lists are sorted for comparison
@@ -404,8 +411,9 @@ defmodule Quoracle.Consensus.Aggregator do
         if is_map(value), do: deep_sort_map(value), else: value
 
       {:percentile, _n} ->
-        # Numeric values are kept as-is for percentile
-        value
+        # Percentile computes median/Nth during merge —
+        # different numeric values should cluster together, not split
+        :_percentile_mergeable
 
       _ ->
         value

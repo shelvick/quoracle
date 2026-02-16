@@ -147,7 +147,14 @@ defmodule Quoracle.Actions.DismissChild do
       TreeTerminator.terminate_tree(child_id, parent_id, reason, deps)
 
       # Reconcile budget: create absorption record, release escrow (v4.0)
-      reconcile_child_budget(parent_pid, child_budget_data, child_id, task_id, tree_spent)
+      reconcile_child_budget(
+        parent_pid,
+        child_budget_data,
+        child_id,
+        task_id,
+        tree_spent,
+        deps.pubsub
+      )
 
       if notify_pid, do: send(notify_pid, {:dismiss_complete, child_id})
     catch
@@ -194,47 +201,107 @@ defmodule Quoracle.Actions.DismissChild do
   end
 
   # Reconcile budget with pre-queried spent (after tree termination) (v4.0)
-  @spec reconcile_child_budget(pid() | nil, map() | nil, String.t(), binary() | nil, Decimal.t()) ::
-          :ok
-  defp reconcile_child_budget(parent_pid, child_budget_data, child_id, task_id, tree_spent) do
+  # v4.1: Always create absorption record for non-zero costs to preserve task-level totals.
+  # Previously, N/A children had their cost records deleted by TreeTerminator with no
+  # replacement, causing task costs to drop.
+  @spec reconcile_child_budget(
+          pid() | nil,
+          map() | nil,
+          String.t(),
+          binary() | nil,
+          Decimal.t(),
+          atom() | nil
+        ) :: :ok
+  defp reconcile_child_budget(
+         parent_pid,
+         child_budget_data,
+         child_id,
+         task_id,
+         tree_spent,
+         pubsub
+       ) do
+    # Step 1: Create absorption record for any non-zero costs (all budget modes)
+    create_absorption_record(parent_pid, child_budget_data, child_id, task_id, tree_spent, pubsub)
+
+    # Step 2: Release escrow only for allocated children
     case child_budget_data do
       %{mode: :allocated, allocated: allocated} when not is_nil(allocated) ->
         if parent_pid && Process.alive?(parent_pid) do
           try do
-            {:ok, parent_state} = Core.get_state(parent_pid)
-            parent_agent_id = parent_state.agent_id
-
-            # Create absorption cost record under the PARENT
-            Recorder.record_silent(%{
-              agent_id: parent_agent_id,
-              task_id: task_id,
-              cost_type: "child_budget_absorbed",
-              cost_usd: tree_spent,
-              metadata: %{
-                child_agent_id: child_id,
-                child_allocated: decimal_to_string(allocated),
-                child_tree_spent: decimal_to_string(tree_spent),
-                unspent_returned:
-                  decimal_to_string(
-                    Decimal.max(Decimal.sub(allocated, tree_spent), Decimal.new("0"))
-                  ),
-                dismissed_at: DateTime.to_iso8601(DateTime.utc_now())
-              }
-            })
-
-            # Use Escrow.release_allocation to properly update parent
             Core.release_child_budget(parent_pid, allocated, tree_spent)
           catch
             :exit, _ -> :ok
           end
         end
 
-        :ok
-
       _ ->
-        # N/A or no budget - nothing to reconcile
         :ok
     end
+
+    :ok
+  end
+
+  # Create absorption cost record under parent to preserve task-level totals.
+  # TreeTerminator deletes the child's original cost records, so this record
+  # ensures those costs remain visible in task-level aggregation queries.
+  @spec create_absorption_record(
+          pid() | nil,
+          map() | nil,
+          String.t(),
+          binary() | nil,
+          Decimal.t(),
+          atom() | nil
+        ) :: :ok
+  defp create_absorption_record(nil, _budget_data, _child_id, _task_id, _tree_spent, _pubsub) do
+    :ok
+  end
+
+  defp create_absorption_record(parent_pid, budget_data, child_id, task_id, tree_spent, pubsub) do
+    if !Decimal.equal?(tree_spent, 0) && Process.alive?(parent_pid) do
+      try do
+        {:ok, parent_state} = Core.get_state(parent_pid)
+        parent_agent_id = parent_state.agent_id
+
+        allocated = if budget_data, do: budget_data[:allocated], else: nil
+
+        cost_data = %{
+          agent_id: parent_agent_id,
+          task_id: task_id,
+          cost_type: "child_budget_absorbed",
+          cost_usd: tree_spent,
+          metadata: %{
+            child_agent_id: child_id,
+            child_allocated: format_allocated(allocated),
+            child_tree_spent: decimal_to_string(tree_spent),
+            unspent_returned: format_unspent(allocated, tree_spent),
+            dismissed_at: DateTime.to_iso8601(DateTime.utc_now())
+          }
+        }
+
+        if pubsub do
+          Recorder.record(cost_data, pubsub: pubsub)
+        else
+          Recorder.record_silent(cost_data)
+        end
+      catch
+        :exit, _ -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  # Format allocated for absorption metadata
+  @spec format_allocated(Decimal.t() | nil) :: String.t()
+  defp format_allocated(nil), do: "N/A"
+  defp format_allocated(allocated), do: decimal_to_string(allocated)
+
+  # Format unspent returned for absorption metadata
+  @spec format_unspent(Decimal.t() | nil, Decimal.t()) :: String.t()
+  defp format_unspent(nil, _tree_spent), do: "0"
+
+  defp format_unspent(allocated, tree_spent) do
+    decimal_to_string(Decimal.max(Decimal.sub(allocated, tree_spent), Decimal.new("0")))
   end
 
   # Convert Decimal to human-readable string for metadata (strips DB trailing zeros)

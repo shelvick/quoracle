@@ -9,9 +9,20 @@ defmodule Quoracle.Consensus.Aggregator.ParamMatching do
   def params_match?(params1, params2, consensus_rules) do
     Enum.all?(consensus_rules, fn {param, rule} ->
       # Handle both string and atom keys since LLM responses have string keys
+      # Use fetch/2 to preserve false values (false is valid, not missing)
       param_str = Atom.to_string(param)
-      val1 = Map.get(params1, param) || Map.get(params1, param_str)
-      val2 = Map.get(params2, param) || Map.get(params2, param_str)
+
+      val1 =
+        case Map.fetch(params1, param) do
+          {:ok, v} -> v
+          :error -> Map.get(params1, param_str)
+        end
+
+      val2 =
+        case Map.fetch(params2, param) do
+          {:ok, v} -> v
+          :error -> Map.get(params2, param_str)
+        end
 
       param_values_match?(val1, val2, rule)
     end)
@@ -30,8 +41,15 @@ defmodule Quoracle.Consensus.Aggregator.ParamMatching do
         threshold = opts[:threshold] || 0.9
         semantic_match_with_embeddings?(val1, val2, threshold)
 
+      :mode_selection ->
+        # Mode selection merges by picking most common — always cluster together
+        true
+
+      {:percentile, _n} ->
+        # Percentile merges by computing Nth value — always cluster together
+        true
+
       _ ->
-        # For other rules, exact match for clustering
         val1 == val2
     end
   end

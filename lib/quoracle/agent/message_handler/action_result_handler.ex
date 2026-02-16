@@ -119,6 +119,9 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
     pubsub = Map.get(state, :pubsub)
     action_type = Map.get(action_info, :type)
 
+    # Enrich command_not_found with available command_ids so LLM can self-correct
+    result = maybe_enrich_shell_error(result, action_type, state, action_info)
+
     case result do
       {:ok, _} = success ->
         AgentEvents.broadcast_action_completed(state.agent_id, action_id, success, pubsub)
@@ -173,10 +176,11 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
 
     # v12.0 R3-R6: Flush queued messages after action result
     # Result is already in history, now add queued messages in FIFO order
+    had_queued = Map.get(new_state, :queued_messages, []) != []
     new_state = flush_queued_messages(new_state)
 
     # v35.0: Extended wait parameter handling from non-blocking dispatch opts
-    handle_action_result_continuation(new_state, result, opts)
+    handle_action_result_continuation(new_state, result, [{:had_queued, had_queued} | opts])
   end
 
   # v35.0 R5: Track spawned children from non-blocking dispatch results
@@ -218,6 +222,30 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
   end
 
   defp maybe_update_budget_committed(state, _result, _opts), do: state
+
+  # Enrich :command_not_found errors for execute_shell with available command_ids.
+  # Helps the LLM self-correct when it fabricates or corrupts a check_id UUID.
+  @spec maybe_enrich_shell_error(any(), atom(), map(), map()) :: any()
+  defp maybe_enrich_shell_error({:error, :command_not_found}, :execute_shell, state, action_info) do
+    requested =
+      get_in(action_info, [:params, :check_id]) ||
+        get_in(action_info, [:params, "check_id"]) ||
+        "unknown"
+
+    available = Map.keys(Map.get(state, :shell_routers, %{}))
+
+    hint =
+      if available == [] do
+        "No async commands are currently tracked. " <>
+          "The command may have already completed and delivered its result."
+      else
+        "Currently tracked command_ids: #{Enum.join(available, ", ")}"
+      end
+
+    {:error, "command_not_found: check_id '#{requested}' not recognized. #{hint}"}
+  end
+
+  defp maybe_enrich_shell_error(result, _action_type, _state, _action_info), do: result
 
   # v25.0: Track shell Router PID in shell_routers for check_id routing.
   # Keyed by command_id from async shell result (what the LLM uses in check_id).
@@ -265,8 +293,14 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
 
       # Always-sync with wait:true AND success -> wait for external event (no consensus)
       # Error results fall through to continue consensus (agent would stall forever otherwise)
+      # If messages were queued during action execution, the "external event" already arrived
       always_sync and wait_value == true and match?({:ok, _}, result) ->
-        {:noreply, new_state}
+        if Keyword.get(opts, :had_queued, false) do
+          new_state = StateUtils.schedule_consensus_continuation(new_state)
+          {:noreply, new_state}
+        else
+          {:noreply, new_state}
+        end
 
       # :wait action with timer result -> set wait_timer
       action_atom == :wait and map_result_with_timer?(result) ->

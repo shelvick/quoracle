@@ -12,7 +12,8 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
   - R25: Parent committed decreases correctly
   - R26: Unspent budget returns to available
   - R27: Overspent child clamped to zero
-  - R28: N/A child skip reconciliation
+  - R28: N/A child skip escrow reconciliation (zero-cost preserved)
+  - R28b: N/A child with costs creates absorption record
   - R29: Over budget re-evaluated after absorption
   - R30: Acceptance - full dismissal budget flow
   """
@@ -515,6 +516,81 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
       {:ok, parent_state} = Core.get_state(parent_pid)
 
       assert Decimal.equal?(parent_state.budget_data.committed, Decimal.new("40.00")),
+             "Parent committed should be unchanged after N/A child dismissal"
+    end
+
+    @tag :r28
+    @tag :integration
+    test "R28b: N/A child with costs creates absorption record to preserve task totals",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R28b-#{System.unique_integer([:positive])}"
+      child_id = "child-R28b-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("0")
+      }
+
+      child_budget = %{mode: :na, allocated: nil, committed: nil}
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      # Child incurred costs despite having no budget allocation
+      _child_cost = insert_cost(child_id, task.id, Decimal.new("15.00"))
+
+      # Snapshot task total BEFORE dismissal
+      task_costs_before =
+        Repo.one(
+          from(c in AgentCost,
+            where: c.task_id == ^task.id,
+            select: sum(c.cost_usd)
+          )
+        )
+
+      # Act: Dismiss N/A child
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+      :ok = wait_for_dismiss_complete(child_id)
+
+      # Assert: Absorption record created under parent
+      absorption_records =
+        Repo.all(
+          from(c in AgentCost,
+            where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
+          )
+        )
+
+      assert length(absorption_records) == 1,
+             "Absorption record must be created for N/A child with costs"
+
+      absorption = hd(absorption_records)
+      assert Decimal.equal?(absorption.cost_usd, Decimal.new("15.00"))
+      assert absorption.metadata["child_allocated"] == "N/A"
+      assert absorption.metadata["unspent_returned"] == "0"
+
+      # Assert: Task-level total preserved (costs must never drop after dismissal)
+      task_costs_after =
+        Repo.one(
+          from(c in AgentCost,
+            where: c.task_id == ^task.id,
+            select: sum(c.cost_usd)
+          )
+        )
+
+      assert Decimal.equal?(task_costs_after, task_costs_before),
+             "Task costs must not decrease after dismissal. " <>
+               "Before: #{task_costs_before}, After: #{task_costs_after}"
+
+      # Assert: Parent committed still unchanged (no escrow for N/A children)
+      {:ok, parent_state} = Core.get_state(parent_pid)
+
+      assert Decimal.equal?(parent_state.budget_data.committed, Decimal.new("0")),
              "Parent committed should be unchanged after N/A child dismissal"
     end
   end

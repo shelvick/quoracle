@@ -280,15 +280,20 @@ defmodule Quoracle.Agent.Reflector do
     end
   end
 
-  # Dynamic max_tokens: min(context_window - input_tokens, output_limit)
+  # Dynamic max_tokens: min(context_window - buffered_input, output_limit)
   # Mirrors PerModelQuery.calculate_max_tokens/2 for the Reflector code path.
+  # Safety margin absorbs tokenizer variance (cl100k_base undercounts for DeepSeek ~1-5%).
+  @token_safety_margin 0.05
+
   @spec calculate_max_tokens(list(map()), String.t()) :: pos_integer()
   defp calculate_max_tokens(messages, model_id) do
     context_window = TokenManager.get_model_context_limit(model_id)
     input_tokens = TokenManager.estimate_all_messages_tokens(messages)
     output_limit = TokenManager.get_model_output_limit(model_id)
 
-    (context_window - input_tokens)
+    buffered_input = ceil(input_tokens * (1 + @token_safety_margin))
+
+    (context_window - buffered_input)
     |> max(1)
     |> min(output_limit)
   end
