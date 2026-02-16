@@ -1,6 +1,6 @@
 defmodule Quoracle.Agent.ReflectorMultimodalTest do
   @moduledoc """
-  Tests for multimodal content handling in Reflector.build_reflection_prompt/1.
+  Tests for multimodal content handling in Reflector.build_reflection_messages/1.
 
   WorkGroupID: fix-20260116-233700
   Packet: 2 (Secondary fix)
@@ -8,9 +8,9 @@ defmodule Quoracle.Agent.ReflectorMultimodalTest do
   These tests verify that multimodal content (from MCP screenshots) is properly
   stringified in reflection prompts instead of producing garbled output.
 
-  Test strategy: Since build_reflection_prompt/1 is private, we inject a query_fn
-  that replicates the prompt-building logic and captures the result. Tests assert
-  on the EXPECTED format and will fail until stringify_content/1 is implemented.
+  Test strategy: We inject a query_fn that replicates the content-formatting
+  logic and captures the result. Tests assert on the EXPECTED format of the
+  stringified content within the reflection messages.
   """
 
   use Quoracle.DataCase, async: true
@@ -45,11 +45,11 @@ defmodule Quoracle.Agent.ReflectorMultimodalTest do
   Messages to analyze:
   """
 
-  # Helper that replicates build_reflection_prompt logic using shared ContentStringifier
-  # This mirrors the production implementation in Reflector module
+  # Helper that replicates content-formatting logic using shared ContentStringifier
+  # This mirrors the production message content formatting in Reflector module
   defp capture_prompt_query_fn(test_pid) do
     fn messages, _model_id, _opts ->
-      # Replicate build_reflection_prompt/1 using shared utility
+      # Replicate the content formatting from build_reflection_messages/1
       messages_text =
         Enum.map_join(messages, "\n", fn msg ->
           role = Map.get(msg, :role) || Map.get(msg, "role", "unknown")

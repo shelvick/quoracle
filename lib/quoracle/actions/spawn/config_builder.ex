@@ -214,51 +214,11 @@ defmodule Quoracle.Actions.Spawn.ConfigBuilder do
     # Inherit test-related fields from parent for DB sandbox access and PubSub isolation
     # Fallback to deps if not in parent_config (fixes race condition where parent hasn't fully initialized)
     config =
-      cond do
-        Map.has_key?(parent_config, :sandbox_owner) ->
-          Map.put(config, :sandbox_owner, parent_config[:sandbox_owner])
-
-        Map.has_key?(deps, :sandbox_owner) ->
-          Map.put(config, :sandbox_owner, deps[:sandbox_owner])
-
-        true ->
-          config
-      end
-
-    config =
-      cond do
-        Map.has_key?(parent_config, :test_mode) ->
-          Map.put(config, :test_mode, parent_config[:test_mode])
-
-        Map.has_key?(deps, :test_mode) ->
-          Map.put(config, :test_mode, deps[:test_mode])
-
-        true ->
-          config
-      end
-
-    # CRITICAL: Always inherit pubsub (not conditional on sandbox_owner)
-    # Tests may use isolated PubSub without sandbox_owner
-    # Fallback to deps[:pubsub] if not in parent_config (fixes non-deterministic test failures)
-    config =
-      cond do
-        Map.has_key?(parent_config, :pubsub) ->
-          Map.put(config, :pubsub, parent_config[:pubsub])
-
-        Map.has_key?(deps, :pubsub) ->
-          Map.put(config, :pubsub, deps[:pubsub])
-
-        true ->
-          config
-      end
-
-    # Inherit skip_auto_consensus for consistent test behavior across agent hierarchy
-    config =
-      if Map.has_key?(parent_config, :skip_auto_consensus) do
-        Map.put(config, :skip_auto_consensus, parent_config[:skip_auto_consensus])
-      else
-        config
-      end
+      config
+      |> inherit_key(:sandbox_owner, parent_config, deps)
+      |> inherit_key(:test_mode, parent_config, deps)
+      |> inherit_key(:pubsub, parent_config, deps)
+      |> inherit_key(:skip_auto_consensus, parent_config, deps)
 
     # Add registry and dynsup from deps so child can spawn its own children
     config =
@@ -267,5 +227,21 @@ defmodule Quoracle.Actions.Spawn.ConfigBuilder do
       |> Map.put(:dynsup, Map.get(deps, :dynsup) || Map.get(deps, :dynsup_fn))
 
     {:ok, config}
+  end
+
+  # Inherits a key into config from parent_config first, falling back to deps.
+  # No-op if the key exists in neither source.
+  @spec inherit_key(map(), atom(), map(), map()) :: map()
+  defp inherit_key(config, key, parent_config, deps) do
+    case Map.fetch(parent_config, key) do
+      {:ok, value} ->
+        Map.put(config, key, value)
+
+      :error ->
+        case Map.fetch(deps, key) do
+          {:ok, value} -> Map.put(config, key, value)
+          :error -> config
+        end
+    end
   end
 end

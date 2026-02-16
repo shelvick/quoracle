@@ -593,6 +593,50 @@ defmodule Quoracle.Agent.ReflectorTest do
   end
 
   # ===========================================================================
+  # Message Construction (system/user split, HISTORY tags)
+  # ===========================================================================
+
+  describe "build_reflection_messages/1 structure" do
+    test "returns system + user message pair" do
+      messages = sample_messages()
+
+      result = Reflector.build_reflection_messages(messages)
+
+      assert [%{role: "system"}, %{role: "user"}] = result
+    end
+
+    test "history wrapped in randomized XML boundary tags" do
+      messages = sample_messages()
+
+      [_, user_msg] = Reflector.build_reflection_messages(messages)
+
+      assert user_msg.content =~ ~r/<HISTORY_[0-9a-f]{8}>/
+      assert user_msg.content =~ ~r/<\/HISTORY_[0-9a-f]{8}>/
+    end
+
+    test "boundary tag IDs are unique per invocation" do
+      messages = sample_messages()
+
+      [_, msg1] = Reflector.build_reflection_messages(messages)
+      [_, msg2] = Reflector.build_reflection_messages(messages)
+
+      [id1] = Regex.run(~r/HISTORY_([0-9a-f]{8})/, msg1.content, capture: :all_but_first)
+      [id2] = Regex.run(~r/HISTORY_([0-9a-f]{8})/, msg2.content, capture: :all_but_first)
+
+      refute id1 == id2
+    end
+
+    test "user message contains formatted conversation history inside tags" do
+      messages = sample_messages()
+
+      [_, user_msg] = Reflector.build_reflection_messages(messages)
+
+      assert user_msg.content =~ "user: Help me debug auth"
+      assert user_msg.content =~ "assistant: I'll check the auth module..."
+    end
+  end
+
+  # ===========================================================================
   # Edge Cases (existing)
   # ===========================================================================
 

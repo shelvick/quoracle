@@ -563,6 +563,48 @@ defmodule Quoracle.Agent.ActionExecutorRegressionsTest do
     end
   end
 
+  describe "check_id with dead Router fallback" do
+    @tag :unit
+    test "stale shell_routers entry for dead Router spawns new Router",
+         %{state: state} do
+      command_id = Ecto.UUID.generate()
+
+      # Spawn and immediately kill a Router to get a dead PID
+      {:ok, dead_router} =
+        Quoracle.Actions.Router.start_link(
+          action_type: :execute_shell,
+          action_id: "dead_action",
+          agent_id: state.agent_id,
+          agent_pid: self(),
+          pubsub: state.pubsub,
+          sandbox_owner: state.sandbox_owner
+        )
+
+      GenServer.stop(dead_router, :normal, :infinity)
+      refute Process.alive?(dead_router)
+
+      # Simulate stale shell_routers entry (race between handle_down and check_id dispatch)
+      state = %{state | shell_routers: Map.put(state.shell_routers, command_id, dead_router)}
+
+      check_action = %{
+        action: :execute_shell,
+        params: %{"check_id" => command_id},
+        wait: false
+      }
+
+      _result_state =
+        ActionExecutor.execute_consensus_action(state, check_action, self())
+
+      # Should spawn a new Router (dead PID detected), returning :command_not_found
+      assert_receive {:"$gen_cast", {:action_result, _action_id, result, _opts}},
+                     5000
+
+      assert result == {:error, :command_not_found},
+             "check_id with dead Router should fall back to :command_not_found. " <>
+               "Got: #{inspect(result)}"
+    end
+  end
+
   describe "R8: terminate routes via shell_routers" do
     @tag :integration
     test "terminate routes through existing Router",
