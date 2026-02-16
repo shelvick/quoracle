@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.11] - 2026-02-16
+
+### Fixed
+
+- **Dead Router PID crash** — Guard check_id routing against dead Router PIDs,
+  preventing crashes when routing to a terminated Router process.
+- **Reflector echoing action JSON** — When conversation history was dominated by
+  action JSON, the Reflector LLM would pattern-match to action output instead of
+  producing lessons and state extraction. Split into system/user message structure
+  with XML boundary tags to keep the LLM on task.
+
+### Changed
+
+- **ConfigBuilder simplification** — Extracted `inherit_key/4` helper to reduce
+  ConfigBuilder complexity.
+
 ## [0.1.10] - 2026-02-14
 
 ### Fixed

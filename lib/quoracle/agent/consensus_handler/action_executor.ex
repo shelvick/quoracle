@@ -127,8 +127,12 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
             spawn_and_monitor_router(state, action_atom, action_id, agent_pid)
 
           existing_pid ->
-            # Use existing Router — it has the shell_command state
-            {existing_pid, state}
+            # Verify Router is still alive — race between handle_down cleanup and check_id dispatch
+            if Process.alive?(existing_pid) do
+              {existing_pid, state}
+            else
+              spawn_and_monitor_router(state, action_atom, action_id, agent_pid)
+            end
         end
       else
         # Normal flow: spawn new per-action Router

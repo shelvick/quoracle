@@ -104,7 +104,12 @@ defmodule Quoracle.Agent.Core.TestActionHandler do
             spawn_and_monitor_router(state, action_atom, action_id, opts)
 
           existing_pid ->
-            {existing_pid, state}
+            # Verify Router is still alive — race between handle_down cleanup and check_id dispatch
+            if Process.alive?(existing_pid) do
+              {existing_pid, state}
+            else
+              spawn_and_monitor_router(state, action_atom, action_id, opts)
+            end
         end
       else
         spawn_and_monitor_router(state, action_atom, action_id, opts)
