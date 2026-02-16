@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.12] - 2026-02-16
+
+### Fixed
+
+- **Hot-reload false positives** — Fixed `quoracle.reload` reporting spurious
+  changes due to non-deterministic compilation order and MD5 algorithm mismatch,
+  then always reporting no changes after the algorithm fix.
+- **Task cost tracking** — Fixed task costs dropping to zero when dismissing
+  children with N/A budgets.
+- **Agent stall during sync actions** — Fixed agents stalling when user messages
+  arrive while an always-sync action is executing.
+- **Consensus clustering** — Fixed consensus clustering incorrectly handling
+  mergeable params.
+
+### Changed
+
+- **Shell error messages** — Enriched `command_not_found` errors with a list of
+  available command IDs for easier debugging.
+- **Reflector token budget** — Added 5% safety margin to Reflector max_tokens
+  calculation to prevent truncation.
+
 ## [0.1.11] - 2026-02-16
 
 ### Fixed

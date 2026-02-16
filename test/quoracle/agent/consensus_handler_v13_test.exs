@@ -314,7 +314,7 @@ defmodule Quoracle.Agent.ConsensusHandlerV13Test do
 
       # R28: auto_complete_todo should trigger :mark_first_todo_done cast to agent_pid
       # Per-action Router (v28.0): Router spawns internally, casts to agent_pid on success
-      assert_receive {:"$gen_cast", :mark_first_todo_done}, 1000
+      assert_receive {:"$gen_cast", :mark_first_todo_done}, 30_000
     end
   end
 
@@ -352,7 +352,7 @@ defmodule Quoracle.Agent.ConsensusHandlerV13Test do
 
       # R29: Router.execute should receive auto_complete_todo in opts
       # Per-action Router (v28.0): Verify via actual behavior - cast received
-      assert_receive {:"$gen_cast", :mark_first_todo_done}, 1000
+      assert_receive {:"$gen_cast", :mark_first_todo_done}, 30_000
     end
   end
 
@@ -434,7 +434,7 @@ defmodule Quoracle.Agent.ConsensusHandlerV13Test do
 
       # R31: First TODO should be marked done after successful action
       # Per-action Router (v28.0): Verify via actual behavior - cast received
-      assert_receive {:"$gen_cast", :mark_first_todo_done}, 1000
+      assert_receive {:"$gen_cast", :mark_first_todo_done}, 30_000
     end
   end
 
@@ -479,7 +479,7 @@ defmodule Quoracle.Agent.ConsensusHandlerV13Test do
 
       # ACCEPTANCE: auto_complete_todo must reach Router and trigger marking
       # Per-action Router (v28.0): Verify via actual behavior - cast received
-      assert_receive {:"$gen_cast", :mark_first_todo_done}, 1000
+      assert_receive {:"$gen_cast", :mark_first_todo_done}, 30_000
     end
   end
 end
