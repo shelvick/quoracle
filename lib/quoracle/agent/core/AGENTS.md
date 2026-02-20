@@ -7,7 +7,7 @@
 - Persistence.ACEState: ACE state serialization (332 lines), context_lessons + model_states
 - MessageInfoHandler: Info message dispatch (329 lines), handle_trigger_consensus/1, handle_down/4, handle_spawn_failed/2
 - TodoHandler: Per-agent task list management (57 lines)
-- BudgetHandler: Budget GenServer callbacks (198 lines), adjust_child_budget/4, release_child_budget/3
+- BudgetHandler: Budget GenServer callbacks (247 lines), adjust_child_budget/4 (v37.0: cast-based, no child calls), handle_set_budget_allocated/2, release_child_budget/3
 - ChildrenTracker: Children state management (63 lines), handle_child_spawned/2, handle_child_dismissed/2
 - TestActionHandler: Test-only action handler (191 lines), synchronous Router.execute for integration tests
 

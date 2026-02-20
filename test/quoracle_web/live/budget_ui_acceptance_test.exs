@@ -783,7 +783,7 @@ defmodule QuoracleWeb.BudgetUIAcceptanceTest do
     end
 
     @tag :r17
-    test "R17: agent cannot decrease child budget below minimum", %{conn: conn} = context do
+    test "R17: agent cannot decrease child budget below DB spent", %{conn: conn} = context do
       # ENTRY POINT: Real route
       {:ok, view, _html} = mount_dashboard(conn, context)
 
@@ -800,7 +800,7 @@ defmodule QuoracleWeb.BudgetUIAcceptanceTest do
       {:ok, _parent_state} = Quoracle.Agent.Core.get_state(parent_pid)
       register_agent_cleanup(parent_pid, cleanup_tree: true, registry: context.registry)
 
-      # Spawn child with budget and some committed
+      # Spawn child with budget
       child_config = %{
         agent_id: "child-min-#{System.unique_integer([:positive])}",
         task_id: task.id,
@@ -812,10 +812,10 @@ defmodule QuoracleWeb.BudgetUIAcceptanceTest do
         budget_data: %{
           mode: :child,
           allocated: Decimal.new("40.00"),
-          committed: Decimal.new("25.00")
+          committed: Decimal.new("0")
         },
         prompt_fields: %{
-          provided: %{task_description: "Child with committed"},
+          provided: %{task_description: "Child with spending"},
           injected: %{global_context: "", constraints: []},
           transformed: %{}
         },
@@ -844,7 +844,25 @@ defmodule QuoracleWeb.BudgetUIAcceptanceTest do
 
       _ = Quoracle.Agent.Core.get_state(parent_pid)
 
-      # USER ACTION (simulated): Try to decrease below committed
+      # Record actual DB spending for child (v3.0: decrease validates against spent-only)
+      {:ok, db_task} =
+        Repo.insert(
+          Quoracle.Tasks.Task.changeset(%Quoracle.Tasks.Task{}, %{
+            prompt: "Test spending",
+            status: "running"
+          })
+        )
+
+      %Quoracle.Costs.AgentCost{}
+      |> Quoracle.Costs.AgentCost.changeset(%{
+        agent_id: child_state.agent_id,
+        task_id: db_task.id,
+        cost_type: "llm_consensus",
+        cost_usd: Decimal.new("30.00")
+      })
+      |> Repo.insert!()
+
+      # USER ACTION (simulated): Try to decrease below DB spent (30.00)
       result =
         Quoracle.Agent.Core.adjust_child_budget(
           parent_agent_id,
@@ -854,10 +872,10 @@ defmodule QuoracleWeb.BudgetUIAcceptanceTest do
           pubsub: context.pubsub
         )
 
-      # POSITIVE ASSERTION: Should fail with appropriate error
-      assert match?({:error, _}, result), "Should reject decrease below minimum"
+      # POSITIVE ASSERTION: v3.0 rejects decrease below DB spent
+      assert match?({:error, _}, result), "Should reject decrease below DB spent"
 
-      # Verify child budget unchanged
+      # Verify child budget unchanged (cast not sent on error)
       {:ok, unchanged_child_state} = Quoracle.Agent.Core.get_state(child_pid)
       assert unchanged_child_state.budget_data.allocated == Decimal.new("40.00")
 

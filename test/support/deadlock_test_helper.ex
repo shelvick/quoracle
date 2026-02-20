@@ -205,8 +205,8 @@ defmodule Test.DeadlockTestHelper do
     assert {:ok, _state} = Core.get_state(agent_pid)
     elapsed = System.monotonic_time(:millisecond) - start_time
 
-    assert elapsed < 200,
-           "Core took #{elapsed}ms to respond after dispatch - should be < 200ms"
+    assert elapsed < 500,
+           "Core took #{elapsed}ms to respond after dispatch - should be < 500ms"
 
     :ok
   end

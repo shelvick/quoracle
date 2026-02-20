@@ -3,6 +3,8 @@
   {"lib/mix/tasks/quoracle.show_llm_prompts.ex", :callback_info_missing},
   {"lib/mix/tasks/quoracle.reload.ex", :callback_info_missing},
   {"lib/mix/tasks/quoracle.reload.ex", :unknown_function},
+  {"lib/mix/tasks/llm_db.hot_reload.ex", :callback_info_missing},
+  {"lib/mix/tasks/llm_db.hot_reload.ex", :unknown_function},
   # ACE Reflector: All current callers are tests with test_mode: true.
   # Production integration (TokenManager) will call without test_mode, making else branch reachable.
   {"lib/quoracle/agent/reflector.ex", :pattern_match},

@@ -340,7 +340,7 @@ defmodule Quoracle.Agent.ConsensusRetryTest do
       end)
 
       # No message sent
-      refute_receive {:agent_message, _, _}, 100
+      refute_received {:agent_message, _, _}
     end
   end
 
@@ -442,12 +442,12 @@ defmodule Quoracle.Agent.ConsensusRetryTest do
         # Attempt 1
         {:noreply, state1} = MessageHandler.run_consensus_cycle(state, execute_action_fn)
         assert state1.consensus_retry_count == 1
-        refute_receive {:agent_message, _, _}, 50
+        refute_received {:agent_message, _, _}
 
         # Attempt 2
         {:noreply, state2} = MessageHandler.run_consensus_cycle(state1, execute_action_fn)
         assert state2.consensus_retry_count == 2
-        refute_receive {:agent_message, _, _}, 50
+        refute_received {:agent_message, _, _}
 
         # Attempt 3 — max reached, should notify parent
         {:noreply, _state3} = MessageHandler.run_consensus_cycle(state2, execute_action_fn)

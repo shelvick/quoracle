@@ -59,6 +59,10 @@
 ## Context Token Injection Tests (Added 2026-01-22)
 - consensus_handler/context_injector_test.exs: 22 tests (R1-R11 + edge cases), token count injection, comma formatting, per-model history
 
+## Task Crash Propagation Tests (Added 2026-02-20)
+- dispatch_task_crash_test.exs: 7 tests (R1-R6, system) - Outer rescue/catch crash protection in ActionExecutor dispatch_action
+- dispatch_task_crash_commentary_test.exs: 2 tests - Stale commentary verification for dispatch_task_crash_test
+
 ## Action Executor Regression Tests (Added 2026-02-14)
 - action_executor_regressions_test.exs: 15 tests (R1-R14 + R5b), 1060 lines, async: true
   - Bug 1 (error stall): R1, R2, R3, R4 — always-sync error + wait:true continues consensus

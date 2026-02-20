@@ -4,20 +4,25 @@ defmodule Quoracle.Agent.Core.BudgetHandler do
 
   v23.0: Added adjust_child_budget/4 for ACTION_AdjustBudget.
   v24.0: Extracted handle_call implementations from Core.
+  v37.0: Rewrite adjust_child_budget — no child GenServer.call,
+         reads allocation from parent's children list, casts to child,
+         validates decrease with spent-only (not spent+committed).
   """
 
   require Logger
-  alias Quoracle.Agent.Core
   alias Quoracle.Agent.Core.State
   alias Quoracle.Budget.{Escrow, Tracker}
 
   @doc """
   Adjusts a direct child's budget allocation with atomic escrow update.
 
+  v3.0 flow (no GenServer.call to child):
   1. Validates child is a direct child of this parent
-  2. Looks up child in Registry
-  3. Calculates delta and adjusts parent escrow
-  4. Updates child's budget_data.allocated
+  2. Reads current allocation from parent's children[].budget_allocated
+  3. Validates decrease against child's DB-spent only (not committed)
+  4. Adjusts parent escrow via Escrow.adjust_child_allocation/4
+  5. Casts {:set_budget_allocated, new_budget} to child (fire-and-forget)
+  6. Updates parent's children[].budget_allocated
 
   Returns {:ok, new_state} or {:error, reason}.
   """
@@ -26,20 +31,18 @@ defmodule Quoracle.Agent.Core.BudgetHandler do
   def adjust_child_budget(state, child_id, new_budget, opts) do
     registry = Keyword.fetch!(opts, :registry)
 
-    with {:ok, child_pid} <- find_child(child_id, registry),
-         :ok <- validate_direct_child(state, child_id),
-         {:ok, child_state} <- Core.get_state(child_pid),
-         :ok <- validate_not_below_committed(new_budget, child_state.budget_data),
+    with :ok <- validate_direct_child(state, child_id),
+         {:ok, current_allocation} <- get_child_allocation(state, child_id),
+         :ok <- validate_decrease_spent_only(child_id, current_allocation, new_budget),
          {:ok, new_parent_budget} <-
            Escrow.adjust_child_allocation(
              state.budget_data,
-             child_state.budget_data.allocated,
+             current_allocation,
              new_budget,
              Tracker.get_spent(state.agent_id)
            ) do
-      # Update child's budget_data
-      child_budget_data = %{child_state.budget_data | allocated: new_budget}
-      :ok = Core.update_budget_data(child_pid, child_budget_data)
+      # Cast to child (fire-and-forget, no timeout possible)
+      cast_budget_to_child(child_id, new_budget, registry)
 
       # Update parent's children list with new budget_allocated
       new_children = update_child_budget_in_list(state.children, child_id, new_budget)
@@ -60,24 +63,58 @@ defmodule Quoracle.Agent.Core.BudgetHandler do
     end
   end
 
-  # Validates new budget is not below child's committed amount (escrow for grandchildren)
-  @spec validate_not_below_committed(Decimal.t(), map()) :: :ok | {:error, :below_committed}
-  defp validate_not_below_committed(_new_budget, %{committed: nil}), do: :ok
+  # Read child's current allocation from parent's children list (not child's state)
+  @spec get_child_allocation(map(), String.t()) ::
+          {:ok, Decimal.t()} | {:error, :not_direct_child}
+  defp get_child_allocation(state, child_id) do
+    case Enum.find(state.children || [], &(&1.agent_id == child_id)) do
+      %{budget_allocated: allocated} when not is_nil(allocated) -> {:ok, allocated}
+      %{budget_allocated: nil} -> {:ok, Decimal.new(0)}
+      nil -> {:error, :not_direct_child}
+    end
+  end
 
-  defp validate_not_below_committed(new_budget, %{committed: committed}) do
-    if Decimal.compare(new_budget, committed) == :lt do
-      {:error, :below_committed}
+  # Validate decrease against spent-only from DB (not spent+committed).
+  # Only checks when new_budget < current_allocation (decrease case).
+  @spec validate_decrease_spent_only(String.t(), Decimal.t(), Decimal.t()) ::
+          :ok | {:error, map()}
+  defp validate_decrease_spent_only(child_id, current_allocation, new_budget) do
+    delta = Decimal.sub(new_budget, current_allocation)
+
+    if Decimal.compare(delta, Decimal.new(0)) == :lt do
+      # Decrease: validate against spent-only from DB
+      child_spent = Tracker.get_spent(child_id)
+
+      if Decimal.compare(new_budget, child_spent) in [:gt, :eq] do
+        :ok
+      else
+        {:error,
+         %{
+           reason: :would_exceed_spent,
+           child_spent: Decimal.to_string(child_spent),
+           requested: Decimal.to_string(new_budget),
+           minimum: Decimal.to_string(child_spent)
+         }}
+      end
     else
+      # Increase or no change — no decrease validation needed
       :ok
     end
   end
 
-  @spec find_child(String.t(), atom()) :: {:ok, pid()} | {:error, :child_not_found}
-  defp find_child(child_id, registry) do
+  # Cast {:set_budget_allocated, new_budget} to child (fire-and-forget)
+  @spec cast_budget_to_child(String.t(), Decimal.t(), atom()) :: :ok
+  defp cast_budget_to_child(child_id, new_budget, registry) do
     case Registry.lookup(registry, {:agent, child_id}) do
-      [{pid, _}] -> {:ok, pid}
-      [] -> {:error, :child_not_found}
+      [{child_pid, _}] ->
+        GenServer.cast(child_pid, {:set_budget_allocated, new_budget})
+
+      [] ->
+        # Child may have died — cast is best-effort
+        :ok
     end
+
+    :ok
   end
 
   @spec update_child_budget_in_list(list(), String.t(), Decimal.t()) :: list()
@@ -169,6 +206,18 @@ defmodule Quoracle.Agent.Core.BudgetHandler do
     # Re-evaluate over_budget (v34.0 removes monotonicity)
     new_state = update_over_budget_status(new_state)
     {:reply, :ok, new_state}
+  end
+
+  @doc """
+  Handle set_budget_allocated cast - updates allocated and re-evaluates over_budget.
+  v37.0: New handler for fire-and-forget budget updates from parent.
+  """
+  @spec handle_set_budget_allocated(Decimal.t(), State.t()) :: {:noreply, State.t()}
+  def handle_set_budget_allocated(new_budget, state) do
+    new_budget_data = %{state.budget_data | allocated: new_budget}
+    new_state = %{state | budget_data: new_budget_data}
+    new_state = update_over_budget_status(new_state)
+    {:noreply, new_state}
   end
 
   @doc """

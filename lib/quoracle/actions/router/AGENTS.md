@@ -6,7 +6,7 @@
 - WaitFlow: Wait flow control (48 lines, v26.0 simplified to no-ops - all triggers moved to Agent layer)
 - Metrics: Action metrics tracking (50 lines)
 - TaskManager: Async task lifecycle (96 lines)
-- Execution: Smart mode execution (198 lines)
+- Execution: Smart mode execution (264 lines, v31.0: Logger.warning on timeout)
 - ActionMapper: Action type→module mapping (29 lines)
 - ShellCommandManager: Shell command state management (142 lines) - Added 2025-10-14, updated 2025-10-17
 - Persistence: DB persistence for action results (135 lines) - Added 2025-10-14

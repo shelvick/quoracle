@@ -1,10 +1,10 @@
 # lib/quoracle/agent/
 
 ## Modules
-- Core: Event-driven GenServer (500 lines), delegates message handling, stores prompt_fields + dismissing flag + capability_groups + shell_routers in state, v20.0 extracts adjust_child_budget/update_budget_data to ClientAPI, adds route_to_shell_router/3 helper, v35.0 adds spawn_failed delegation to MessageInfoHandler
+- Core: Event-driven GenServer (490 lines), delegates message handling, stores prompt_fields + dismissing flag + capability_groups + shell_routers in state, v20.0 extracts adjust_child_budget/update_budget_data to ClientAPI, adds route_to_shell_router/3 helper, v35.0 adds spawn_failed delegation to MessageInfoHandler, v37.0 adds handle_cast({:set_budget_allocated, ...}) delegation to BudgetHandler
 - Core.ClientAPI: GenServer wrappers (209 lines, 17 functions with @spec), v20.0 adds adjust_child_budget/4, update_budget_data/2, v34.0 adds release_child_budget/3
 - Core.TodoHandler: Todo list state management (57 lines), extracted for 500-line limit
-- Core.BudgetHandler: Budget GenServer callbacks (198 lines), adjust_child_budget/4, handle_release_child_budget/3 (v34.0), update_over_budget_status/1 (non-monotonic since v34.0)
+- Core.BudgetHandler: Budget GenServer callbacks (247 lines), adjust_child_budget/4 (v37.0: cast-based, no child calls, spent-only decrease validation), handle_set_budget_allocated/2 (v37.0), handle_release_child_budget/3 (v34.0), update_over_budget_status/1 (non-monotonic since v34.0)
 - Core.ChildrenTracker: Children state management (63 lines), handle_child_spawned/2, handle_child_dismissed/2, handle_child_restored/2 (v2.1)
 - Core.Initialization: Init and DB setup (154 lines), extracted for 500-line limit (2025-10-17)
 - Core.Persistence: DB persistence (149 lines), extract_parent_agent_id with Registry→state.parent_id fallback (v36.0), delegates ACE to submodule

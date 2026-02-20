@@ -1,10 +1,12 @@
 defmodule Quoracle.MCP.ClientTest do
   @moduledoc """
-  Tests for MCP_Client v3.0 - Per-agent MCP connection manager with crash propagation.
+  Tests for MCP_Client v4.0 - Per-agent MCP connection manager with reconnection.
 
-  ARC Verification Criteria: R1-R27
-  WorkGroupID: feat-20251126-023746, feat-mcp-error-context-20251216, fix-20251228-004723
-  Packet: 2 (MCP Client Core), Packet 2 (Error Context Integration), Packet 2 (Crash Propagation)
+  ARC Verification Criteria: R1-R37
+  WorkGroupID: feat-20251126-023746, feat-mcp-error-context-20251216, fix-20251228-004723,
+               fix-20260219-mcp-reliability
+  Packet: 2 (MCP Client Core), Packet 2 (Error Context Integration), Packet 2 (Crash Propagation),
+          Packet 2 (Reconnection + Timeout)
   """
 
   use ExUnit.Case, async: true
@@ -200,7 +202,10 @@ defmodule Quoracle.MCP.ClientTest do
     test "connects to server and returns tools", %{client: client} do
       expect(Quoracle.MCP.AnubisMock, :start_link, fn opts ->
         # Tries streamable_http first (MCP 2025-03-26+), falls back to SSE on protocol mismatch
-        assert opts[:transport] == {:streamable_http, base_url: "http://localhost:9999/mcp"}
+        assert opts[:transport] ==
+                 {:streamable_http, base_url: "http://localhost:9999", mcp_path: "/mcp"}
+
+        assert opts[:protocol_version] == "2025-06-18"
         {:ok, placeholder_process()}
       end)
 
@@ -1180,7 +1185,7 @@ defmodule Quoracle.MCP.ClientTest do
       end
     end
 
-    property "default timeout is always 30000ms", %{client: client} do
+    property "default timeout is always 120000ms", %{client: client} do
       check all(_iteration <- integer(1..10), max_runs: 5) do
         anubis_pid = placeholder_process()
 
@@ -1195,8 +1200,8 @@ defmodule Quoracle.MCP.ClientTest do
         {:ok, conn} = Client.connect(client, %{transport: :stdio, command: "echo timeout_test"})
 
         expect(Quoracle.MCP.AnubisMock, :call_tool, fn _pid, _tool, _args, opts ->
-          # Default timeout should be 30000
-          assert opts[:timeout] == 30_000
+          # v4.0: Default timeout increased to 120_000
+          assert opts[:timeout] == 120_000
           {:ok, %{}}
         end)
 
@@ -1325,7 +1330,7 @@ defmodule Quoracle.MCP.ClientTest do
       assert {:ok, _} = result
     end
 
-    test "Bug 1+6: dead anubis client is removed from connections", %{client: client} do
+    test "Bug 1+6: dead anubis client is marked dead in connections", %{client: client} do
       # Create a process we can kill to simulate anubis client crash
       anubis_pid = spawn(fn -> receive do: (:stop -> :ok) end)
 
@@ -1337,7 +1342,7 @@ defmodule Quoracle.MCP.ClientTest do
         {:ok, [%{name: "test_tool"}]}
       end)
 
-      {:ok, _conn} = Client.connect(client, %{transport: :stdio, command: "test"})
+      {:ok, conn} = Client.connect(client, %{transport: :stdio, command: "test"})
 
       # Verify connection exists
       connections = Client.list_connections(client)
@@ -1358,9 +1363,14 @@ defmodule Quoracle.MCP.ClientTest do
       _ = Client.list_connections(client)
       _ = Client.list_connections(client)
 
-      # Connection should be automatically removed
+      # v4.0: Connection should be retained (marked dead) not removed
       connections = Client.list_connections(client)
-      assert Enum.empty?(connections)
+      assert length(connections) == 1
+      assert hd(connections).id == conn.connection_id
+
+      # call_tool should return :connection_dead (not :connection_not_found)
+      result = Client.call_tool(client, conn.connection_id, "test_tool", %{})
+      assert {:error, :connection_dead} = result
     end
   end
 
@@ -2079,6 +2089,628 @@ defmodule Quoracle.MCP.ClientTest do
       # Should detect crash quickly (via receive), not wait for full timeout
       assert elapsed < 1000, "Expected quick crash detection, took #{elapsed}ms"
       assert {:error, {:connection_failed, "Immediate crash"}} = result
+    end
+  end
+
+  # ============================================================================
+  # R28: Default Timeout Increased (v4.0)
+  # [UNIT] WHEN MCP.Client starts THEN @default_timeout is 120_000
+  # ============================================================================
+  describe "R28: default timeout increased" do
+    test "default timeout is 120 seconds" do
+      agent_pid = placeholder_process()
+
+      {:ok, client} =
+        Client.start_link(
+          agent_id: "test-agent-r28",
+          agent_pid: agent_pid,
+          anubis_module: Quoracle.MCP.AnubisMock
+        )
+
+      Hammox.allow(Quoracle.MCP.AnubisMock, self(), client)
+      stub(Quoracle.MCP.AnubisMock, :get_server_capabilities, fn _pid -> %{} end)
+      stub(Quoracle.MCP.AnubisMock, :stop, fn _pid -> :ok end)
+
+      on_exit(fn ->
+        if Process.alive?(agent_pid), do: Process.exit(agent_pid, :kill)
+
+        if Process.alive?(client) do
+          try do
+            GenServer.stop(client, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      anubis_pid = placeholder_process()
+
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn _pid ->
+        {:ok, [%{name: "tool"}]}
+      end)
+
+      {:ok, conn} = Client.connect(client, %{transport: :stdio, command: "echo r28"})
+
+      expect(Quoracle.MCP.AnubisMock, :call_tool, fn _pid, _tool, _args, opts ->
+        # v4.0: Default timeout should be 120_000 (up from 30_000)
+        assert opts[:timeout] == 120_000
+        {:ok, %{}}
+      end)
+
+      # Call without explicit timeout to test default
+      {:ok, _} = Client.call_tool(client, conn.connection_id, "tool", %{})
+    end
+  end
+
+  # ============================================================================
+  # R29: Connection Marked Dead on Crash (v4.0)
+  # [INTEGRATION] WHEN anubis client crashes THEN connection status set to :dead
+  #               AND connect_params retained AND connection remains in connections map
+  # ============================================================================
+  describe "R29: connection marked dead on crash" do
+    test "connection marked dead on anubis client crash" do
+      agent_pid = placeholder_process()
+
+      {:ok, client} =
+        Client.start_link(
+          agent_id: "test-agent-r29",
+          agent_pid: agent_pid,
+          anubis_module: Quoracle.MCP.AnubisMock
+        )
+
+      Hammox.allow(Quoracle.MCP.AnubisMock, self(), client)
+      stub(Quoracle.MCP.AnubisMock, :get_server_capabilities, fn _pid -> %{} end)
+      stub(Quoracle.MCP.AnubisMock, :stop, fn _pid -> :ok end)
+
+      on_exit(fn ->
+        if Process.alive?(agent_pid), do: Process.exit(agent_pid, :kill)
+
+        if Process.alive?(client) do
+          try do
+            GenServer.stop(client, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # Create a killable anubis process
+      anubis_pid = spawn(fn -> receive do: (:stop -> :ok) end)
+
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn _pid ->
+        {:ok, [%{name: "test_tool"}]}
+      end)
+
+      {:ok, conn} = Client.connect(client, %{transport: :stdio, command: "echo r29"})
+
+      # Verify connection exists and is listed
+      connections_before = Client.list_connections(client)
+      assert length(connections_before) == 1
+
+      # Monitor the anubis process to confirm death
+      ref = Process.monitor(anubis_pid)
+
+      # Kill the anubis client (simulating crash)
+      Process.exit(anubis_pid, :kill)
+
+      # Wait for death confirmation
+      assert_receive {:DOWN, ^ref, :process, ^anubis_pid, _reason}, 30_000
+
+      # Multiple GenServer calls as barrier to ensure DOWN is processed
+      _ = Client.list_connections(client)
+      _ = Client.list_connections(client)
+
+      # v4.0: Connection should NOT be removed — it should be marked dead
+      # and still present (for reconnection). The connection should remain
+      # accessible via list_connections but with dead status.
+      # Under v3.0, this test fails because connections are deleted on crash.
+      connections_after = Client.list_connections(client)
+      assert length(connections_after) == 1
+
+      # The connection should indicate it's dead
+      dead_conn = hd(connections_after)
+      assert dead_conn.id == conn.connection_id
+    end
+  end
+
+  # ============================================================================
+  # R30: Call Tool Returns Connection Dead (v4.0)
+  # [UNIT] WHEN call_tool called IF connection status is :dead THEN returns
+  #        {:error, :connection_dead}
+  # ============================================================================
+  describe "R30: call_tool on dead connection" do
+    test "call_tool on dead connection returns connection_dead" do
+      agent_pid = placeholder_process()
+
+      {:ok, client} =
+        Client.start_link(
+          agent_id: "test-agent-r30",
+          agent_pid: agent_pid,
+          anubis_module: Quoracle.MCP.AnubisMock
+        )
+
+      Hammox.allow(Quoracle.MCP.AnubisMock, self(), client)
+      stub(Quoracle.MCP.AnubisMock, :get_server_capabilities, fn _pid -> %{} end)
+      stub(Quoracle.MCP.AnubisMock, :stop, fn _pid -> :ok end)
+
+      on_exit(fn ->
+        if Process.alive?(agent_pid), do: Process.exit(agent_pid, :kill)
+
+        if Process.alive?(client) do
+          try do
+            GenServer.stop(client, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # Create a killable anubis process
+      anubis_pid = spawn(fn -> receive do: (:stop -> :ok) end)
+
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn _pid ->
+        {:ok, [%{name: "test_tool"}]}
+      end)
+
+      {:ok, conn} = Client.connect(client, %{transport: :stdio, command: "echo r30"})
+
+      # Kill the anubis client
+      ref = Process.monitor(anubis_pid)
+      Process.exit(anubis_pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^anubis_pid, _reason}, 30_000
+
+      # Barrier to ensure DOWN processed
+      _ = Client.list_connections(client)
+      _ = Client.list_connections(client)
+
+      # v4.0: call_tool on dead connection should return :connection_dead
+      # (not :connection_not_found, which is for connections that never existed)
+      result = Client.call_tool(client, conn.connection_id, "test_tool", %{})
+      assert {:error, :connection_dead} = result
+    end
+  end
+
+  # ============================================================================
+  # R31: Reconnect Re-establishes Connection (v4.0)
+  # [INTEGRATION] WHEN reconnect called IF connection is dead THEN re-establishes
+  #               using saved params and returns {:ok, %{connection_id, tools}}
+  # ============================================================================
+  describe "R31: reconnect re-establishes dead connection" do
+    test "reconnect re-establishes dead connection" do
+      agent_pid = placeholder_process()
+
+      {:ok, client} =
+        Client.start_link(
+          agent_id: "test-agent-r31",
+          agent_pid: agent_pid,
+          anubis_module: Quoracle.MCP.AnubisMock
+        )
+
+      Hammox.allow(Quoracle.MCP.AnubisMock, self(), client)
+      stub(Quoracle.MCP.AnubisMock, :get_server_capabilities, fn _pid -> %{} end)
+      stub(Quoracle.MCP.AnubisMock, :stop, fn _pid -> :ok end)
+
+      on_exit(fn ->
+        if Process.alive?(agent_pid), do: Process.exit(agent_pid, :kill)
+
+        if Process.alive?(client) do
+          try do
+            GenServer.stop(client, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # Create a killable anubis process
+      anubis_pid = spawn(fn -> receive do: (:stop -> :ok) end)
+
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn _pid ->
+        {:ok, [%{name: "test_tool"}]}
+      end)
+
+      {:ok, conn} = Client.connect(client, %{transport: :stdio, command: "echo r31"})
+
+      # Kill the anubis client to make it dead
+      ref = Process.monitor(anubis_pid)
+      Process.exit(anubis_pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^anubis_pid, _reason}, 30_000
+
+      # Barrier
+      _ = Client.list_connections(client)
+      _ = Client.list_connections(client)
+
+      # Setup expectations for reconnection
+      new_anubis_pid = placeholder_process()
+
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, new_anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn _pid ->
+        {:ok, [%{name: "test_tool"}, %{name: "new_tool"}]}
+      end)
+
+      # v4.0: Reconnect should re-establish the dead connection
+      result = Client.reconnect(client, conn.connection_id)
+      assert {:ok, reconnected} = result
+      assert reconnected.connection_id == conn.connection_id
+      assert is_list(reconnected.tools)
+
+      # Connection should now be usable again
+      expect(Quoracle.MCP.AnubisMock, :call_tool, fn _pid, "test_tool", _args, _opts ->
+        {:ok, %{content: "reconnected result"}}
+      end)
+
+      tool_result = Client.call_tool(client, conn.connection_id, "test_tool", %{})
+      assert {:ok, _} = tool_result
+    end
+  end
+
+  # ============================================================================
+  # R32: Reconnect Preserves Connection ID (v4.0)
+  # [UNIT] WHEN reconnect succeeds THEN returned connection_id is same as original
+  # ============================================================================
+  describe "R32: reconnect preserves connection_id" do
+    test "reconnect preserves original connection_id" do
+      agent_pid = placeholder_process()
+
+      {:ok, client} =
+        Client.start_link(
+          agent_id: "test-agent-r32",
+          agent_pid: agent_pid,
+          anubis_module: Quoracle.MCP.AnubisMock
+        )
+
+      Hammox.allow(Quoracle.MCP.AnubisMock, self(), client)
+      stub(Quoracle.MCP.AnubisMock, :get_server_capabilities, fn _pid -> %{} end)
+      stub(Quoracle.MCP.AnubisMock, :stop, fn _pid -> :ok end)
+
+      on_exit(fn ->
+        if Process.alive?(agent_pid), do: Process.exit(agent_pid, :kill)
+
+        if Process.alive?(client) do
+          try do
+            GenServer.stop(client, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # Create and kill connection
+      anubis_pid = spawn(fn -> receive do: (:stop -> :ok) end)
+
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn _pid ->
+        {:ok, [%{name: "tool"}]}
+      end)
+
+      {:ok, conn} = Client.connect(client, %{transport: :stdio, command: "echo r32"})
+      original_id = conn.connection_id
+
+      # Kill to make dead
+      ref = Process.monitor(anubis_pid)
+      Process.exit(anubis_pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^anubis_pid, _reason}, 30_000
+      _ = Client.list_connections(client)
+      _ = Client.list_connections(client)
+
+      # Reconnect
+      new_anubis_pid = placeholder_process()
+
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, new_anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn _pid ->
+        {:ok, [%{name: "tool"}]}
+      end)
+
+      # v4.0: Connection ID must be preserved across reconnect
+      {:ok, reconnected} = Client.reconnect(client, original_id)
+      assert reconnected.connection_id == original_id
+    end
+  end
+
+  # ============================================================================
+  # R33: Reconnect on Alive Connection (v4.0)
+  # [UNIT] WHEN reconnect called IF connection is alive THEN returns
+  #        {:error, :connection_alive}
+  # ============================================================================
+  describe "R33: reconnect on alive connection" do
+    test "reconnect on alive connection returns error" do
+      agent_pid = placeholder_process()
+
+      {:ok, client} =
+        Client.start_link(
+          agent_id: "test-agent-r33",
+          agent_pid: agent_pid,
+          anubis_module: Quoracle.MCP.AnubisMock
+        )
+
+      Hammox.allow(Quoracle.MCP.AnubisMock, self(), client)
+      stub(Quoracle.MCP.AnubisMock, :get_server_capabilities, fn _pid -> %{} end)
+      stub(Quoracle.MCP.AnubisMock, :stop, fn _pid -> :ok end)
+
+      on_exit(fn ->
+        if Process.alive?(agent_pid), do: Process.exit(agent_pid, :kill)
+
+        if Process.alive?(client) do
+          try do
+            GenServer.stop(client, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      anubis_pid = placeholder_process()
+
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn _pid ->
+        {:ok, [%{name: "tool"}]}
+      end)
+
+      {:ok, conn} = Client.connect(client, %{transport: :stdio, command: "echo r33"})
+
+      # v4.0: Reconnecting a live connection should return :connection_alive
+      result = Client.reconnect(client, conn.connection_id)
+      assert {:error, :connection_alive} = result
+    end
+  end
+
+  # ============================================================================
+  # R34: Reconnect on Unknown Connection (v4.0)
+  # [UNIT] WHEN reconnect called IF connection_id not found THEN returns
+  #        {:error, :connection_not_found}
+  # ============================================================================
+  describe "R34: reconnect on unknown connection" do
+    test "reconnect on unknown connection returns error" do
+      agent_pid = placeholder_process()
+
+      {:ok, client} =
+        Client.start_link(
+          agent_id: "test-agent-r34",
+          agent_pid: agent_pid,
+          anubis_module: Quoracle.MCP.AnubisMock
+        )
+
+      Hammox.allow(Quoracle.MCP.AnubisMock, self(), client)
+
+      on_exit(fn ->
+        if Process.alive?(agent_pid), do: Process.exit(agent_pid, :kill)
+
+        if Process.alive?(client) do
+          try do
+            GenServer.stop(client, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # v4.0: Reconnecting an unknown connection should return :connection_not_found
+      result = Client.reconnect(client, "nonexistent-connection-id")
+      assert {:error, :connection_not_found} = result
+    end
+  end
+
+  # ============================================================================
+  # R35: Dead Connection Retains Config (v4.0)
+  # [UNIT] WHEN connection dies THEN connect_params preserved for later reconnection
+  # ============================================================================
+  describe "R35: dead connection retains config" do
+    test "dead connection retains original connect params" do
+      agent_pid = placeholder_process()
+
+      {:ok, client} =
+        Client.start_link(
+          agent_id: "test-agent-r35",
+          agent_pid: agent_pid,
+          anubis_module: Quoracle.MCP.AnubisMock
+        )
+
+      Hammox.allow(Quoracle.MCP.AnubisMock, self(), client)
+      stub(Quoracle.MCP.AnubisMock, :get_server_capabilities, fn _pid -> %{} end)
+      stub(Quoracle.MCP.AnubisMock, :stop, fn _pid -> :ok end)
+
+      on_exit(fn ->
+        if Process.alive?(agent_pid), do: Process.exit(agent_pid, :kill)
+
+        if Process.alive?(client) do
+          try do
+            GenServer.stop(client, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # Create and kill connection with specific command
+      anubis_pid = spawn(fn -> receive do: (:stop -> :ok) end)
+
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn _pid ->
+        {:ok, [%{name: "tool"}]}
+      end)
+
+      original_command = "echo r35_specific_command"
+      {:ok, conn} = Client.connect(client, %{transport: :stdio, command: original_command})
+
+      # Kill to make dead
+      ref = Process.monitor(anubis_pid)
+      Process.exit(anubis_pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^anubis_pid, _reason}, 30_000
+      _ = Client.list_connections(client)
+      _ = Client.list_connections(client)
+
+      # v4.0: Reconnect should use the SAME params (proves they were retained)
+      new_anubis_pid = placeholder_process()
+
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn opts ->
+        # Verify the original transport/command is used for reconnection
+        {:stdio, transport_opts} = opts[:transport]
+        assert transport_opts[:command] == "echo"
+        assert transport_opts[:args] == ["r35_specific_command"]
+        {:ok, new_anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn _pid ->
+        {:ok, [%{name: "tool"}]}
+      end)
+
+      result = Client.reconnect(client, conn.connection_id)
+      assert {:ok, _} = result
+    end
+  end
+
+  # ============================================================================
+  # R36: Call Tool Crash Protection (v4.0)
+  # [INTEGRATION] WHEN anubis client exits during call_tool THEN MCP.Client
+  #               catches exit, marks connection dead, returns {:error, :connection_dead}
+  # ============================================================================
+  describe "R36: call_tool crash protection" do
+    test "call_tool crash marks connection dead instead of crashing client" do
+      agent_pid = placeholder_process()
+
+      {:ok, client} =
+        Client.start_link(
+          agent_id: "test-agent-r36",
+          agent_pid: agent_pid,
+          anubis_module: Quoracle.MCP.AnubisMock
+        )
+
+      Hammox.allow(Quoracle.MCP.AnubisMock, self(), client)
+      stub(Quoracle.MCP.AnubisMock, :get_server_capabilities, fn _pid -> %{} end)
+      stub(Quoracle.MCP.AnubisMock, :stop, fn _pid -> :ok end)
+
+      on_exit(fn ->
+        if Process.alive?(agent_pid), do: Process.exit(agent_pid, :kill)
+
+        if Process.alive?(client) do
+          try do
+            GenServer.stop(client, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      anubis_pid = placeholder_process()
+
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn _pid ->
+        {:ok, [%{name: "test_tool"}]}
+      end)
+
+      {:ok, conn} = Client.connect(client, %{transport: :stdio, command: "echo r36"})
+
+      # Mock call_tool to simulate an exit (as if the anubis client died mid-call)
+      expect(Quoracle.MCP.AnubisMock, :call_tool, fn _pid, _tool, _args, _opts ->
+        exit({:noproc, {GenServer, :call, [:anubis_client_123, :call_tool, 5000]}})
+      end)
+
+      # v4.0: MCP.Client should catch the exit instead of crashing
+      result = Client.call_tool(client, conn.connection_id, "test_tool", %{})
+      assert {:error, :connection_dead} = result
+
+      # MCP.Client GenServer should still be alive
+      assert Process.alive?(client)
+
+      # Connection should now be marked dead
+      # Subsequent call_tool should also return :connection_dead
+      result2 = Client.call_tool(client, conn.connection_id, "test_tool", %{})
+      assert {:error, :connection_dead} = result2
+    end
+  end
+
+  # ============================================================================
+  # R37: AnubisWrapper Default Timeout (v4.0)
+  # [UNIT] WHEN AnubisWrapper.call_tool called without explicit timeout THEN uses 120_000
+  # ============================================================================
+  describe "R37: anubis wrapper default timeout" do
+    test "anubis wrapper default timeout is 120 seconds" do
+      # v4.0: AnubisWrapper.call_tool default timeout should be 120_000
+      # We verify indirectly through Client's default timeout behavior since
+      # Client delegates to anubis_module.call_tool with the timeout.
+      # The AnubisWrapper module should also have its own default of 120_000
+      # (line ~70 of anubis_wrapper.ex, currently 30_000).
+
+      agent_pid = placeholder_process()
+
+      {:ok, client} =
+        Client.start_link(
+          agent_id: "test-agent-r37",
+          agent_pid: agent_pid,
+          anubis_module: Quoracle.MCP.AnubisMock
+        )
+
+      Hammox.allow(Quoracle.MCP.AnubisMock, self(), client)
+      stub(Quoracle.MCP.AnubisMock, :get_server_capabilities, fn _pid -> %{} end)
+      stub(Quoracle.MCP.AnubisMock, :stop, fn _pid -> :ok end)
+
+      on_exit(fn ->
+        if Process.alive?(agent_pid), do: Process.exit(agent_pid, :kill)
+
+        if Process.alive?(client) do
+          try do
+            GenServer.stop(client, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      anubis_pid = placeholder_process()
+
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn _pid ->
+        {:ok, [%{name: "tool"}]}
+      end)
+
+      {:ok, conn} = Client.connect(client, %{transport: :stdio, command: "echo r37"})
+
+      # Verify the GenServer.call timeout used by Client.call_tool/5 defaults to 120_000
+      # We do this by NOT passing a timeout and checking what the mock receives
+      expect(Quoracle.MCP.AnubisMock, :call_tool, fn _pid, _tool, _args, opts ->
+        # v4.0: The timeout passed to the anubis mock should be 120_000
+        assert opts[:timeout] == 120_000
+        {:ok, %{result: "ok"}}
+      end)
+
+      {:ok, _} = Client.call_tool(client, conn.connection_id, "tool", %{})
     end
   end
 end

@@ -1,7 +1,7 @@
 # lib/quoracle/agent/consensus_handler/
 
 ## Modules
-- ActionExecutor: Non-blocking consensus action execution (292 lines), dispatches Router.execute via Task.Supervisor, result returns via GenServer.cast
+- ActionExecutor: Non-blocking consensus action execution (346 lines), dispatches Router.execute via Task.Supervisor, result returns via GenServer.cast, v36.0 outer try/rescue/catch crash protection + MCP sync timeout
 - Helpers: Shared helper functions (99 lines), self_contained_actions/0, coerce_wait_value/1, extract_shell_check_id/2, normalize_sibling_context/1
 - LogHelper: Logging helpers (40 lines), safe_broadcast_log/5, log_action_error/1
 - TodoInjector: Todo list context injection (82 lines), inject_todo_context/2
@@ -11,8 +11,9 @@
 
 ## Key Functions
 - ActionExecutor.execute_consensus_action/3: Entry point, validates wait params, dispatches action
-- ActionExecutor.dispatch_action/8: Task.Supervisor.start_child, Router.execute in background, casts result to Core
+- ActionExecutor.dispatch_action/9: Task.Supervisor.start_child with outer try/rescue/catch, Router.execute in background, casts result to Core, crash_in_task injection for testing (v36.0)
 - ActionExecutor.spawn_and_monitor_router/4: Spawn Router + Process.monitor + active_routers tracking (v25.0)
+- ActionExecutor MCP sync timeout: Forces 600_000ms timeout for :call_mcp actions (v36.0, prevents smart_threshold async dispatch)
 - Helpers.extract_shell_check_id/2: Detect check_id in shell params for routing through existing Router (v25.0)
 - Helpers.self_contained_actions/0: 9 actions that complete instantly (wait:true would stall)
 - Helpers.coerce_wait_value/1: String "true"/"false" → boolean for wait param
@@ -24,8 +25,9 @@
 4. Route check_id via Helpers.extract_shell_check_id → lookup shell_routers → use existing Router
 5. For normal actions: spawn_and_monitor_router (spawn + monitor + active_routers)
 6. Add to pending_actions
-7. dispatch_action → Task.Supervisor.start_child → Router.execute → cast result to Core
-8. Return state immediately (Core is free for GenServer.call)
+7. For :call_mcp actions: inject 600_000ms timeout to force sync execution (v36.0)
+8. dispatch_action → Task.Supervisor.start_child → try/rescue/catch → Router.execute → cast result to Core
+9. Return state immediately (Core is free for GenServer.call)
 
 ## Patterns
 - Per-action Router lifecycle: new Router per action, monitored, tracked in active_routers
@@ -33,6 +35,8 @@
 - router_pid passed through result_opts for shell_routers population in ActionResultHandler
 - Sandbox.allow in Task for test DB isolation
 - try/catch for Router exits during dispatch
+- Outer try/rescue/catch guarantees error delivery on any task crash (v36.0 FIX_DispatchTaskCrashPropagation)
+- MCP sync timeout prevents retry delays from triggering smart_threshold async dispatch (v36.0)
 
 ## Dependencies
 - Router: start_link/1, execute/5

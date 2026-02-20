@@ -15,10 +15,9 @@ defmodule Quoracle.Actions.Router.MCPHelpers do
     mcp_client = Keyword.get(opts, :mcp_client)
     agent_pid = Keyword.get(opts, :agent_pid)
 
-    # DEBUG: Track MCP client creation
     require Logger
 
-    Logger.warning(
+    Logger.debug(
       "MCPHelpers: mcp_client=#{inspect(mcp_client)}, agent_pid=#{inspect(agent_pid)}, creating_new=#{is_nil(mcp_client) and is_pid(agent_pid)}"
     )
 

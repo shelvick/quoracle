@@ -103,7 +103,8 @@ defmodule QuoracleWeb.SecretManagementPacket4Test do
       |> render_click()
 
       # Model dropdown should be populated with LLMDB models
-      assert has_element?(view, "select[name='credential[model_spec]']")
+      # v6.0: LLMDB dropdown renamed to known_model_spec, model_spec is now text input
+      assert has_element?(view, "select[name='credential[known_model_spec]']")
 
       # Should contain known model formats from LLMDB
       html = render(view)
@@ -249,8 +250,8 @@ defmodule QuoracleWeb.SecretManagementPacket4Test do
 
       # Should show Bedrock-specific fields
       assert has_element?(view, "select[name='credential[region]']")
-      # But NOT Azure-specific fields
-      refute has_element?(view, "input[name='credential[endpoint_url]']")
+      # v6.0: endpoint_url is now always visible (R36), deployment_id is Azure-only
+      assert has_element?(view, "input[name='credential[endpoint_url]']")
       refute has_element?(view, "input[name='credential[deployment_id]']")
     end
 
@@ -277,10 +278,11 @@ defmodule QuoracleWeb.SecretManagementPacket4Test do
       })
       |> render_change()
 
-      # Should only show api_key field (always shown)
+      # Should show api_key field (always shown)
       assert has_element?(view, "input[name='credential[api_key]']")
-      # Provider-specific fields should NOT be shown
-      refute has_element?(view, "input[name='credential[endpoint_url]']")
+      # v6.0: endpoint_url is now always visible (R36) for local model support
+      assert has_element?(view, "input[name='credential[endpoint_url]']")
+      # Azure/Vertex/Bedrock-specific fields should NOT be shown for generic providers
       refute has_element?(view, "input[name='credential[deployment_id]']")
       refute has_element?(view, "input[name='credential[resource_id]']")
     end

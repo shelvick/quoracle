@@ -286,12 +286,14 @@ defmodule QuoracleWeb.Live.UI.CostDisplay do
     case socket.assigns do
       %{agent_id: agent_id} when not is_nil(agent_id) ->
         by_model = Aggregator.by_agent_and_model_detailed(agent_id)
-        assign_detail_costs(socket, by_model)
+        %{total_cost: total} = Aggregator.by_agent(agent_id)
+        assign_detail_costs(socket, by_model, total)
 
       %{task_id: task_id} when not is_nil(task_id) ->
         if valid_uuid?(task_id) do
           by_model = Aggregator.by_task_and_model_detailed(task_id)
-          assign_detail_costs(socket, by_model)
+          %{total_cost: total} = Aggregator.by_task(task_id)
+          assign_detail_costs(socket, by_model, total)
         else
           assign(socket, total_cost: nil, by_model: [], costs_loaded: true)
         end
@@ -301,20 +303,11 @@ defmodule QuoracleWeb.Live.UI.CostDisplay do
     end
   end
 
-  defp assign_detail_costs(socket, by_model) do
-    total = sum_model_costs(by_model)
-
+  defp assign_detail_costs(socket, by_model, total) do
     socket
     |> assign(:total_cost, total)
     |> assign(:by_model, by_model)
     |> assign(:costs_loaded, true)
-  end
-
-  @spec sum_model_costs([map()]) :: Decimal.t()
-  defp sum_model_costs(by_model) do
-    Enum.reduce(by_model, Decimal.new(0), fn m, acc ->
-      if m.total_cost, do: Decimal.add(acc, m.total_cost), else: acc
-    end)
   end
 
   # ============================================================

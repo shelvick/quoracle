@@ -30,7 +30,7 @@
 - GenerateSecret: Random password generation
 - SearchSecrets: Search secret names by terms (48 lines, no access control)
 - API: External API calls (289 lines, REST/GraphQL/JSON-RPC, see api/AGENTS.md for sub-components)
-- MCP: Model Context Protocol tool calling (121 lines, 3 modes: connect/call/terminate)
+- MCP: Model Context Protocol tool calling (203 lines, 3 modes: connect/call/terminate), v3.0 retry with exponential backoff, v3.1 action field + response truncation
 - FileRead: File reading with line numbers (152 lines), offset/limit support, binary detection
 - FileWrite: File creation and editing (196 lines), Claude Code edit semantics, exact string matching
 - BatchSync: Batched action execution (87 lines), delegates batchable_actions() to ActionList, sequential with early termination
@@ -133,6 +133,15 @@ Actions → Schema for parameter definitions
 - **Router**: Added file_read, file_write routing via ActionMapper
 - **CapabilityGroups**: file_read, file_write groups (allowed for all except restricted)
 
+**Feb 17, 2026 - Adjust Budget Timeout Fix (WorkGroupID: fix-20260217-adjust-budget-timeout)**:
+- **AdjustBudget v3.0 (75 lines)**: Cast-based budget update, unified code path
+  - Deleted Path A (adjust_child_directly, do_adjust, validate_adjustment)
+  - Always routes through Core.adjust_child_budget (no branching on parent_config)
+  - No GenServer.call to child (eliminates timeout when child mid-consensus)
+  - Decrease validation: spent-only from DB (committed check removed)
+  - Error map values use Decimal.to_string (String.t() contract)
+- **Router.Execution v31.0 (264 lines)**: Logger.warning on explicit timeout path
+
 **Dec 31, 2025 - Budget UI (WorkGroupID: feat-20251231-191717)**:
 - **AdjustBudget v1.0→v2.0**: Agent→child budget modification with atomic escrow
   - Validates parent has available funds for increases
@@ -140,6 +149,7 @@ Actions → Schema for parameter definitions
   - Uses BUDGET_Escrow.adjust_child_allocation/4 for atomic updates
   - Notifies child agent of budget change via cast
   - **v2.0 (179 lines)**: Uses opts[:parent_config] instead of Core.get_state(parent_pid) to avoid deadlock; falls back to Registry lookup for direct calls outside ActionExecutor
+  - **v3.0 (75 lines)**: See Feb 17, 2026 entry above
 - **Schema v23.0**: Added adjust_budget action (17 actions total)
 - **Router v20.0**: Added adjust_budget routing via ActionMapper
 

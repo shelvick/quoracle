@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.13] - 2026-02-20
+
+### Added
+
+- **Local model support** — Connect to locally-hosted LLMs (Ollama, LM Studio, etc.)
+  with conditional API key handling, LLMDB bypass for embeddings, custom model_spec
+  input, and local model indicators in the UI.
+
+### Fixed
+
+- **MCP reliability** — Guaranteed error delivery on dispatch task crash, added
+  MCP_Client reconnection with dead status tracking, retry logic with reconnect
+  and timeout increase, sync timeout for system-level actions, and fixed Streamable
+  HTTP base_url path doubling.
+- **Budget timeout on child dismiss** — Replaced blocking GenServer.call budget
+  updates with cast-based approach, eliminating child timeout when parent is busy.
+  Fixed Decimal-to-String drift in cost tracking.
+- **Cost details total** — Fixed cost details total dropping on child dismiss.
+
+### Changed
+
+- **MCP protocol version** — Set protocol_version per transport in connection manager.
+
 ## [0.1.12] - 2026-02-16
 
 ### Fixed

@@ -330,14 +330,22 @@ defmodule Quoracle.Actions.ShellTest do
 
     test "handles Port crash gracefully", %{opts: opts} do
       # [UNIT] Q1.3 - Command that will cause port to fail
-      # Force async by setting threshold to 0ms
+      # Force async by setting threshold to 0ms. Note: /nonexistent/command fails
+      # so fast it may complete before Task.yield(task, 0) checks the mailbox,
+      # returning a sync result instead of async. Both paths are valid.
       opts_async = Keyword.put(opts, :smart_threshold, 0)
       result = Shell.execute(%{command: "/nonexistent/command"}, "agent-1", opts_async)
 
-      assert {:ok, %{command_id: _cmd_id}} = result
+      case result do
+        {:ok, %{command_id: _cmd_id}} ->
+          # Async path: command still running at yield time
+          assert_receive {:"$gen_cast", {:action_result, _, {:ok, result_map}}}, 30_000
+          assert result_map.exit_code != 0
 
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result_map}}}, 30_000
-      assert result_map.exit_code != 0
+        {:ok, %{exit_code: exit_code}} ->
+          # Sync path: command completed before yield
+          assert exit_code != 0
+      end
     end
 
     test "executes multiple commands in parallel without interference", %{pubsub: pubsub} do

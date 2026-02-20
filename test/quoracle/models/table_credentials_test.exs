@@ -73,7 +73,10 @@ defmodule Quoracle.Models.TableCredentialsTest do
 
       changeset = TableCredentials.changeset(%TableCredentials{}, attrs)
       refute changeset.valid?
-      assert errors_on(changeset)[:api_key] == ["can't be blank"]
+      # v3.0: validate_api_key_or_endpoint produces specific error message
+      assert "api_key is required when no endpoint_url is provided" in errors_on(changeset)[
+               :api_key
+             ]
     end
   end
 
@@ -305,6 +308,143 @@ defmodule Quoracle.Models.TableCredentialsTest do
 
       refute changeset.valid?
       assert errors_on(changeset)[:model_spec] == ["must be in format provider:model"]
+    end
+  end
+
+  # ============================================================================
+  # Local Model Support Tests (WorkGroupID: feat-20260219-local-model-support)
+  # TABLE_Credentials v3.0: api_key conditional when endpoint_url present
+  # ============================================================================
+
+  describe "local model api_key conditional (v3.0)" do
+    # R11: WHEN inserting credential with endpoint_url and no api_key THEN changeset valid
+    test "credential valid with endpoint_url and no api_key" do
+      attrs = %{
+        model_id: "local_vllm_#{System.unique_integer([:positive])}",
+        model_spec: "vllm:llama3",
+        endpoint_url: "http://localhost:11434/v1"
+        # api_key intentionally omitted - local models don't need auth
+      }
+
+      changeset = TableCredentials.changeset(%TableCredentials{}, attrs)
+      assert changeset.valid?
+
+      {:ok, credential} = Repo.insert(changeset)
+      assert credential.model_spec == "vllm:llama3"
+      assert credential.endpoint_url == "http://localhost:11434/v1"
+      assert is_nil(credential.api_key)
+    end
+
+    # R12: WHEN inserting credential without endpoint_url and no api_key THEN changeset invalid
+    # with NEW specific error message from validate_api_key_or_endpoint/1
+    test "credential invalid without api_key when no endpoint_url" do
+      attrs = %{
+        model_id: "cloud_no_key_#{System.unique_integer([:positive])}",
+        model_spec: "openai:gpt-4o"
+        # No api_key and no endpoint_url - should fail with specific message
+      }
+
+      changeset = TableCredentials.changeset(%TableCredentials{}, attrs)
+      refute changeset.valid?
+      # v3.0: New validation produces specific error message
+      assert "api_key is required when no endpoint_url is provided" in errors_on(changeset)[
+               :api_key
+             ]
+    end
+
+    # R13: WHEN inserting credential with both endpoint_url and api_key THEN changeset valid
+    # Tests that the new validate_api_key_or_endpoint allows both present
+    test "credential valid with both endpoint_url and api_key" do
+      model_id = "local_with_auth_#{System.unique_integer([:positive])}"
+
+      # First: verify a local-only credential (no api_key) can be created
+      # This is the R11 prerequisite that proves v3.0 changeset is active
+      local_only_id = "local_only_#{System.unique_integer([:positive])}"
+
+      local_changeset =
+        TableCredentials.changeset(%TableCredentials{}, %{
+          model_id: local_only_id,
+          model_spec: "vllm:llama3",
+          endpoint_url: "http://localhost:11434/v1"
+        })
+
+      assert local_changeset.valid?,
+             "v3.0 prerequisite: local model without api_key must be valid"
+
+      # Now test the actual R13 case: both endpoint_url and api_key present
+      attrs = %{
+        model_id: model_id,
+        model_spec: "vllm:llama3",
+        endpoint_url: "http://localhost:11434/v1",
+        api_key: "optional-auth-token"
+      }
+
+      changeset = TableCredentials.changeset(%TableCredentials{}, attrs)
+      assert changeset.valid?
+
+      {:ok, credential} = Repo.insert(changeset)
+      assert credential.endpoint_url == "http://localhost:11434/v1"
+      assert credential.api_key == "optional-auth-token"
+
+      # Verify full round-trip (fetch by model_id returns both fields)
+      {:ok, fetched} = TableCredentials.get_by_model_id(model_id)
+      assert fetched.endpoint_url == "http://localhost:11434/v1"
+      assert fetched.api_key == "optional-auth-token"
+      assert fetched.model_spec == "vllm:llama3"
+    end
+
+    # R14: WHEN inserting Azure credential THEN still requires api_key and deployment_id
+    # Even with v3.0 changes, Azure should NOT benefit from api_key being optional.
+    # The new validate_api_key_or_endpoint must NOT make Azure api_key optional
+    # even though endpoint_url IS present.
+    test "Azure credential validation unchanged - requires api_key and deployment_id" do
+      # First: verify a non-Azure local credential passes without api_key
+      # (proves v3.0 changeset is active, but Azure is exempt)
+      local_id = "local_proof_#{System.unique_integer([:positive])}"
+
+      local_changeset =
+        TableCredentials.changeset(%TableCredentials{}, %{
+          model_id: local_id,
+          model_spec: "vllm:llama3",
+          endpoint_url: "http://localhost:11434/v1"
+        })
+
+      assert local_changeset.valid?, "v3.0 prerequisite: non-Azure local model must pass"
+
+      # Now verify Azure still requires api_key even with endpoint_url present
+      attrs = %{
+        model_id: "azure_local_#{System.unique_integer([:positive])}",
+        model_spec: "azure:gpt-4o",
+        endpoint_url: "https://my-resource.openai.azure.com",
+        deployment_id: "gpt-4o-deploy"
+        # Missing api_key - Azure MUST still require it
+      }
+
+      changeset = TableCredentials.changeset(%TableCredentials{}, attrs)
+      refute changeset.valid?
+      assert errors_on(changeset)[:api_key] != nil
+    end
+
+    # R15: WHEN model_spec starts with "vllm:" THEN passes format validation
+    # and full credential insert succeeds (with only endpoint_url, no api_key)
+    test "vllm:model-name passes model_spec format validation" do
+      model_id = "vllm_format_#{System.unique_integer([:positive])}"
+
+      attrs = %{
+        model_id: model_id,
+        model_spec: "vllm:llama3-70b",
+        endpoint_url: "http://localhost:8000/v1"
+        # No api_key - vllm local models don't need it
+      }
+
+      # v3.0: Full changeset should be valid (model_spec format OK + api_key optional with endpoint_url)
+      changeset = TableCredentials.changeset(%TableCredentials{}, attrs)
+      assert changeset.valid?
+
+      # Full insert should succeed
+      {:ok, credential} = Repo.insert(changeset)
+      assert credential.model_spec == "vllm:llama3-70b"
+      assert credential.endpoint_url == "http://localhost:8000/v1"
     end
   end
 
