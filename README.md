@@ -186,6 +186,14 @@ Quoracle supports (in theory) any model listed on [models.dev](https://models.de
 | Azure OpenAI | `azure:gpt-4` | Deployment ID |
 | Groq | `groq:llama-3.3-70b-versatile` | -- |
 
+**Local/self-hosted models** are also supported. If you're running Ollama, vLLM, LM Studio, LlamaCpp, or TGI, use the corresponding provider prefix and fill in the **Endpoint URL** field (e.g., `http://localhost:11434` for Ollama). The API key is optional for local models.
+
+| Provider | Model Spec Format | Endpoint URL |
+|----------|-------------------|--------------|
+| Ollama | `ollama:llama3` | `http://localhost:11434` |
+| vLLM | `vllm:llama3` | `http://localhost:8000` |
+| LM Studio | `lmstudio:model-name` | `http://localhost:1234` |
+
 This is not an exhaustive list -- any provider supported by ReqLLM should work. API keys are encrypted at rest with AES-256-GCM.
 
 You need at least one credential to do anything, but the real value of Quoracle comes from having _multiple_ models from _different_ providers.
@@ -397,7 +405,7 @@ Batch operations (`batch_sync`, `batch_async`) let agents execute multiple actio
 
 ### PubSub Isolation
 
-Every component receives its PubSub instance as an explicit parameter -- no global topics, no named processes, no process dictionary. This means the full test suite of 5700+ tests runs with `async: true`.
+Every component receives its PubSub instance as an explicit parameter -- no global topics, no named processes, no process dictionary. This means the full test suite of 5900+ tests runs with `async: true`.
 
 ## Configuration Reference
 
@@ -427,6 +435,7 @@ Things that work well:
 - Credential encryption and secret management
 - Capability-based action gating
 - Persistent state with task restoration on restart
+- Local/self-hosted model support (Ollama, vLLM, LM Studio, LlamaCpp, TGI)
 
 Known limitations:
 - No user authentication (single-user assumption)

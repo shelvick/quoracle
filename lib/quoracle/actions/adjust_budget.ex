@@ -5,12 +5,15 @@ defmodule Quoracle.Actions.AdjustBudget do
   Allows parent agents to modify how much budget is allocated to their
   direct children at runtime.
 
+  v3.0: Unified code path — always routes through Core.adjust_child_budget.
+  No GenServer.call to child (uses cast). Child allocation read from parent state.
+  Decrease validation uses spent-only (not spent+committed).
+
   Increase: Always allowed if parent has available funds
-  Decrease: Only if new_allocated >= child's (spent + committed)
+  Decrease: Only if new_allocated >= child's spent (from DB)
   """
 
   alias Quoracle.Agent.Core
-  alias Quoracle.Budget.Tracker
 
   @doc """
   Executes the adjust_budget action.
@@ -26,7 +29,7 @@ defmodule Quoracle.Actions.AdjustBudget do
     - {:error, :not_direct_child} if target is not a direct child
     - {:error, :insufficient_parent_budget} if parent lacks funds
     - {:error, :invalid_amount} if new_budget <= 0
-    - {:error, map()} with details if decrease would violate escrow
+    - {:error, map()} with details if decrease would exceed child's spent
   """
   @spec execute(map(), String.t(), keyword()) :: {:ok, map()} | {:error, atom() | map()}
   def execute(params, agent_id, opts) do
@@ -35,50 +38,14 @@ defmodule Quoracle.Actions.AdjustBudget do
     registry = Keyword.fetch!(opts, :registry)
 
     with :ok <- validate_positive(new_budget),
-         {:ok, child_pid} <- find_child(child_id, registry),
-         {:ok, parent_state} <- get_parent_state(agent_id, registry, opts),
-         :ok <- validate_direct_child(parent_state, child_id),
-         {:ok, child_state} <- Core.get_state(child_pid),
-         :ok <- validate_adjustment(parent_state, child_state, new_budget),
-         :ok <- do_adjust(agent_id, child_id, new_budget, opts) do
+         {:ok, _child_pid} <- find_child(child_id, registry),
+         :ok <- Core.adjust_child_budget(agent_id, child_id, new_budget, opts) do
       {:ok,
        %{
          action: "adjust_budget",
          child_id: child_id,
          new_budget: Decimal.to_string(new_budget)
        }}
-    end
-  end
-
-  # v2.0: Dispatch budget adjustment based on whether parent_config is available.
-  # When parent_config is provided, the parent GenServer may be blocked during action
-  # execution and can't service GenServer.call. Update child directly instead.
-  # When no parent_config, use Core.adjust_child_budget via Registry (original path).
-  defp do_adjust(agent_id, child_id, new_budget, opts) do
-    if Keyword.has_key?(opts, :parent_config) do
-      adjust_child_directly(child_id, new_budget, opts)
-    else
-      Core.adjust_child_budget(agent_id, child_id, new_budget, opts)
-    end
-  end
-
-  # Update child's budget_data directly when parent GenServer is unavailable.
-  # Parent's budget_data will be updated by Core when it processes the action result.
-  @spec adjust_child_directly(String.t(), Decimal.t(), keyword()) :: :ok | {:error, term()}
-  defp adjust_child_directly(child_id, new_budget, opts) do
-    registry = Keyword.fetch!(opts, :registry)
-
-    case Registry.lookup(registry, {:agent, child_id}) do
-      [{child_pid, _}] ->
-        child_budget_data =
-          case Core.get_state(child_pid) do
-            {:ok, child_state} -> %{child_state.budget_data | allocated: new_budget}
-          end
-
-        Core.update_budget_data(child_pid, child_budget_data)
-
-      [] ->
-        {:error, :child_not_found}
     end
   end
 
@@ -104,76 +71,5 @@ defmodule Quoracle.Actions.AdjustBudget do
       [{pid, _}] -> {:ok, pid}
       [] -> {:error, :child_not_found}
     end
-  end
-
-  @spec get_parent_state(String.t(), atom(), keyword()) ::
-          {:ok, map()} | {:error, :parent_not_found}
-  defp get_parent_state(parent_id, registry, opts) do
-    # v2.0: Use parent_config from opts (passed by ActionExecutor) to avoid
-    # calling back to Core via GenServer.call (prevents deadlock)
-    case Keyword.get(opts, :parent_config) do
-      %{agent_id: ^parent_id} = parent_state ->
-        {:ok, parent_state}
-
-      _ ->
-        # Fallback to Registry lookup (for direct execution outside ActionExecutor)
-        case Registry.lookup(registry, {:agent, parent_id}) do
-          [{parent_pid, _}] -> Core.get_state(parent_pid)
-          [] -> {:error, :parent_not_found}
-        end
-    end
-  end
-
-  @spec validate_direct_child(map(), String.t()) :: :ok | {:error, :not_direct_child}
-  defp validate_direct_child(parent_state, child_id) do
-    children_ids = Enum.map(parent_state.children || [], & &1.agent_id)
-
-    if child_id in children_ids do
-      :ok
-    else
-      {:error, :not_direct_child}
-    end
-  end
-
-  @spec validate_adjustment(map(), map(), Decimal.t()) :: :ok | {:error, term()}
-  defp validate_adjustment(parent_state, child_state, new_budget) do
-    current_allocation = child_state.budget_data.allocated
-    delta = Decimal.sub(new_budget, current_allocation)
-
-    cond do
-      # Increase: Check parent has available funds
-      Decimal.compare(delta, Decimal.new(0)) == :gt ->
-        validate_increase(parent_state, delta)
-
-      # Decrease: Check child can accommodate
-      Decimal.compare(delta, Decimal.new(0)) == :lt ->
-        validate_decrease(child_state, new_budget)
-
-      # No change
-      true ->
-        :ok
-    end
-  end
-
-  @spec validate_increase(map(), Decimal.t()) :: :ok | {:error, :insufficient_parent_budget}
-  defp validate_increase(parent_state, delta) do
-    # N/A budget (nil allocated) allows any increase
-    if parent_state.budget_data.allocated == nil do
-      :ok
-    else
-      parent_spent = Tracker.get_spent(parent_state.agent_id)
-
-      if Tracker.has_available?(parent_state.budget_data, parent_spent, delta) do
-        :ok
-      else
-        {:error, :insufficient_parent_budget}
-      end
-    end
-  end
-
-  @spec validate_decrease(map(), Decimal.t()) :: :ok | {:error, map()}
-  defp validate_decrease(child_state, new_budget) do
-    child_spent = Tracker.get_spent(child_state.agent_id)
-    Tracker.validate_budget_decrease(child_state.budget_data, child_spent, new_budget)
   end
 end

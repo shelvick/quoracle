@@ -4,7 +4,7 @@ defmodule Quoracle.Models.ModelQuery do
   Calls ReqLLM.generate_text directly with model_spec from credentials.
   """
 
-  alias Quoracle.Models.{CredentialManager, Embeddings, TableCredentials}
+  alias Quoracle.Models.{CredentialManager, Embeddings, LocalModelHelper, TableCredentials}
   alias Quoracle.Models.ModelQuery.{CacheHelper, MessageBuilder, OptionsBuilder, UsageHelper}
   alias Quoracle.Providers.RetryHelper
   require Logger
@@ -225,6 +225,10 @@ defmodule Quoracle.Models.ModelQuery do
     # Build options with credential info
     req_opts = build_options(credential, options)
 
+    # v19.0/v20.0: Local models bypass LLMDB catalog via map construction.
+    # Cloud providers (Azure, Vertex, Bedrock) route through LLMDB string path.
+    model_ref = LocalModelHelper.resolve_model_ref(model_spec, credential)
+
     # v8.0: Wrap ReqLLM call with RetryHelper for 429/5xx retry
     # Uses infinite retries with Retry-After support
     # Allow delay_fn injection for testing (skips real delays)
@@ -242,7 +246,7 @@ defmodule Quoracle.Models.ModelQuery do
       end
 
     case RetryHelper.with_retry(
-           fn -> ReqLLM.generate_text(model_spec, req_messages, req_opts) end,
+           fn -> ReqLLM.generate_text(model_ref, req_messages, req_opts) end,
            retry_opts
          ) do
       {:ok, response} ->

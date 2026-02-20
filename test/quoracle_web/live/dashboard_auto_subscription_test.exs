@@ -45,10 +45,15 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
         registered_at: System.system_time(:microsecond)
       })
 
-      # Mount Dashboard
+      # Mount Dashboard (short agent_fetch_timeout since registered PIDs are not GenServers)
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "agent_fetch_timeout" => 50
+          }
         )
 
       # Verify Dashboard would track logs for these agents
@@ -406,34 +411,6 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
       socket = :sys.get_state(view.pid).socket
       # Logs should be a Map for filtering
       # This will fail until Map storage is implemented
-      assert is_map(socket.assigns.logs)
-    end
-
-    # Test Registry query pattern
-    test "queries Registry using correct pattern for agent discovery", %{
-      conn: conn,
-      pubsub: pubsub,
-      registry: registry,
-      dynsup: dynsup
-    } do
-      # Register agent with expected pattern
-      Registry.register(registry, {:agent, "test_agent"}, %{
-        pid: self(),
-        parent_pid: nil,
-        registered_at: System.system_time(:microsecond)
-      })
-
-      # The Dashboard should find this agent using Registry.select
-      # with pattern: {{{:agent, :"$1"}, :"$2", :"$3"}, [], [:"$1"]}
-      {:ok, view, _html} =
-        live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
-        )
-
-      # This will fail until Registry query is implemented
-      socket = :sys.get_state(view.pid).socket
-      # Check if the Dashboard found and subscribed to the test agent
-      # We verify this by checking if logs Map would be ready
       assert is_map(socket.assigns.logs)
     end
   end

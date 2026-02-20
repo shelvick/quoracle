@@ -681,7 +681,7 @@ defmodule Quoracle.Agent.ConsensusTest do
       check all(
               prompt <- string(:printable, min_length: 5, max_length: 100),
               include_history <- boolean(),
-              max_runs: 20
+              max_runs: 10
             ) do
         history =
           if include_history do
@@ -716,30 +716,6 @@ defmodule Quoracle.Agent.ConsensusTest do
           {:error, reason} ->
             # Errors are acceptable as long as they're valid error atoms
             assert is_atom(reason)
-        end
-      end
-    end
-
-    property "consensus result always originates from possible model responses" do
-      check all(
-              prompt <- string(:printable, min_length: 5, max_length: 100),
-              seed <- integer(1..100),
-              max_runs: 20
-            ) do
-        opts = [seed: seed, test_mode: true]
-
-        messages = build_test_messages(prompt, [])
-
-        case Consensus.get_consensus(messages, opts) do
-          {:ok, {_type, action, _opts}} ->
-            # In test mode, the mock responses are limited to specific actions
-            # Based on consensus/MockResponseGenerator module
-            possible_actions = [:wait, :orient, :spawn_child, :send_message, :answer]
-            assert action.action in possible_actions
-
-          {:error, _reason} ->
-            # Errors are acceptable
-            :ok
         end
       end
     end

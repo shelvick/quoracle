@@ -8,44 +8,47 @@ No provider abstraction layer - ~7,340 lines of provider code deleted.
 EmbeddingCache owns ETS table (process-owned)
 
 ## Modules
-- **ModelQuery**: Parallel LLM query via Task.async (364 lines)
+- **ModelQuery** (368 lines): Parallel LLM query via Task.async
   - Calls ReqLLM.generate_text directly with credential.model_spec
   - Returns ReqLLM.Response passthrough (no normalization)
-  - v9.0: Default `reasoning_effort: :high` for all providers
-  - v10.0: Bedrock prompt caching support via `prompt_cache` option
-  - v11.0: Multimodal message support via MessageBuilder extraction
-  - `build_options/2`: Delegated to OptionsBuilder, public with `@doc false` for testing (R14-R17)
-- **ModelQuery.OptionsBuilder** (161 lines): Provider-specific LLM options builder (extracted 2026-01)
-  - `build_options/2`: Builds provider-specific options for ReqLLM, v16.0: passes max_tokens from caller options to ReqLLM (prevents LLMDB limits.output override)
+  - v19.0: Local model LLMDB bypass via `LocalModelHelper.resolve_model_ref/2`
+  - `build_options/2`: Delegated to OptionsBuilder, public with `@doc false` for testing
+- **ModelQuery.OptionsBuilder** (245 lines): Provider-specific LLM options builder
+  - `build_options/2`: Provider-specific options for ReqLLM (Azure, Vertex, Bedrock, default)
+  - `build_embedding_options/2`: Provider-specific options for embedding requests
   - `get_provider_prefix/1`: Extracts provider prefix from model_spec
-  - Handles Azure, Google Vertex, Bedrock, default providers
-  - Claude thinking config for Bedrock/Vertex Claude models
+  - v19.0: Forwards `endpoint_url` as `base_url` for local models
 - **ModelQuery.MessageBuilder** (164 lines): Message building and validation (extracted v11.0)
-  - `validate_messages/1`: Validates message format (role + content)
-  - `build_messages/1`: Builds ReqLLM.Message list from string-role messages
+  - `validate_messages/1`, `build_messages/1`: ReqLLM.Message list construction
   - Supports multimodal content: text, image (base64), image_url
-  - Handles atom/string keys and type values (from JSON or Elixir)
-  - v13.0: Calls ImageCompressor.maybe_compress for all :image types (6 clauses)
+  - v13.0: Calls ImageCompressor.maybe_compress for all :image types
 - **ModelQuery.CacheHelper** (55 lines): Anthropic prompt caching for Bedrock
   - `maybe_add_cache_options/2`: Add caching provider_options when prompt_cache present
   - `log_cache_metrics/1`: Debug logging for cache read/write tokens
-- **ModelQuery.UsageHelper** (228 lines): Usage/cost calculation helpers (extracted 2025-12-13)
-  - v12.0: Captures 5 token types (input, output, reasoning, cached, cache_creation) + aggregate costs (input_cost, output_cost)
-  - v16.0: Logger.warning when cost context (agent_id/task_id/pubsub) missing
-  - `calculate_aggregate_usage/1`: Sum tokens/costs from responses
-  - `maybe_record_costs/2`: Record costs via CostRecorder with sandbox cleanup handling
-  - `record_single_request/4`: Record cost for single AI request (embeddings, answer engine, condensation)
-  - `extract_usage/1`, `extract_total_cost/1`: Response parsing
-  - `extract_cache_creation_tokens/1`: v12.0 - Extract cache_creation_input_tokens from usage
-  - `format_cost/1`: v12.0 - Format Decimal cost as string for JSON metadata
-- **Embeddings** (493 lines): Text embedding via ReqLLM, caching, token-based chunking
+- **ModelQuery.UsageHelper** (228 lines): Usage/cost calculation helpers
+  - v12.0: Captures 5 token types + aggregate costs
+  - `calculate_aggregate_usage/1`, `maybe_record_costs/2`, `record_single_request/4`
+  - `extract_usage/1`, `extract_total_cost/1`, `format_cost/1`
+- **LocalModelHelper** (111 lines): Shared local model routing logic (NEW 2026-02)
+  - `cloud_provider?/1`: Check if model_spec is cloud provider (Azure/Vertex/Bedrock)
+  - `split_model_spec/1`: Extract provider and model name from "provider:model" string
+  - `local_model?/1`: Check if credential struct represents local model
+  - `resolve_model_ref/2`: Build map bypass or string model_spec for ReqLLM
+  - `@local_providers`: vllm, ollama, lmstudio, llamacpp, tgi
+  - `@cloud_provider_prefixes`: azure, google, bedrock, vertex, amazon
+- **Embeddings** (427 lines): Text embedding via ReqLLM, caching, token-based chunking
   - Model from ConfigModelSettings.get_embedding_model!() (config-driven)
-  - v5.0: `compute_embedding_cost/2` — compute cost_usd from LLMDB pricing (Decimal arithmetic)
+  - v8.0: Local model LLMDB bypass via LocalModelHelper
   - v7.0: Multi-provider support, token-based chunking via TokenChunker
 - **Embeddings.TokenChunker** (108 lines): Token-based text chunking for embedding models
   - `chunk_text_by_tokens/2`: Split text at word boundaries respecting token limits
   - `get_embedding_token_limit/1`: Look up model limits from LLMDB (default 8191)
   - `effective_token_limit/1`: Apply 90% safety margin to model limit
+- **Embeddings.CostHelper** (100 lines): Cost computation and recording (NEW 2026-02)
+  - `compute_embedding_cost/2`: Compute cost_usd from LLMDB pricing (Decimal arithmetic)
+  - `record_cost/3`: Record or accumulate embedding cost
+  - `accumulate_cost/4`: Thread cost accumulator for batch writes
+  - `resolve_configured_model_spec/0`: DRYed model_spec resolution
 - **EmbeddingCache**: GenServer owns :embedding_cache ETS (LRU 100 entries)
 - **CredentialManager**: DB credential retrieval, returns model_spec for LLMDB lookup
 - **ConfigModelSettings** (319 lines): Runtime config for consensus/embedding/answer models
@@ -64,6 +67,7 @@ EmbeddingCache owns ETS table (process-owned)
 - **TableSecrets**: Encrypted secret storage with Cloak
   - v2.0: search_by_terms/1 for case-insensitive substring matching (ILIKE ANY)
 - **TableCredentials**: Model credential storage with model_spec column
+  - v3.0: api_key optional when endpoint_url present (local model support)
 - **TableSecretUsage**: Audit trail for secret access
 - **TableModelConfigs**: Model metadata (retained for ProviderGoogle)
 
@@ -75,18 +79,22 @@ EmbeddingCache owns ETS table (process-owned)
 ```
 CredentialManager.get_credentials(model_id)
   → credential.model_spec (e.g., "openai:gpt-4o")
-    → ReqLLM.generate_text(model_spec, messages, opts)
-      → ReqLLM.Response passthrough
+    → LocalModelHelper.resolve_model_ref(model_spec, credential)
+      → map bypass (local) OR string path (cloud)
+        → ReqLLM.generate_text(model_ref, messages, opts)
+          → ReqLLM.Response passthrough
 ```
 
 ## Patterns
 - Parallel execution via Task.async (default)
 - Sandbox.allow in query_single_model/3 when sandbox_owner present
 - model_spec string enables LLMDB to handle provider routing
+- Local models bypass LLMDB via map-based model ref (LocalModelHelper)
 
 ## req_llm Integration
-- model_spec format: "provider:model_name" (e.g., "azure-openai:o1-preview")
+- model_spec format: "provider:model_name" (e.g., "azure-openai:o1-preview", "vllm:llama3")
 - ReqLLM.Response contains: id, model, message, usage, finish_reason, provider_meta
 - Tests use req_cassette plug for HTTP recording
+- Local models: endpoint_url forwarded as base_url via OptionsBuilder
 
-Test coverage: 47 core tests (async: true)
+Test coverage: 47 core + 9 local model + 6 embedding local + 14 audit findings tests (async: true)

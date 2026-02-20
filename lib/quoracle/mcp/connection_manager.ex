@@ -105,8 +105,17 @@ defmodule Quoracle.MCP.ConnectionManager do
   # Private implementation
 
   defp build_http_anubis_opts(:streamable_http, url, resolved_auth) do
+    # Parse URL to separate base_url (scheme://host:port) from path.
+    # Anubis.Transport.StreamableHTTP appends mcp_path to base_url, so passing
+    # a full URL like "http://host:8765/mcp" as base_url would double the path
+    # to "/mcp/mcp". Extract the path and pass it explicitly instead.
+    uri = URI.parse(url)
+    base_url = "#{uri.scheme}://#{uri.host}#{if uri.port, do: ":#{uri.port}", else: ""}"
+    mcp_path = if uri.path in [nil, "", "/"], do: "/mcp", else: uri.path
+
     opts = [
-      transport: {:streamable_http, base_url: url},
+      transport: {:streamable_http, base_url: base_url, mcp_path: mcp_path},
+      protocol_version: "2025-06-18",
       client_info: unique_client_info(),
       capabilities: %{}
     ]
@@ -122,6 +131,7 @@ defmodule Quoracle.MCP.ConnectionManager do
 
     opts = [
       transport: {:sse, server: [base_url: base_url, base_path: "/", sse_path: "/sse"]},
+      protocol_version: "2024-11-05",
       client_info: unique_client_info(),
       capabilities: %{}
     ]

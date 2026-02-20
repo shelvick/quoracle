@@ -67,7 +67,7 @@ defmodule Quoracle.MCP.AnubisWrapper do
   @impl true
   @spec call_tool(atom(), String.t(), map(), keyword()) :: {:ok, term()} | {:error, term()}
   def call_tool(client_name, tool_name, arguments, opts \\ []) when is_atom(client_name) do
-    timeout = Keyword.get(opts, :timeout, 30_000)
+    timeout = Keyword.get(opts, :timeout, 120_000)
     Anubis.Client.Base.call_tool(client_name, tool_name, arguments, timeout: timeout)
   end
 

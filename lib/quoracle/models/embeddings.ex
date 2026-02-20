@@ -5,9 +5,9 @@ defmodule Quoracle.Models.Embeddings do
   """
 
   alias Quoracle.Agent.TokenManager
-  alias Quoracle.Models.{ConfigModelSettings, CredentialManager, EmbeddingCache}
-  alias Quoracle.Models.Embeddings.TokenChunker
-  alias Quoracle.Models.ModelQuery.{OptionsBuilder, UsageHelper}
+  alias Quoracle.Models.{ConfigModelSettings, CredentialManager, EmbeddingCache, LocalModelHelper}
+  alias Quoracle.Models.Embeddings.{CostHelper, TokenChunker}
+  alias Quoracle.Models.ModelQuery.OptionsBuilder
   alias Quoracle.Providers.RetryHelper
   alias Quoracle.Supervisor.PidDiscovery
   alias Quoracle.Costs.Accumulator
@@ -117,12 +117,12 @@ defmodule Quoracle.Models.Embeddings do
         case Map.get(options, :cost_accumulator) do
           %Accumulator{} = acc ->
             # Accumulate cost instead of recording directly (R14)
-            updated_acc = accumulate_cost(acc, options, chunks, usage)
+            updated_acc = CostHelper.accumulate_cost(acc, options, chunks, usage)
             {:ok, result, updated_acc}
 
           nil ->
             # Record cost directly for non-cached embedding (R6, R7, R13)
-            record_cost(options, chunks, usage)
+            CostHelper.record_cost(options, chunks, usage)
             {:ok, result}
         end
 
@@ -134,83 +134,10 @@ defmodule Quoracle.Models.Embeddings do
   @doc """
   Computes embedding cost from LLMDB pricing for a model_spec and usage map.
   Returns a Decimal cost or nil if the model has no pricing data.
+  Delegates to CostHelper.
   """
   @spec compute_embedding_cost(String.t(), map()) :: Decimal.t() | nil
-  def compute_embedding_cost(model_spec, usage) when is_binary(model_spec) do
-    input_tokens = Map.get(usage, :input_tokens) || Map.get(usage, "input_tokens") || 0
-
-    case ReqLLM.model(model_spec) do
-      {:ok, %{cost: %{input: cost_per_million}}} when not is_nil(cost_per_million) ->
-        "#{cost_per_million}"
-        |> Decimal.new()
-        |> Decimal.mult(input_tokens)
-        |> Decimal.div(1_000_000)
-
-      _ ->
-        nil
-    end
-  end
-
-  defp record_cost(options, chunks, usage) do
-    model_spec =
-      case ConfigModelSettings.get_embedding_model() do
-        {:ok, model_id} -> model_id
-        _ -> "unknown"
-      end
-
-    # Compute cost from LLMDB pricing and inject into usage for UsageHelper
-    input_tokens = get_in(usage, ["usage", "prompt_tokens"]) || 0
-    total_cost = compute_embedding_cost(model_spec, %{input_tokens: input_tokens})
-
-    usage_with_cost =
-      if total_cost do
-        %{usage | "usage" => Map.put(usage["usage"] || %{}, "total_cost", total_cost)}
-      else
-        usage
-      end
-
-    cost_options = %{
-      agent_id: Map.get(options, :agent_id),
-      task_id: Map.get(options, :task_id),
-      pubsub: Map.get(options, :pubsub),
-      model_spec: model_spec
-    }
-
-    extra_metadata = %{chunks: chunks, cached: false}
-
-    UsageHelper.record_single_request(
-      usage_with_cost,
-      "llm_embedding",
-      cost_options,
-      extra_metadata
-    )
-  end
-
-  # Accumulate cost entry instead of recording directly (R14-R16)
-  defp accumulate_cost(acc, options, chunks, usage) do
-    model_spec =
-      case ConfigModelSettings.get_embedding_model() do
-        {:ok, model_id} -> model_id
-        _ -> "unknown"
-      end
-
-    input_tokens = get_in(usage, ["usage", "prompt_tokens"]) || 0
-    total_cost = compute_embedding_cost(model_spec, %{input_tokens: input_tokens})
-
-    entry = %{
-      agent_id: Map.get(options, :agent_id),
-      task_id: Map.get(options, :task_id),
-      cost_type: "llm_embedding",
-      cost_usd: total_cost,
-      metadata: %{
-        "model_spec" => model_spec,
-        "chunks" => chunks,
-        "cached" => false
-      }
-    }
-
-    Accumulator.add(acc, entry)
-  end
+  defdelegate compute_embedding_cost(model_spec, usage), to: CostHelper
 
   defp get_embedding_with_chunking(text, options) do
     # Resolve model_spec for token limit lookup
@@ -357,8 +284,12 @@ defmodule Quoracle.Models.Embeddings do
     # Support req_cassette plug injection for testing (as req_opts, not in provider opts)
     req_opts = if plug = Map.get(options, :plug), do: [plug: plug], else: []
 
+    # v8.0/v9.0: Local models bypass LLMDB catalog via map construction.
+    # Cloud providers (Azure, Vertex, Bedrock) route through LLMDB string path.
+    model_ref = LocalModelHelper.resolve_model_ref(model_name, credentials)
+
     # Get model and provider, then call prepare_request directly with our opts
-    with {:ok, model} <- ReqLLM.model(model_name),
+    with {:ok, model} <- ReqLLM.model(model_ref),
          {:ok, provider} <- ReqLLM.provider(model.provider),
          {:ok, request} <- provider.prepare_request(:embedding, model, text, opts),
          {:ok, %Req.Response{status: status, body: body}} when status in 200..299 <-

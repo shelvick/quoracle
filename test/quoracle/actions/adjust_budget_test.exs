@@ -207,9 +207,12 @@ defmodule Quoracle.Actions.AdjustBudgetTest do
     end
 
     # R4: Decrease Below Minimum [UNIT]
+    # v3.0: Decrease validation uses spent-only (from DB), not spent+committed.
+    # Child with committed=30 but no DB spending can be decreased below committed.
+    # Decrease only fails when new_budget < child's DB spent.
     @tag :r4
     @tag :unit
-    test "R4: fails decrease below spent+committed", %{deps: deps} do
+    test "R4: fails decrease below child's DB spent", %{deps: deps} do
       parent_budget = %{
         mode: :root,
         allocated: Decimal.new("100.00"),
@@ -219,28 +222,44 @@ defmodule Quoracle.Actions.AdjustBudgetTest do
       {:ok, parent_pid} = spawn_parent_with_budget(deps, parent_budget)
       {:ok, parent_state} = Core.get_state(parent_pid)
 
-      # Child with allocation of 50.00, committed of 30.00
       child_budget = %{
         mode: :child,
         allocated: Decimal.new("50.00"),
-        committed: Decimal.new("30.00")
+        committed: Decimal.new("0")
       }
 
       {:ok, _child_pid, child_state} =
         spawn_child_with_budget(deps, parent_pid, parent_state, child_budget)
 
-      # Try to decrease to 20.00 (below committed of 30.00)
+      # Record actual DB spending for the child
+      {:ok, db_task} =
+        Repo.insert(
+          Quoracle.Tasks.Task.changeset(%Quoracle.Tasks.Task{}, %{
+            prompt: "Test",
+            status: "running"
+          })
+        )
+
+      %Quoracle.Costs.AgentCost{}
+      |> Quoracle.Costs.AgentCost.changeset(%{
+        agent_id: child_state.agent_id,
+        task_id: db_task.id,
+        cost_type: "llm_consensus",
+        cost_usd: Decimal.new("30.00")
+      })
+      |> Repo.insert!()
+
+      # Try to decrease to 20.00 (below DB spent of 30.00)
       params = %{child_id: child_state.agent_id, new_budget: "20.00"}
       opts = [registry: deps.registry, pubsub: deps.pubsub]
 
       # Act
       result = AdjustBudget.execute(params, parent_state.agent_id, opts)
 
-      # Assert: Should return structured error with details
+      # Assert: v3.0 returns :would_exceed_spent (spent-only validation)
       assert {:error, error_map} = result
-      assert error_map.reason == :would_violate_escrow
-      assert Map.has_key?(error_map, :spent)
-      assert Map.has_key?(error_map, :committed)
+      assert error_map.reason == :would_exceed_spent
+      assert Map.has_key?(error_map, :child_spent)
       assert Map.has_key?(error_map, :minimum)
     end
 

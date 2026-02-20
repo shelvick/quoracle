@@ -453,9 +453,10 @@ defmodule Quoracle.Agent.ActionDeadlockPreventionTest do
 
         dispatch_time = System.monotonic_time(:millisecond) - start_time
 
-        # Dispatch should be instant (< 100ms) since we're just starting Tasks
-        assert dispatch_time < 100,
-               "Two action dispatches took #{dispatch_time}ms - should be < 100ms. " <>
+        # Dispatch should be fast (< 500ms) since we're just starting Tasks
+        # Note: threshold must accommodate scheduler contention under parallel test load
+        assert dispatch_time < 500,
+               "Two action dispatches took #{dispatch_time}ms - should be < 500ms. " <>
                  "Actions should dispatch without blocking."
 
         # Core is responsive during concurrent execution

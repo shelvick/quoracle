@@ -950,6 +950,265 @@ defmodule Quoracle.Models.ModelQueryEmbeddingTest do
     end
   end
 
+  # =============================================================
+  # LOCAL MODEL EMBEDDING SUPPORT (v8.0 - feat-20260219-local-model-support)
+  # Packet 2: Embedding Support (R33-R38)
+  # =============================================================
+
+  describe "[UNIT] local model embedding bypass (R33+R34)" do
+    test "LLMDB bypass for local, string path for cloud (R33+R34)" do
+      # R33: WHEN embedding credential has endpoint_url
+      #      THEN call_embedding_provider constructs model map bypassing LLMDB catalog
+      #
+      # A local embedding model (e.g. vllm:nomic-embed-text) is NOT in LLMDB.
+      # With the bypass, it should construct a map %{id: "nomic-embed-text", provider: :vllm}
+      # and successfully route the request. Without bypass, ReqLLM.model("vllm:nomic-embed-text")
+      # will fail because the model isn't cataloged.
+
+      plug = embedding_stub_plug()
+
+      local_creds = %{
+        model_spec: "vllm:nomic-embed-text",
+        api_key: nil,
+        endpoint_url: "http://localhost:11434/v1"
+      }
+
+      unique_text = "Local embedding bypass test #{System.unique_integer([:positive])}"
+
+      result =
+        Embeddings.get_embedding(unique_text, %{
+          plug: plug,
+          credentials: local_creds
+        })
+
+      # With LLMDB bypass, local model should return a successful embedding
+      assert {:ok, %{embedding: embedding, cached: false}} = result
+      assert length(embedding) == 3072
+
+      # R34: WHEN embedding credential has no endpoint_url
+      #      THEN call_embedding_provider uses string model_spec through LLMDB (unchanged)
+      #
+      # Cloud models continue to use string-based LLMDB lookup.
+      # This regression guard verifies the bypass doesn't break the cloud path.
+
+      cloud_creds = %{
+        model_spec: "openai:text-embedding-3-small",
+        api_key: "sk-test-key"
+      }
+
+      cloud_text = "Cloud embedding regression test #{System.unique_integer([:positive])}"
+
+      cloud_result =
+        Embeddings.get_embedding(cloud_text, %{
+          plug: plug,
+          credentials: cloud_creds
+        })
+
+      # Cloud model without endpoint_url should use string path (unchanged behavior)
+      assert {:ok, %{embedding: cloud_embedding, cached: false}} = cloud_result
+      assert length(cloud_embedding) == 3072
+    end
+  end
+
+  describe "[UNIT] local model embedding cost (R35)" do
+    test "compute_embedding_cost returns nil for local model not in LLMDB (R35)" do
+      # R35: WHEN computing cost for local model not in LLMDB
+      #      THEN compute_embedding_cost returns nil cost gracefully
+      #
+      # Local models (e.g., "vllm:nomic-embed-text") won't have pricing data in LLMDB.
+      # The cost function should return nil, not raise.
+      # Additionally, verify through the get_embedding flow that cost recording handles
+      # nil cost for local models.
+
+      plug = embedding_stub_plug()
+
+      local_creds = %{
+        model_spec: "vllm:nomic-embed-text",
+        api_key: nil,
+        endpoint_url: "http://localhost:11434/v1"
+      }
+
+      unique_text = "Local model cost test #{System.unique_integer([:positive])}"
+
+      # The embedding call must succeed first (requires R33 bypass)
+      # Then verify that cost computation returns nil (no LLMDB pricing)
+      result =
+        Embeddings.get_embedding(unique_text, %{
+          plug: plug,
+          credentials: local_creds
+        })
+
+      assert {:ok, %{embedding: _embedding, cached: false}} = result
+
+      # Direct verification: compute_embedding_cost with uncataloged local model returns nil
+      assert is_nil(
+               Embeddings.compute_embedding_cost("vllm:nomic-embed-text", %{input_tokens: 100})
+             )
+    end
+  end
+
+  describe "[UNIT] local model token chunker fallback (R36)" do
+    alias Quoracle.Models.Embeddings.TokenChunker
+
+    test "token chunker falls back to default limit for uncataloged local model (R36)" do
+      # R36: WHEN local model not in LLMDB
+      #      THEN token chunker uses default 8191 limit for chunking
+      #
+      # Local models like "vllm:nomic-embed-text" aren't in LLMDB.
+      # TokenChunker should fall back to the default 8191 token limit.
+      # Also verify through the embedding flow that chunking works correctly.
+
+      # Direct unit test: TokenChunker returns default for unknown model
+      limit = TokenChunker.get_embedding_token_limit("vllm:nomic-embed-text")
+
+      assert limit == 8191,
+             "Expected default 8191 limit for uncataloged local model, got #{limit}"
+
+      effective = TokenChunker.effective_token_limit("vllm:nomic-embed-text")
+      expected_effective = trunc(8191 * 0.9)
+
+      assert effective == expected_effective,
+             "Expected effective limit #{expected_effective} (90% of 8191), got #{effective}"
+
+      # Flow test: Long text with local model should chunk at default limit
+      # 840 reps of "The quick brown fox jumps. " = ~5,041 tokens (UNDER default 8191)
+      # Should NOT chunk since under default limit
+      unique = "#{System.unique_integer([:positive])} "
+      text = unique <> String.duplicate("The quick brown fox jumps. ", 840)
+
+      plug = embedding_stub_plug()
+
+      local_creds = %{
+        model_spec: "vllm:nomic-embed-text",
+        api_key: nil,
+        endpoint_url: "http://localhost:11434/v1"
+      }
+
+      result =
+        Embeddings.get_embedding(text, %{
+          plug: plug,
+          credentials: local_creds
+        })
+
+      # Requires R33 bypass to reach chunking logic
+      assert {:ok, %{chunks: 1}} = result,
+             "Text under default 8191 token limit should not be chunked for local model"
+    end
+  end
+
+  describe "[UNIT] local model embedding options (R37)" do
+    alias Quoracle.Models.ModelQuery.OptionsBuilder
+
+    test "embedding options include base_url when endpoint_url present (R37)" do
+      # R37: WHEN embedding credential has endpoint_url
+      #      THEN build_embedding_options includes base_url pointing to that endpoint
+      #
+      # Verifies that the OptionsBuilder correctly forwards endpoint_url as base_url
+      # for local embedding models, matching the ModelQuery v19.0 pattern.
+
+      credential = %{
+        model_spec: "vllm:nomic-embed-text",
+        api_key: nil,
+        endpoint_url: "http://localhost:11434/v1"
+      }
+
+      opts = OptionsBuilder.build_embedding_options(credential, %{})
+
+      assert Keyword.get(opts, :base_url) == "http://localhost:11434/v1"
+
+      # Also verify through the embedding flow that the base_url is used
+      # by capturing the request via a plug
+      test_pid = self()
+
+      capturing_plug = fn conn ->
+        send(test_pid, {:embedding_request, conn.host, conn.port})
+
+        response = %{
+          "data" => [%{"embedding" => @sample_embedding, "index" => 0}],
+          "model" => "nomic-embed-text",
+          "usage" => %{"prompt_tokens" => 10, "total_tokens" => 10}
+        }
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(response))
+      end
+
+      unique_text = "Base URL embedding test #{System.unique_integer([:positive])}"
+
+      # Requires R33 bypass to route to local endpoint
+      result =
+        Embeddings.get_embedding(unique_text, %{
+          plug: capturing_plug,
+          credentials: credential
+        })
+
+      assert {:ok, %{embedding: _embedding}} = result
+      assert_receive {:embedding_request, _host, _port}, 5000
+    end
+  end
+
+  describe "[SYSTEM] local embedding model reaches endpoint (R38)" do
+    @tag :acceptance
+    test "local embedding model query routes to configured endpoint_url (R38)" do
+      # R38: WHEN local embedding model credential with endpoint_url is configured
+      #      THEN get_embedding sends request to that endpoint URL and returns
+      #      embedding vector (or connection error if endpoint is down)
+      #
+      # Full system test: create a credential in the database, configure it
+      # as the embedding model, then call get_embedding and verify the request
+      # routes to the configured endpoint.
+
+      unique = System.unique_integer([:positive])
+      model_id = "local_embed_system_#{unique}"
+
+      # Create local embedding credential in DB
+      {:ok, _cred} =
+        Quoracle.Models.TableCredentials.insert(%{
+          model_id: model_id,
+          model_spec: "vllm:nomic-embed-text",
+          endpoint_url: "http://localhost:11434/v1"
+        })
+
+      # Configure as the embedding model
+      {:ok, _} = Quoracle.Models.ConfigModelSettings.set_embedding_model(model_id)
+
+      # Set up capturing plug to verify request routing
+      test_pid = self()
+
+      plug = fn conn ->
+        send(test_pid, {:system_embedding_request, %{host: conn.host, path: conn.request_path}})
+
+        response = %{
+          "data" => [%{"embedding" => @sample_embedding, "index" => 0}],
+          "model" => "nomic-embed-text",
+          "usage" => %{"prompt_tokens" => 15, "total_tokens" => 15}
+        }
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(response))
+      end
+
+      unique_text = "System test local embedding #{unique}"
+
+      # Call get_embedding through the normal path (no credentials injection)
+      # This exercises: ConfigModelSettings → CredentialManager → call_embedding_provider
+      result = Embeddings.get_embedding(unique_text, %{plug: plug})
+
+      # Positive: embedding returned successfully
+      assert {:ok, %{embedding: embedding, cached: false, chunks: 1}} = result
+      assert length(embedding) == 3072
+      assert Enum.all?(embedding, &is_float/1)
+
+      # Negative: no error returned
+      refute match?({:error, _}, result)
+
+      # Verify request was captured (proves it reached the endpoint)
+      assert_receive {:system_embedding_request, %{host: _host}}, 5000
+    end
+  end
+
   describe "[INTEGRATION] context_length_exceeded fallback (R31)" do
     alias Quoracle.Agent.TokenManager
 

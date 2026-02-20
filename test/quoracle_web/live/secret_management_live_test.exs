@@ -725,6 +725,407 @@ defmodule QuoracleWeb.SecretManagementLiveTest do
     end
   end
 
+  # ===========================================================================
+  # LOCAL MODEL SUPPORT (v6.0 - feat-20260219-local-model-support)
+  # Packet 3: UI Layer (R35-R45)
+  # ===========================================================================
+
+  describe "Local model credential form (R35-R36)" do
+    # R35: Custom Model Spec Input Shown [INTEGRATION]
+    # WHEN credentials tab active THEN custom model_spec text input shown
+    # alongside LLMDB dropdown
+    test "credential form shows custom model_spec text input", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      {:ok, view, _html} = mount_secret_management_live(conn, sandbox_owner, pubsub)
+
+      # Credentials tab is default - open new credential modal
+      view
+      |> element("button", "Add Credential")
+      |> render_click()
+
+      assert has_element?(view, "#credential-modal")
+
+      # R35: Custom model_spec text input must be present
+      # This is a text input allowing manual entry like "vllm:llama3"
+      assert has_element?(view, "input[name='credential[model_spec]']"),
+             "Expected model_spec text input to be present in credential form"
+    end
+
+    # R36: Endpoint URL Always Visible [INTEGRATION]
+    # WHEN credentials tab active THEN endpoint_url field shown for all
+    # providers (not just Azure)
+    test "endpoint_url field shown for all providers not just Azure", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      {:ok, view, _html} = mount_secret_management_live(conn, sandbox_owner, pubsub)
+
+      # Open new credential modal (default tab is credentials)
+      view
+      |> element("button", "Add Credential")
+      |> render_click()
+
+      # R36: endpoint_url must be visible WITHOUT selecting Azure provider
+      # Currently it's only shown when @selected_provider == "azure"
+      # After implementation, it should always be shown
+      assert has_element?(view, "input[name='credential[endpoint_url]']"),
+             "Expected endpoint_url field to be visible for all providers, " <>
+               "not just Azure. Currently only shown for Azure."
+    end
+  end
+
+  describe "Local model credential save (R37-R40)" do
+    # R37: Save Local Model Credential [SYSTEM]
+    # WHEN user enters vllm model_spec and endpoint_url without api_key and
+    # saves THEN credential persisted and shown in list
+    @tag :acceptance
+    test "user can save local model credential without api_key", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      {:ok, view, _html} = mount_secret_management_live(conn, sandbox_owner, pubsub)
+
+      # Open new credential modal
+      view
+      |> element("button", "Add Credential")
+      |> render_click()
+
+      assert has_element?(view, "#credential-modal")
+
+      # Fill in local model credential: model_spec + endpoint_url, NO api_key
+      unique = System.unique_integer([:positive])
+      model_id = "vllm_local_#{unique}"
+
+      view
+      |> form("#credential-form", %{
+        credential: %{
+          model_id: model_id,
+          model_spec: "vllm:llama3",
+          endpoint_url: "http://localhost:11434/v1"
+          # api_key intentionally omitted - local models don't need it
+        }
+      })
+      |> render_submit()
+
+      # Positive: credential saved and modal closed
+      refute has_element?(view, "#credential-modal"),
+             "Modal should close after successful save"
+
+      assert has_element?(view, "[data-model='#{model_id}']"),
+             "Local model credential should appear in credentials list"
+
+      # Verify in database
+      {:ok, cred} = TableCredentials.get_by_model_id(model_id)
+      assert cred.model_spec == "vllm:llama3"
+      assert cred.endpoint_url == "http://localhost:11434/v1"
+      assert is_nil(cred.api_key)
+
+      # Negative: no error messages shown (check for error-message class,
+      # not bare "error" which matches Phoenix layout client-error/server-error divs)
+      refute has_element?(view, ".error-message")
+    end
+
+    # R38: API Key Not Required With Endpoint URL [INTEGRATION]
+    # WHEN endpoint_url present THEN api_key field not marked as required
+    test "api_key validation passes when endpoint_url present", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      {:ok, view, _html} = mount_secret_management_live(conn, sandbox_owner, pubsub)
+
+      view
+      |> element("button", "Add Credential")
+      |> render_click()
+
+      unique = System.unique_integer([:positive])
+
+      # Validate with endpoint_url but no api_key - should not show error
+      html =
+        view
+        |> form("#credential-form", %{
+          credential: %{
+            model_id: "local_nokey_#{unique}",
+            model_spec: "vllm:llama3",
+            endpoint_url: "http://localhost:11434/v1"
+          }
+        })
+        |> render_change()
+
+      # R38: No "required" or "can't be blank" error on api_key
+      refute html =~ "api_key is required",
+             "api_key should not be required when endpoint_url is present"
+
+      refute html =~ "Invalid API key format",
+             "api_key format should not be validated when endpoint_url is present"
+    end
+
+    # R39: API Key Format Skip For Local Models [UNIT]
+    # WHEN endpoint_url present THEN api_key format validation skipped
+    # Tests that build_credential_changeset conditionally skips api_key
+    # requirement when endpoint_url is present
+    test "api_key format validation skipped when endpoint_url present" do
+      alias QuoracleWeb.SecretManagementLive.ValidationHelpers
+
+      # R39: build_credential_changeset should NOT require api_key when
+      # endpoint_url is present. Currently it always calls
+      # validate_required([:model_id, :api_key]) unconditionally.
+      # After Packet 3 implementation, it should call
+      # validate_api_key_requirement() which conditionally requires api_key.
+      changeset =
+        ValidationHelpers.build_credential_changeset(nil, %{
+          "model_id" => "vllm_format_skip",
+          "model_spec" => "vllm:llama3",
+          "endpoint_url" => "http://localhost:11434/v1"
+          # api_key intentionally omitted
+        })
+
+      # After implementation: changeset should be valid (no api_key error)
+      # Currently fails because validate_required([:model_id, :api_key]) rejects it
+      refute Keyword.has_key?(changeset.errors, :api_key),
+             "build_credential_changeset should not require api_key when endpoint_url is present"
+    end
+
+    # R40: Cloud Model Validation Unchanged [INTEGRATION]
+    # WHEN no endpoint_url THEN api_key required with specific error message
+    # Tests that build_credential_changeset uses the NEW conditional validation
+    # which produces a specific error message for missing api_key
+    test "cloud model credential still requires valid api_key" do
+      alias QuoracleWeb.SecretManagementLive.ValidationHelpers
+
+      # R40: build_credential_changeset should produce specific error message
+      # "api_key is required when no endpoint_url is provided"
+      # (matching TABLE_Credentials v3.0 error message)
+      # Currently produces "can't be blank" from validate_required
+      changeset =
+        ValidationHelpers.build_credential_changeset(nil, %{
+          "model_id" => "cloud_nokey_test",
+          "model_spec" => "openai:gpt-4o"
+          # No api_key and no endpoint_url
+        })
+
+      assert Keyword.has_key?(changeset.errors, :api_key),
+             "Cloud model without api_key should have api_key error"
+
+      # After implementation: error message should be the specific conditional one
+      {error_msg, _} = changeset.errors[:api_key]
+
+      assert error_msg == "api_key is required when no endpoint_url is provided",
+             "Expected specific error message from conditional validation, " <>
+               "got: #{inspect(error_msg)}"
+    end
+  end
+
+  describe "Local model in Model Config (R41-R43)" do
+    # R41: Local Model in Consensus Dropdown [INTEGRATION]
+    # WHEN local model credential saved THEN appears in Model Config
+    # answer engine / consensus dropdown with "(local)" indicator
+    test "local model shows local indicator in dropdown", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      # Create a local model credential
+      unique = System.unique_integer([:positive])
+      model_id = "vllm_consensus_#{unique}"
+
+      {:ok, _cred} =
+        TableCredentials.insert(%{
+          model_id: model_id,
+          model_spec: "vllm:llama3",
+          endpoint_url: "http://localhost:11434/v1"
+        })
+
+      {:ok, view, _html} = mount_secret_management_live(conn, sandbox_owner, pubsub)
+
+      # Switch to Model Config tab
+      view
+      |> element("[phx-click='switch_tab'][phx-value-tab='model_config']")
+      |> render_click()
+
+      html = render(view)
+
+      # R41: Local model should appear with a "(local)" indicator
+      # to distinguish it from cloud models in the dropdown.
+      # Currently credentialed_models just shows model_id without any
+      # local indicator. After Packet 3 implementation, local models
+      # (those with endpoint_url) should show "(local)" label.
+      assert html =~ "#{model_id} (local)",
+             "Local model #{model_id} should show '(local)' indicator in dropdown"
+    end
+
+    # R42: Local Model in Embedding Dropdown [INTEGRATION]
+    # WHEN local model credential saved THEN appears in Model Config
+    # embedding dropdown with "(local)" indicator
+    test "local embedding model shows local indicator", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      unique = System.unique_integer([:positive])
+      model_id = "vllm_embedding_#{unique}"
+
+      {:ok, _cred} =
+        TableCredentials.insert(%{
+          model_id: model_id,
+          model_spec: "vllm:nomic-embed-text",
+          endpoint_url: "http://localhost:11434/v1"
+        })
+
+      {:ok, view, _html} = mount_secret_management_live(conn, sandbox_owner, pubsub)
+
+      # Switch to Model Config tab
+      view
+      |> element("[phx-click='switch_tab'][phx-value-tab='model_config']")
+      |> render_click()
+
+      html = render(view)
+
+      # R42: Local embedding model should show "(local)" indicator
+      assert html =~ "#{model_id} (local)",
+             "Local embedding model should show '(local)' indicator"
+    end
+
+    # R43: Local Model in Image Dropdown [INTEGRATION]
+    # WHEN local model credential with endpoint_url saved THEN appears
+    # in image generation dropdown (bypasses LLMDB filter)
+    test "local model in image generation dropdown", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      unique = System.unique_integer([:positive])
+      model_id = "vllm_imagegen_#{unique}"
+
+      {:ok, _cred} =
+        TableCredentials.insert(%{
+          model_id: model_id,
+          model_spec: "vllm:sd-turbo",
+          endpoint_url: "http://localhost:11434/v1"
+        })
+
+      {:ok, view, _html} = mount_secret_management_live(conn, sandbox_owner, pubsub)
+
+      # Switch to Model Config tab
+      view
+      |> element("[phx-click='switch_tab'][phx-value-tab='model_config']")
+      |> render_click()
+
+      # R43: Local model with endpoint_url should be included in image
+      # generation dropdown. Currently filter_image_models only checks
+      # LLMDB image_specs -- local models not in LLMDB are excluded.
+      # After Packet 3 implementation, credentials with endpoint_url
+      # bypass the LLMDB filter and are included.
+      #
+      # Check the image generation multi-select specifically
+      assert has_element?(
+               view,
+               "select[name='model_config[image_generation_models][]'] option[value='#{model_id}']"
+             ),
+             "Local model #{model_id} with endpoint_url should appear in " <>
+               "image generation dropdown (bypasses LLMDB filter)"
+    end
+  end
+
+  describe "Known model dropdown and full journey (R44-R45)" do
+    # R44: Known Model Dropdown Still Works [INTEGRATION]
+    # WHEN user selects from LLMDB dropdown THEN populates model_spec
+    # text input (the new custom text input added in Packet 3)
+    test "selecting known model from dropdown populates model_spec input", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      {:ok, view, _html} = mount_secret_management_live(conn, sandbox_owner, pubsub)
+
+      # Open new credential modal
+      view
+      |> element("button", "Add Credential")
+      |> render_click()
+
+      # R44: After Packet 3 implementation, there should be BOTH a
+      # select dropdown (LLMDB known models) AND a text input
+      # (custom model_spec). Selecting from the dropdown should
+      # populate the text input.
+      #
+      # Currently the form only has a <select> for model_spec.
+      # After implementation, a separate text input will exist.
+      # Verify the text input element exists first.
+      assert has_element?(view, "input[name='credential[model_spec]']"),
+             "Expected custom model_spec text input alongside LLMDB dropdown"
+
+      # Verify the LLMDB dropdown also exists (kept as optional helper)
+      assert has_element?(view, "select[name='credential[known_model_spec]']"),
+             "Expected LLMDB dropdown alongside custom model_spec text input"
+    end
+
+    # R45: Full Local Model Setup Journey [SYSTEM]
+    # WHEN user adds local model credential with endpoint_url THEN can
+    # select it in Model Config AND save config successfully
+    @tag :acceptance
+    test "full journey: add local model credential then configure in model config", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      {:ok, view, _html} = mount_secret_management_live(conn, sandbox_owner, pubsub)
+
+      # Step 1: Add local model credential
+      view
+      |> element("button", "Add Credential")
+      |> render_click()
+
+      unique = System.unique_integer([:positive])
+      model_id = "vllm_journey_#{unique}"
+
+      view
+      |> form("#credential-form", %{
+        credential: %{
+          model_id: model_id,
+          model_spec: "vllm:llama3",
+          endpoint_url: "http://localhost:11434/v1"
+        }
+      })
+      |> render_submit()
+
+      # Verify credential saved (modal closed)
+      refute has_element?(view, "#credential-modal"),
+             "Credential modal should close after successful save"
+
+      # Step 2: Switch to Model Config tab
+      view
+      |> element("[phx-click='switch_tab'][phx-value-tab='model_config']")
+      |> render_click()
+
+      html = render(view)
+
+      # Step 3: Local model should appear in dropdown options
+      assert html =~ model_id,
+             "Local model should be available in Model Config after creation"
+
+      # Step 4: Select local model as embedding model and save
+      view
+      |> form("#model-config-form", %{
+        model_config: %{
+          embedding_model: model_id
+        }
+      })
+      |> render_submit()
+
+      # R45 Positive: Config saved successfully
+      assert render(view) =~ "Model configuration saved",
+             "Model config should save successfully with local model selected"
+
+      # R45 Negative: No error messages
+      refute render(view) =~ "Error saving"
+    end
+  end
+
   describe "Sorting and pagination" do
     test "sorts items by creation date", %{
       conn: conn,

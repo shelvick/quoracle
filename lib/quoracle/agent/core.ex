@@ -97,14 +97,12 @@ defmodule Quoracle.Agent.Core do
   defdelegate handle_agent_message(agent, content), to: ClientAPI
   @spec handle_internal_message(pid(), atom(), any()) :: :ok
   defdelegate handle_internal_message(agent, type, data), to: ClientAPI
-
-  # Dismiss child race prevention (v19.0)
   @spec set_dismissing(pid(), boolean()) :: :ok
   defdelegate set_dismissing(agent, value), to: ClientAPI
   @spec dismissing?(pid()) :: boolean()
   defdelegate dismissing?(agent), to: ClientAPI
 
-  # Budget system (v4.0, v22.0)
+  # Budget system (v4.0, v22.0, v23.0)
   @spec update_budget_committed(pid(), Decimal.t()) :: :ok
   defdelegate update_budget_committed(agent, amount), to: ClientAPI
   @spec release_budget_committed(pid(), Decimal.t()) :: :ok
@@ -114,7 +112,6 @@ defmodule Quoracle.Agent.Core do
   @spec get_budget(pid()) :: {:ok, %{budget_data: map(), over_budget: boolean()}}
   defdelegate get_budget(agent), to: ClientAPI
 
-  # Budget system (v23.0) - adjust_child_budget, update_budget_data
   @spec adjust_child_budget(String.t(), String.t(), Decimal.t(), keyword()) ::
           :ok | {:error, term()}
   defdelegate adjust_child_budget(parent_id, child_id, new_budget, opts), to: ClientAPI
@@ -342,6 +339,11 @@ defmodule Quoracle.Agent.Core do
     ChildrenTracker.handle_child_restored(data, state)
   end
 
+  # Budget cast from parent (v37.0) - fire-and-forget budget update
+  def handle_cast({:set_budget_allocated, new_budget}, state) do
+    BudgetHandler.handle_set_budget_allocated(new_budget, state)
+  end
+
   # Skills system (v27.0) - append learned skills to active_skills
   def handle_cast({:learn_skills, skills_metadata}, state) when is_list(skills_metadata) do
     updated_skills = state.active_skills ++ skills_metadata
@@ -388,6 +390,23 @@ defmodule Quoracle.Agent.Core do
 
   def handle_cast({:store_mcp_client, mcp_client_pid}, state),
     do: CastHandler.handle_store_mcp_client(mcp_client_pid, state)
+
+  # FIX_DispatchTaskCrashPropagation: Test-only cast for system-level crash injection.
+  # Sets crash_in_task in state and dispatches an action through execute_consensus_action.
+  def handle_cast({:dispatch_with_crash, action_atom, params, crash_type}, state) do
+    alias Quoracle.Agent.ConsensusHandler.ActionExecutor
+
+    state = Map.put(state, :crash_in_task, crash_type)
+
+    action_response = %{
+      action: action_atom,
+      params: params,
+      wait: false
+    }
+
+    new_state = ActionExecutor.execute_consensus_action(state, action_response, self())
+    {:noreply, new_state}
+  end
 
   def handle_cast(_msg, state), do: {:noreply, state}
 
@@ -467,26 +486,11 @@ defmodule Quoracle.Agent.Core do
     :ok
   end
 
-  # Database Persistence (Packet 3) - Delegated to Core.Persistence
-
-  @doc """
-  Persist agent to database during initialization.
-  Delegated to Core.Persistence module.
-  """
+  # Database Persistence - Delegated to Core.Persistence
   @spec persist_agent(State.t()) :: :ok
   defdelegate persist_agent(state), to: Persistence
-
-  @doc """
-  Update agent conversation history in database.
-  Delegated to Core.Persistence module.
-  """
   @spec persist_conversation(State.t()) :: :ok
   defdelegate persist_conversation(state), to: Persistence
-
-  @doc """
-  Extract parent agent_id from parent_pid using Registry.
-  Delegated to Core.Persistence module.
-  """
   @spec extract_parent_agent_id(pid() | nil, State.t()) :: String.t() | nil
   defdelegate extract_parent_agent_id(parent_pid, state), to: Persistence
 
