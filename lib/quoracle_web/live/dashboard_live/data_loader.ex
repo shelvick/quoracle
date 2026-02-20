@@ -6,9 +6,12 @@ defmodule QuoracleWeb.DashboardLive.DataLoader do
 
   @doc """
   Load tasks from database and merge with Registry state.
+
+  Options:
+    * `:agent_fetch_timeout` - timeout in ms for fetching agent data (default: 1000)
   """
-  @spec load_tasks_from_db(atom(), atom()) :: %{tasks: map(), agents: map()}
-  def load_tasks_from_db(registry, _pubsub) do
+  @spec load_tasks_from_db(atom(), atom(), keyword()) :: %{tasks: map(), agents: map()}
+  def load_tasks_from_db(registry, _pubsub, opts \\ []) do
     # Query all tasks from database
     db_tasks = Quoracle.Tasks.TaskManager.list_tasks()
 
@@ -35,7 +38,7 @@ defmodule QuoracleWeb.DashboardLive.DataLoader do
       |> Enum.into(%{})
 
     # Merge live agent state with DB tasks
-    {tasks_with_state, agents_map} = merge_task_state(tasks_map, live_agents)
+    {tasks_with_state, agents_map} = merge_task_state(tasks_map, live_agents, opts)
 
     %{
       tasks: tasks_with_state,
@@ -45,9 +48,12 @@ defmodule QuoracleWeb.DashboardLive.DataLoader do
 
   @doc """
   Merge task database state with live Registry state.
+
+  Options:
+    * `:agent_fetch_timeout` - timeout in ms for fetching agent data (default: 1000)
   """
-  @spec merge_task_state(map(), list()) :: {map(), map()}
-  def merge_task_state(tasks_map, live_agents) do
+  @spec merge_task_state(map(), list(), keyword()) :: {map(), map()}
+  def merge_task_state(tasks_map, live_agents, opts \\ []) do
     # Group live agents by task_id
     agents_by_task =
       Enum.group_by(live_agents, fn {_agent_id, meta} ->
@@ -56,6 +62,8 @@ defmodule QuoracleWeb.DashboardLive.DataLoader do
 
     # Fetch agent data in parallel to avoid sequential blocking during mount
     # This prevents UI timeout when agents are busy (e.g., waiting on LLM)
+    agent_fetch_timeout = Keyword.get(opts, :agent_fetch_timeout, 1000)
+
     agent_data =
       live_agents
       |> Enum.zip(
@@ -65,7 +73,7 @@ defmodule QuoracleWeb.DashboardLive.DataLoader do
             pid = Map.get(meta, :pid)
             {fetch_agent_todos(pid), fetch_agent_budget_data(pid)}
           end,
-          timeout: 1000,
+          timeout: agent_fetch_timeout,
           on_timeout: :kill_task
         )
       )

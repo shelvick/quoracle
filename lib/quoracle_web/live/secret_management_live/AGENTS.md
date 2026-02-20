@@ -1,10 +1,12 @@
 # lib/quoracle_web/live/secret_management_live/
 
-## Architecture (5-module, ~950 lines total)
+## Architecture (5-module, ~1010 lines total)
 - **Main**: SecretManagementLive (500 lines) - LiveView coordinator, event handlers
 - **DataHelpers** (116 lines): DB operations, list loading, credential item building
 - **ValidationHelpers** (139 lines): Credential validation, changeset building, param normalization
-- **ModelConfigHelpers** (228 lines): Model config tab logic, provider extraction, save_model_config
+  - v6.0: api_key conditionally required, format validation skipped for local models
+- **ModelConfigHelpers** (235 lines): Model config tab logic, provider extraction, save_model_config
+  - v6.0: Local model "(local)" labels, image filter LLMDB bypass, delegates to LocalModelHelper
 - **ProfileHelpers** (119 lines): Profile CRUD operations, changeset building
 
 ## Key Functions (DataHelpers)
@@ -17,11 +19,17 @@
 - extract_model_spec/1: Extract model_spec from params (fallback to model_id)
 - normalize_credential_params/1: Normalize params with model_spec
 - build_credential_params/1: Build credential params map for insert/update
+- validate_api_key_requirement/1: api_key required only when no endpoint_url (v6.0)
+- validate_api_key_format/1: Skips format check when endpoint_url present (v6.0)
 
 ## Key Functions (ModelConfigHelpers)
 - extract_provider/1: Extract provider from model_spec
 - save_model_config/1: Save all model config settings (consensus, embedding, etc.)
-- load_credentialed_models/0, load_chat_capable_models/0, load_image_capable_models/0
+- load_credentialed_models/0: Returns {label, model_id} tuples; "(local)" suffix via LocalModelHelper
+- load_chat_capable_models/0: Filters out embedding-only models
+- load_image_capable_models/0: LLMDB image generation models
+- filter_image_models/2: Bulk lookup (no N+1), local models bypass LLMDB filter
+- maybe_set/2: Generic setter with function parameter (DRYed from 3 identical functions)
 
 ## Key Functions (ProfileHelpers)
 - new_profile_changeset/0, edit_profile_changeset/1, validate_changeset/2
@@ -42,10 +50,17 @@ skills_path: String.t() | nil
 - Helper module extraction for 500-line limit compliance
 - Direct delete (no confirmation modal) for profiles
 - DataHelpers: prepare_edit_modal/2 extracted for profile edit modal prep
+- v6.0: endpoint_url always visible in both new/edit credential forms (not gated behind Azure)
+- v6.0: Custom model_spec text input alongside LLMDB dropdown
 
 ## Template
-- secret_management_live.html.heex (~420 lines, includes profile modal)
+- secret_management_live.html.heex (~460 lines, includes profile modal + local model fields)
+
+## Dependencies
+- Quoracle.Models.LocalModelHelper (v6.0): cloud_provider?/1, local_model?/1
 
 ## Test Coverage
 - 19 secret management tests (R1-R19)
 - 11 profile management tests (R1-R10)
+- 11 local model UI tests (R35-R45)
+- 3 edit flow tests (F5)

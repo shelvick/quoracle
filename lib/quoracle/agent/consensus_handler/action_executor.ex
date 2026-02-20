@@ -112,6 +112,16 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
 
     execute_opts = build_execute_opts(state, action_id, agent_pid, action_response)
 
+    # v36.0: Force synchronous execution for MCP actions.
+    # MCP retry delays (500ms+) exceed the 100ms smart_threshold, causing async dispatch
+    # which loses results. A 10-minute timeout covers worst-case retry scenarios.
+    execute_opts =
+      if action_atom == :call_mcp do
+        Keyword.put_new(execute_opts, :timeout, 600_000)
+      else
+        execute_opts
+      end
+
     # v25.0: Route check_id through existing Router from shell_routers,
     # or spawn a new per-action Router for normal actions
     check_id = Helpers.extract_shell_check_id(params, action_atom)
@@ -164,6 +174,8 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
 
     # v35.0: Dispatch to Task.Supervisor instead of blocking on Router.execute
     # Core returns immediately - result arrives via GenServer.cast({:action_result, ...})
+    crash_in_task = Map.get(state, :crash_in_task)
+
     dispatch_action(
       router_pid,
       action_atom,
@@ -172,7 +184,8 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
       execute_opts,
       action_response,
       agent_pid,
-      action_id
+      action_id,
+      crash_in_task
     )
 
     # Return state immediately - action running in background
@@ -180,8 +193,19 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
   end
 
   # v35.0: Dispatch action execution to Task.Supervisor (non-blocking)
+  # v36.0: Outer try/rescue/catch guarantees error delivery on task crash
   # Result sent back to Core via GenServer.cast
-  @spec dispatch_action(pid(), atom(), map(), String.t(), keyword(), map(), pid(), String.t()) ::
+  @spec dispatch_action(
+          pid(),
+          atom(),
+          map(),
+          String.t(),
+          keyword(),
+          map(),
+          pid(),
+          String.t(),
+          atom() | nil
+        ) ::
           {:ok, pid()}
   defp dispatch_action(
          router_pid,
@@ -191,44 +215,74 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
          execute_opts,
          action_response,
          agent_pid,
-         action_id
+         action_id,
+         crash_in_task
        ) do
     sandbox_owner = Keyword.get(execute_opts, :sandbox_owner)
 
     Task.Supervisor.start_child(Quoracle.SpawnTaskSupervisor, fn ->
-      # Allow DB access in background task (test isolation)
-      if sandbox_owner do
-        Ecto.Adapters.SQL.Sandbox.allow(Quoracle.Repo, sandbox_owner, self())
-      end
-
-      result =
-        try do
-          Quoracle.Actions.Router.execute(
-            router_pid,
-            action_atom,
-            params,
-            agent_id,
-            execute_opts
-          )
-        catch
-          :exit, reason ->
-            {:error, {:router_exit, Exception.format_exit(reason)}}
+      try do
+        # Allow DB access in background task (test isolation)
+        if sandbox_owner do
+          Ecto.Adapters.SQL.Sandbox.allow(Quoracle.Repo, sandbox_owner, self())
         end
 
-      # Compute wait handling opts for result processing in Core
-      wait_value = action_response |> Map.get(:wait) |> Helpers.coerce_wait_value()
-      always_sync_list = Quoracle.Actions.Router.ClientAPI.always_sync_actions()
+        # Crash injection for testing (FIX_DispatchTaskCrashPropagation)
+        case crash_in_task do
+          :raise -> raise "Injected crash for testing"
+          :throw -> throw("Injected throw for testing")
+          :exit -> exit("Injected exit for testing")
+          _ -> :ok
+        end
 
-      result_opts = [
-        action_atom: action_atom,
-        wait_value: wait_value,
-        always_sync: action_atom in always_sync_list,
-        action_response: action_response,
-        router_pid: router_pid
-      ]
+        result =
+          try do
+            Quoracle.Actions.Router.execute(
+              router_pid,
+              action_atom,
+              params,
+              agent_id,
+              execute_opts
+            )
+          catch
+            :exit, reason ->
+              {:error, {:router_exit, Exception.format_exit(reason)}}
+          end
 
-      # Send result back to Core via cast
-      GenServer.cast(agent_pid, {:action_result, action_id, result, result_opts})
+        # Compute wait handling opts for result processing in Core
+        wait_value = action_response |> Map.get(:wait) |> Helpers.coerce_wait_value()
+        always_sync_list = Quoracle.Actions.Router.ClientAPI.always_sync_actions()
+
+        result_opts = [
+          action_atom: action_atom,
+          wait_value: wait_value,
+          always_sync: action_atom in always_sync_list,
+          action_response: action_response,
+          router_pid: router_pid,
+          crash_protected: true
+        ]
+
+        # Send result back to Core via cast
+        GenServer.cast(agent_pid, {:action_result, action_id, result, result_opts})
+      rescue
+        e ->
+          Logger.error("Action dispatch task crashed: #{Exception.message(e)}")
+
+          GenServer.cast(
+            agent_pid,
+            {:action_result, action_id, {:error, {:task_crash, Exception.message(e)}},
+             [action_atom: action_atom]}
+          )
+      catch
+        kind, value ->
+          Logger.error("Action dispatch task crashed: #{kind} #{inspect(value)}")
+
+          GenServer.cast(
+            agent_pid,
+            {:action_result, action_id, {:error, {:task_crash, "#{kind}: #{inspect(value)}"}},
+             [action_atom: action_atom]}
+          )
+      end
     end)
   end
 

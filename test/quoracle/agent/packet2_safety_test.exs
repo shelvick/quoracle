@@ -552,24 +552,53 @@ defmodule Quoracle.Agent.Packet2SafetyTest do
   end
 
   # ============================================================================
-  # ACTION_AdjustBudget v2.0 - R11: Uses opts Parent Config
-  # [UNIT] WHEN adjust_budget executes with parent_config in opts THEN
-  # uses opts state instead of Core.get_state
-  #
-  # FAILS: Current get_parent_state/2 always calls Core.get_state via
-  # Registry lookup. It does not accept or check opts[:parent_config].
+  # ACTION_AdjustBudget v3.0 - R11: Unified Code Path
+  # [INTEGRATION] WHEN adjust_budget executes (with or without parent_config)
+  # THEN always routes through Core.adjust_child_budget via Registry lookup.
+  # v3.0 removed the parent_config shortcut path (Path A).
   # ============================================================================
 
-  describe "R11: adjust_budget opts parent_config" do
-    test "adjust_budget uses parent_config from opts",
+  describe "R11: adjust_budget unified code path" do
+    test "adjust_budget always routes through Core (parent_config ignored)",
          %{deps: deps, sandbox_owner: sandbox_owner} do
-      parent_id = "parent-adj-opts-#{System.unique_integer([:positive])}"
-      child_id = "child-adj-opts-#{System.unique_integer([:positive])}"
+      # Spawn a real parent agent with budget
+      task_id = Ecto.UUID.generate()
 
-      # Spawn a child agent with budget that we can adjust
+      parent_config = %{
+        agent_id: "parent-adj-unified-#{System.unique_integer([:positive])}",
+        task_id: task_id,
+        test_mode: true,
+        skip_auto_consensus: true,
+        sandbox_owner: sandbox_owner,
+        pubsub: deps.pubsub,
+        budget_data: %{
+          mode: :root,
+          allocated: Decimal.new("200.00"),
+          committed: Decimal.new("50.00")
+        },
+        prompt_fields: %{
+          provided: %{task_description: "Parent task"},
+          injected: %{global_context: "", constraints: []},
+          transformed: %{}
+        },
+        models: [],
+        capability_groups: [:hierarchy]
+      }
+
+      {:ok, parent_pid} =
+        spawn_agent_with_cleanup(deps.dynsup, parent_config,
+          registry: deps.registry,
+          pubsub: deps.pubsub,
+          sandbox_owner: sandbox_owner
+        )
+
+      {:ok, parent_state} = Core.get_state(parent_pid)
+
+      # Spawn a child agent with budget
       child_config = %{
-        agent_id: child_id,
-        task_id: Ecto.UUID.generate(),
+        agent_id: "child-adj-unified-#{System.unique_integer([:positive])}",
+        task_id: task_id,
+        parent_id: parent_state.agent_id,
         test_mode: true,
         skip_auto_consensus: true,
         sandbox_owner: sandbox_owner,
@@ -588,37 +617,40 @@ defmodule Quoracle.Agent.Packet2SafetyTest do
         capability_groups: []
       }
 
-      {:ok, _child_pid} =
+      {:ok, child_pid} =
         spawn_agent_with_cleanup(deps.dynsup, child_config,
           registry: deps.registry,
           pubsub: deps.pubsub,
           sandbox_owner: sandbox_owner
         )
 
-      # Create a fake parent state to pass via parent_config
-      # (parent is NOT a running GenServer — this is the point)
-      fake_parent_state = %{
-        agent_id: parent_id,
-        children: [%{agent_id: child_id, spawned_at: DateTime.utc_now()}],
-        budget_data: %{
-          mode: :root,
-          allocated: Decimal.new("200.00"),
-          committed: Decimal.new("50.00")
-        }
-      }
+      {:ok, child_state} = Core.get_state(child_pid)
 
-      # Execute adjust_budget with parent_config in opts
-      # FAILS: current get_parent_state/2 ignores opts, looks up Registry,
-      # and fails because parent_id is not registered.
+      # Register child with parent
+      GenServer.cast(
+        parent_pid,
+        {:child_spawned,
+         %{
+           agent_id: child_state.agent_id,
+           spawned_at: DateTime.utc_now(),
+           budget_allocated: Decimal.new("50.00")
+         }}
+      )
+
+      _ = Core.get_state(parent_pid)
+
+      # Execute adjust_budget WITH parent_config in opts
+      # v3.0: parent_config is ignored — always uses Registry lookup
       result =
         AdjustBudget.execute(
-          %{child_id: child_id, new_budget: 60},
-          parent_id,
+          %{child_id: child_state.agent_id, new_budget: 60},
+          parent_state.agent_id,
           registry: deps.registry,
-          parent_config: fake_parent_state
+          parent_config: parent_state
         )
 
-      # Should succeed using the fake parent state from opts
+      # Should succeed via unified Core.adjust_child_budget path
+      child_id = child_state.agent_id
       assert {:ok, %{action: "adjust_budget", child_id: ^child_id}} = result
     end
   end

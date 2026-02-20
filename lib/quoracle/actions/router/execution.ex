@@ -7,6 +7,8 @@ defmodule Quoracle.Actions.Router.Execution do
   and database sandbox isolation for tests.
   """
 
+  require Logger
+
   alias Quoracle.PubSub.AgentEvents
 
   @doc """
@@ -120,6 +122,11 @@ defmodule Quoracle.Actions.Router.Execution do
         nil ->
           # Timeout - kill the task
           Task.shutdown(task, :brutal_kill)
+
+          Logger.warning(
+            "Action #{inspect(module)} timed out for agent #{agent_id} (timeout: #{timeout}ms)"
+          )
+
           {:error, :timeout}
       end
     else

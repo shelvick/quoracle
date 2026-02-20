@@ -16,10 +16,10 @@ defmodule Quoracle.Agent.Core.ClientAPI do
 
   @doc """
   Get the current state of an agent.
-  Accepts optional timeout (default 5000ms).
+  Accepts optional timeout (default 15000ms).
   """
   @spec get_state(pid(), timeout()) :: {:ok, map()}
-  def get_state(agent, timeout \\ 5000) do
+  def get_state(agent, timeout \\ 15_000) do
     GenServer.call(agent, :get_state, timeout)
   end
 
@@ -27,9 +27,9 @@ defmodule Quoracle.Agent.Core.ClientAPI do
   Get the model histories map for an agent.
   Returns a map of model_id => history list.
   """
-  @spec get_model_histories(pid()) :: {:ok, map()}
-  def get_model_histories(agent) do
-    GenServer.call(agent, :get_model_histories)
+  @spec get_model_histories(pid(), timeout()) :: {:ok, map()}
+  def get_model_histories(agent, timeout \\ 15_000) do
+    GenServer.call(agent, :get_model_histories, timeout)
   end
 
   @doc """

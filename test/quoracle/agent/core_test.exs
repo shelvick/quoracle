@@ -1315,11 +1315,11 @@ defmodule Quoracle.Agent.CoreTest do
       # Trigger consensus continuation by sending :trigger_consensus message
       send(agent, :trigger_consensus)
 
-      # Verify agent doesn't crash (no DOWN message)
-      refute_receive {:DOWN, ^ref, :process, ^agent, _reason}, 500
-
       # Verify state is still accessible (proves GenServer didn't crash)
       assert {:ok, _state} = Core.get_state(agent)
+
+      # GenServer.call above synchronizes - all prior messages processed
+      refute_received {:DOWN, ^ref, :process, ^agent, _reason}
       Process.demonitor(ref, [:flush])
     end
 
@@ -1358,11 +1358,11 @@ defmodule Quoracle.Agent.CoreTest do
       # Direct :trigger_consensus is considered stale without consensus_scheduled flag
       Core.handle_message(agent, "test message")
 
-      # Wait for processing to complete (no crash)
-      refute_receive {:DOWN, ^ref, :process, ^agent, _reason}, 500
-
-      # Verify state was updated (action counter should increment)
+      # GenServer.call synchronizes - all prior messages processed before this returns
       {:ok, new_state} = Core.get_state(agent)
+
+      # Now safe to check instantly - sync barrier above guarantees processing complete
+      refute_received {:DOWN, ^ref, :process, ^agent, _reason}
       assert new_state.action_counter > initial_counter
       Process.demonitor(ref, [:flush])
     end
@@ -1397,11 +1397,11 @@ defmodule Quoracle.Agent.CoreTest do
         send(agent, :trigger_consensus)
       end)
 
-      # Verify agent doesn't crash (no DOWN message)
-      refute_receive {:DOWN, ^ref, :process, ^agent, _reason}, 500
-
       # Verify state is accessible (proves no crash)
       assert {:ok, _state} = Core.get_state(agent)
+
+      # GenServer.call above synchronizes - all prior messages processed
+      refute_received {:DOWN, ^ref, :process, ^agent, _reason}
       Process.demonitor(ref, [:flush])
     end
 
@@ -1445,11 +1445,11 @@ defmodule Quoracle.Agent.CoreTest do
         Core.handle_message(agent, "continuation message")
       end)
 
-      # Wait for processing to complete (no crash)
-      refute_receive {:DOWN, ^ref, :process, ^agent, _reason}, 500
-
-      # Verify second consensus was triggered
+      # GenServer.call synchronizes - all prior messages processed before this returns
       {:ok, state_after_second} = Core.get_state(agent)
+
+      # Now safe to check instantly - sync barrier above guarantees processing complete
+      refute_received {:DOWN, ^ref, :process, ^agent, _reason}
       assert state_after_second.action_counter > first_counter
       Process.demonitor(ref, [:flush])
     end
@@ -1496,11 +1496,11 @@ defmodule Quoracle.Agent.CoreTest do
         send(agent, :trigger_consensus)
       end)
 
-      # Wait for processing to complete (no crash)
-      refute_receive {:DOWN, ^ref, :process, ^agent, _reason}, 500
-
-      # Verify consensus was triggered
+      # GenServer.call synchronizes - all prior messages processed before this returns
       {:ok, new_state} = Core.get_state(agent)
+
+      # Now safe to check instantly - sync barrier above guarantees processing complete
+      refute_received {:DOWN, ^ref, :process, ^agent, _reason}
       assert new_state.action_counter > initial_counter
       Process.demonitor(ref, [:flush])
     end

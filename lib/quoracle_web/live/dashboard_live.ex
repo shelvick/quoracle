@@ -68,7 +68,8 @@ defmodule QuoracleWeb.DashboardLive do
       Subscriptions.subscribe_to_core_topics(pubsub)
 
       # Load persisted tasks and agents from database
-      %{tasks: tasks, agents: agents} = DataLoader.load_tasks_from_db(registry, pubsub)
+      load_opts = extract_load_opts(session)
+      %{tasks: tasks, agents: agents} = DataLoader.load_tasks_from_db(registry, pubsub, load_opts)
 
       # Auto-subscribe to existing agents' log topics
       Subscriptions.subscribe_to_existing_agents(pubsub, session)
@@ -144,6 +145,13 @@ defmodule QuoracleWeb.DashboardLive do
          budget_editor_current: nil,
          budget_editor_spent: nil
        )}
+    end
+  end
+
+  defp extract_load_opts(session) do
+    case session["agent_fetch_timeout"] || session[:agent_fetch_timeout] do
+      timeout when is_integer(timeout) -> [agent_fetch_timeout: timeout]
+      _ -> []
     end
   end
 

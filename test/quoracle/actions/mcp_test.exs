@@ -1,10 +1,10 @@
 defmodule Quoracle.Actions.MCPTest do
   @moduledoc """
-  Tests for ACTION_MCP v2.0 - MCP Tool Calling Action.
+  Tests for ACTION_MCP v3.0 - MCP Tool Calling Action with Retry Logic.
 
-  ARC Verification Criteria: R1-R14
-  WorkGroupID: feat-20251126-023746
-  Packet: 3 (Action Integration)
+  ARC Verification Criteria: R1-R22
+  WorkGroupID: fix-20260219-mcp-reliability
+  Packet: 3 (Retry + Reconnection)
   """
 
   use ExUnit.Case, async: true
@@ -43,6 +43,8 @@ defmodule Quoracle.Actions.MCPTest do
     Hammox.allow(Quoracle.MCP.AnubisMock, self(), mcp_client)
     # Stub get_server_capabilities to simulate initialized MCP client
     stub(Quoracle.MCP.AnubisMock, :get_server_capabilities, fn _pid -> %{} end)
+    # Stub stop for cleanup — MCPClient.terminate calls stop on alive connections
+    stub(Quoracle.MCP.AnubisMock, :stop, fn _pid -> :ok end)
 
     on_exit(fn ->
       if Process.alive?(mcp_client) do
@@ -294,7 +296,7 @@ defmodule Quoracle.Actions.MCPTest do
 
       result = MCP.execute(params, agent_id, opts)
 
-      assert {:error, :connection_not_found} = result
+      assert {:error, %{action: "call_mcp", reason: :connection_not_found}} = result
     end
   end
 
@@ -418,7 +420,7 @@ defmodule Quoracle.Actions.MCPTest do
       # Try to use terminated connection
       result = MCP.execute(%{connection_id: conn_id, tool: "read_file"}, agent_id, opts)
 
-      assert {:error, :connection_not_found} = result
+      assert {:error, %{action: "call_mcp", reason: :connection_not_found}} = result
     end
   end
 
@@ -515,11 +517,11 @@ defmodule Quoracle.Actions.MCPTest do
   end
 
   # ============================================================================
-  # R11: Default Timeout
-  # [UNIT] WHEN execute called IF no timeout THEN uses 30 second default
+  # R11: Default Timeout (MODIFIED v3.0)
+  # [UNIT] WHEN execute called IF no timeout THEN uses 120 second default
   # ============================================================================
   describe "R11: default timeout" do
-    test "default timeout is 30 seconds", %{opts: opts, agent_id: agent_id} do
+    test "default timeout is 120 seconds", %{opts: opts, agent_id: agent_id} do
       anubis_pid = placeholder_process()
 
       # Setup connection
@@ -534,15 +536,20 @@ defmodule Quoracle.Actions.MCPTest do
       {:ok, %{connection_id: conn_id}} =
         MCP.execute(%{transport: :stdio, command: "npx @mcp/server"}, agent_id, opts)
 
-      # Call without timeout - should use 30s default
+      # Capture the timeout passed to call_tool (don't assert inside mock to avoid
+      # crashing the GenServer — assert outside after the call)
+      test_pid = self()
+
       expect(Quoracle.MCP.AnubisMock, :call_tool, fn ^anubis_pid, "read_file", _args, call_opts ->
-        assert Keyword.get(call_opts, :timeout) == 30_000
+        send(test_pid, {:received_timeout, Keyword.get(call_opts, :timeout)})
         {:ok, mock_tool_result()}
       end)
 
-      result = MCP.execute(%{connection_id: conn_id, tool: "read_file"}, agent_id, opts)
+      _result = MCP.execute(%{connection_id: conn_id, tool: "read_file"}, agent_id, opts)
 
-      assert {:ok, _} = result
+      # v3.0: default timeout should be 120s (was 30s)
+      assert_receive {:received_timeout, timeout}
+      assert timeout == 120_000
     end
   end
 
@@ -643,7 +650,468 @@ defmodule Quoracle.Actions.MCPTest do
 
       # Step 4: Verify cleanup - connection no longer available
       result = MCP.execute(%{connection_id: conn_id, tool: "read_file"}, agent_id, opts)
-      assert {:error, :connection_not_found} = result
+      assert {:error, %{action: "call_mcp", reason: :connection_not_found}} = result
+    end
+  end
+
+  # ============================================================================
+  # R15: Retry on Connection Dead with Reconnect
+  # [INTEGRATION] WHEN call_tool fails with :connection_dead THEN calls
+  # MCPClient.reconnect, waits delay, retries call_tool
+  # ============================================================================
+  describe "R15: retry with reconnect on connection_dead" do
+    test "retries with reconnect on connection_dead error", %{
+      mcp_client: mcp_client,
+      agent_id: agent_id
+    } do
+      anubis_pid = placeholder_process()
+
+      # Setup connection first
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn ^anubis_pid ->
+        {:ok, mock_tools()}
+      end)
+
+      opts = [mcp_client: mcp_client, delay_fn: fn _ms -> :ok end]
+
+      {:ok, %{connection_id: conn_id}} =
+        MCP.execute(%{transport: :stdio, command: "npx @mcp/server"}, agent_id, opts)
+
+      # Track call_tool invocations — first exits (simulates crash), second succeeds
+      call_count = :counters.new(1, [:atomics])
+
+      # Stub call_tool: first call exits (MCPClient catch block marks connection dead
+      # synchronously), subsequent calls succeed after reconnect
+      stub(Quoracle.MCP.AnubisMock, :call_tool, fn _pid, _tool, _args, _opts ->
+        count = :counters.get(call_count, 1)
+        :counters.add(call_count, 1, 1)
+
+        if count == 0 do
+          # Exit triggers MCPClient's catch :exit block — marks connection dead deterministically
+          exit(:connection_dead)
+        else
+          {:ok, mock_tool_result()}
+        end
+      end)
+
+      # After connection marked dead, reconnect re-establishes with new anubis pid
+      new_anubis_pid = placeholder_process()
+
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, new_anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn ^new_anubis_pid ->
+        {:ok, mock_tools()}
+      end)
+
+      result =
+        MCP.execute(
+          %{connection_id: conn_id, tool: "read_file", arguments: %{path: "/test"}},
+          agent_id,
+          opts
+        )
+
+      # Should succeed on retry after reconnect
+      assert {:ok, %{connection_id: ^conn_id, result: _}} = result
+
+      # call_tool should have been called twice (initial exit + retry success)
+      assert :counters.get(call_count, 1) == 2
+    end
+  end
+
+  # ============================================================================
+  # R16: Retry on Timeout without Reconnect
+  # [INTEGRATION] WHEN call_tool fails with :timeout THEN waits delay and
+  # retries without reconnect
+  # ============================================================================
+  describe "R16: retry without reconnect on timeout" do
+    test "retries without reconnect on timeout error", %{
+      mcp_client: mcp_client,
+      agent_id: agent_id
+    } do
+      anubis_pid = placeholder_process()
+
+      # Setup connection
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn ^anubis_pid ->
+        {:ok, mock_tools()}
+      end)
+
+      opts = [mcp_client: mcp_client, delay_fn: fn _ms -> :ok end]
+
+      {:ok, %{connection_id: conn_id}} =
+        MCP.execute(%{transport: :stdio, command: "npx @mcp/server"}, agent_id, opts)
+
+      # Track call_tool invocations
+      call_count = :counters.new(1, [:atomics])
+
+      # First call returns :timeout, second succeeds
+      stub(Quoracle.MCP.AnubisMock, :call_tool, fn ^anubis_pid, _tool, _args, _opts ->
+        count = :counters.get(call_count, 1)
+        :counters.add(call_count, 1, 1)
+
+        if count == 0 do
+          {:error, :timeout}
+        else
+          {:ok, %{result: mock_tool_result()}}
+        end
+      end)
+
+      result =
+        MCP.execute(
+          %{connection_id: conn_id, tool: "read_file", arguments: %{path: "/test"}},
+          agent_id,
+          opts
+        )
+
+      # Should succeed on retry (no reconnect needed for timeout)
+      assert {:ok, %{connection_id: ^conn_id, result: _}} = result
+
+      # call_tool should have been called twice (initial + retry)
+      assert :counters.get(call_count, 1) == 2
+    end
+  end
+
+  # ============================================================================
+  # R17: Max Retries Respected
+  # [UNIT] WHEN all retry attempts exhausted THEN returns the last error
+  # ============================================================================
+  describe "R17: max retries respected" do
+    test "stops retrying after max attempts", %{
+      mcp_client: mcp_client,
+      agent_id: agent_id
+    } do
+      anubis_pid = placeholder_process()
+
+      # Setup connection
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn ^anubis_pid ->
+        {:ok, mock_tools()}
+      end)
+
+      opts = [mcp_client: mcp_client, delay_fn: fn _ms -> :ok end]
+
+      {:ok, %{connection_id: conn_id}} =
+        MCP.execute(%{transport: :stdio, command: "npx @mcp/server"}, agent_id, opts)
+
+      # Track call count - always return :timeout (retryable)
+      call_count = :counters.new(1, [:atomics])
+
+      stub(Quoracle.MCP.AnubisMock, :call_tool, fn ^anubis_pid, _tool, _args, _opts ->
+        :counters.add(call_count, 1, 1)
+        {:error, :timeout}
+      end)
+
+      result =
+        MCP.execute(
+          %{connection_id: conn_id, tool: "read_file"},
+          agent_id,
+          opts
+        )
+
+      # Should ultimately fail after exhausting retries
+      assert {:error, %{action: "call_mcp", reason: :timeout}} = result
+
+      # Max retries is 2, so total attempts = 3 (1 initial + 2 retries)
+      assert :counters.get(call_count, 1) == 3
+    end
+  end
+
+  # ============================================================================
+  # R18: Non-Retryable Errors Pass Through
+  # [UNIT] WHEN call_tool fails with non-retryable error THEN returns error
+  # immediately without retry
+  # ============================================================================
+  describe "R18: non-retryable errors pass through" do
+    test "non-retryable errors return immediately", %{
+      mcp_client: mcp_client,
+      agent_id: agent_id
+    } do
+      anubis_pid = placeholder_process()
+
+      # Setup connection
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn ^anubis_pid ->
+        {:ok, mock_tools()}
+      end)
+
+      opts = [mcp_client: mcp_client, delay_fn: fn _ms -> :ok end]
+
+      {:ok, %{connection_id: conn_id}} =
+        MCP.execute(%{transport: :stdio, command: "npx @mcp/server"}, agent_id, opts)
+
+      # Track call count - :connection_not_found is non-retryable
+      call_count = :counters.new(1, [:atomics])
+
+      stub(Quoracle.MCP.AnubisMock, :call_tool, fn ^anubis_pid, _tool, _args, _opts ->
+        :counters.add(call_count, 1, 1)
+        {:error, :tool_not_found}
+      end)
+
+      result =
+        MCP.execute(
+          %{connection_id: conn_id, tool: "nonexistent_tool"},
+          agent_id,
+          opts
+        )
+
+      # Should return error immediately (no retries)
+      assert {:error, %{action: "call_mcp", reason: :tool_not_found}} = result
+
+      # Only 1 call — no retries for non-retryable errors
+      assert :counters.get(call_count, 1) == 1
+    end
+
+    test "connection_not_found is not retried", %{opts: opts, agent_id: agent_id} do
+      # Use a connection_id that doesn't exist — :connection_not_found is non-retryable
+      opts_with_delay = Keyword.put(opts, :delay_fn, fn _ms -> :ok end)
+
+      result =
+        MCP.execute(
+          %{connection_id: "nonexistent-id", tool: "read_file"},
+          agent_id,
+          opts_with_delay
+        )
+
+      assert {:error, %{action: "call_mcp", reason: :connection_not_found}} = result
+    end
+  end
+
+  # ============================================================================
+  # R19: Exponential Backoff Delay
+  # [UNIT] WHEN retrying THEN delay_fn called with increasing backoff
+  # (500ms, 1000ms)
+  # ============================================================================
+  describe "R19: exponential backoff delay" do
+    test "exponential backoff delay between retries", %{
+      mcp_client: mcp_client,
+      agent_id: agent_id
+    } do
+      anubis_pid = placeholder_process()
+
+      # Setup connection
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn ^anubis_pid ->
+        {:ok, mock_tools()}
+      end)
+
+      # Track delay values
+      test_pid = self()
+
+      delay_fn = fn ms ->
+        send(test_pid, {:delay_called, ms})
+        :ok
+      end
+
+      opts = [mcp_client: mcp_client, delay_fn: delay_fn]
+
+      {:ok, %{connection_id: conn_id}} =
+        MCP.execute(%{transport: :stdio, command: "npx @mcp/server"}, agent_id, opts)
+
+      # Always return :timeout to trigger all retries
+      stub(Quoracle.MCP.AnubisMock, :call_tool, fn ^anubis_pid, _tool, _args, _opts ->
+        {:error, :timeout}
+      end)
+
+      _result =
+        MCP.execute(
+          %{connection_id: conn_id, tool: "read_file"},
+          agent_id,
+          opts
+        )
+
+      # First retry delay: 500ms (500 * 2^0)
+      assert_receive {:delay_called, 500}
+
+      # Second retry delay: 1000ms (500 * 2^1)
+      assert_receive {:delay_called, 1000}
+    end
+  end
+
+  # ============================================================================
+  # R20: Injectable Delay for Tests
+  # [UNIT] WHEN delay_fn provided in opts THEN uses provided function
+  # instead of default Process.sleep
+  # ============================================================================
+  describe "R20: injectable delay function" do
+    test "injectable delay function used in tests", %{
+      mcp_client: mcp_client,
+      agent_id: agent_id
+    } do
+      anubis_pid = placeholder_process()
+
+      # Setup connection
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn ^anubis_pid ->
+        {:ok, mock_tools()}
+      end)
+
+      # Custom delay_fn that records calls
+      delay_calls = :counters.new(1, [:atomics])
+
+      delay_fn = fn _ms ->
+        :counters.add(delay_calls, 1, 1)
+        :ok
+      end
+
+      opts = [mcp_client: mcp_client, delay_fn: delay_fn]
+
+      {:ok, %{connection_id: conn_id}} =
+        MCP.execute(%{transport: :stdio, command: "npx @mcp/server"}, agent_id, opts)
+
+      # Return :timeout once to trigger one retry, then succeed
+      call_count = :counters.new(1, [:atomics])
+
+      stub(Quoracle.MCP.AnubisMock, :call_tool, fn ^anubis_pid, _tool, _args, _opts ->
+        count = :counters.get(call_count, 1)
+        :counters.add(call_count, 1, 1)
+
+        if count == 0 do
+          {:error, :timeout}
+        else
+          {:ok, %{result: mock_tool_result()}}
+        end
+      end)
+
+      result =
+        MCP.execute(
+          %{connection_id: conn_id, tool: "read_file"},
+          agent_id,
+          opts
+        )
+
+      assert {:ok, _} = result
+
+      # The custom delay_fn should have been called (not Process.sleep)
+      assert :counters.get(delay_calls, 1) >= 1
+    end
+  end
+
+  # ============================================================================
+  # R21: Reconnect Before Retry on Dead Connection
+  # [INTEGRATION] WHEN retrying after :connection_dead THEN MCPClient.reconnect
+  # called before retry; IF reconnect fails THEN retry skipped and reconnect
+  # error returned
+  # ============================================================================
+  describe "R21: failed reconnect skips retry" do
+    test "failed reconnect skips retry and returns reconnect error", %{
+      mcp_client: mcp_client,
+      agent_id: agent_id
+    } do
+      anubis_pid = placeholder_process()
+
+      # Setup connection
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn ^anubis_pid ->
+        {:ok, mock_tools()}
+      end)
+
+      opts = [mcp_client: mcp_client, delay_fn: fn _ms -> :ok end]
+
+      {:ok, %{connection_id: conn_id}} =
+        MCP.execute(%{transport: :stdio, command: "npx @mcp/server"}, agent_id, opts)
+
+      # Stub call_tool to exit — MCPClient's catch :exit block marks connection dead
+      # synchronously within the same GenServer.call (deterministic, no :DOWN race)
+      stub(Quoracle.MCP.AnubisMock, :call_tool, fn _pid, _tool, _args, _opts ->
+        exit(:connection_dead)
+      end)
+
+      # Reconnect will fail because start_link for re-establishment fails
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:error, :server_unavailable}
+      end)
+
+      result =
+        MCP.execute(
+          %{connection_id: conn_id, tool: "read_file"},
+          agent_id,
+          opts
+        )
+
+      # Should return the reconnect failure error (not retry)
+      assert {:error, %{action: "call_mcp", reason: {:reconnect_failed, _reason}}} = result
+    end
+  end
+
+  # ============================================================================
+  # R22: Connect Not Retried
+  # [UNIT] WHEN connect fails THEN error returned immediately without retry
+  # ============================================================================
+  describe "R22: connect failures not retried" do
+    test "connect failures are not retried", %{
+      mcp_client: mcp_client,
+      agent_id: agent_id
+    } do
+      # Track start_link invocations to prove connect is not retried
+      connect_count = :counters.new(1, [:atomics])
+
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        :counters.add(connect_count, 1, 1)
+        {:error, {:connection_failed, "Command not found: npx"}}
+      end)
+
+      opts = [mcp_client: mcp_client, delay_fn: fn _ms -> :ok end]
+
+      result =
+        MCP.execute(
+          %{transport: :stdio, command: "npx @nonexistent/server"},
+          agent_id,
+          opts
+        )
+
+      # Should fail immediately
+      assert {:error, _} = result
+
+      # start_link should only be called once (no retry on connect failure)
+      assert :counters.get(connect_count, 1) == 1
+    end
+
+    test "terminate is not retried", %{mcp_client: mcp_client, agent_id: agent_id} do
+      anubis_pid = placeholder_process()
+
+      # Setup connection
+      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
+        {:ok, anubis_pid}
+      end)
+
+      expect(Quoracle.MCP.AnubisMock, :list_tools, fn ^anubis_pid ->
+        {:ok, mock_tools()}
+      end)
+
+      opts = [mcp_client: mcp_client, delay_fn: fn _ms -> :ok end]
+
+      {:ok, %{connection_id: conn_id}} =
+        MCP.execute(%{transport: :stdio, command: "npx @mcp/server"}, agent_id, opts)
+
+      # Terminate succeeds on first call (idempotent)
+      expect(Quoracle.MCP.AnubisMock, :stop, fn ^anubis_pid -> :ok end)
+
+      result = MCP.execute(%{connection_id: conn_id, terminate: true}, agent_id, opts)
+
+      assert {:ok, %{connection_id: ^conn_id, terminated: true}} = result
     end
   end
 end

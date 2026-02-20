@@ -11,7 +11,7 @@ defmodule Quoracle.MCP.Client do
 
   alias Quoracle.MCP.ConnectionManager
 
-  @default_timeout 30_000
+  @default_timeout 120_000
 
   # Default to our wrapper module (injectable for testing)
   # Note: AnubisWrapper uses Anubis.Client.Supervisor to properly start transport+client
@@ -76,6 +76,24 @@ defmodule Quoracle.MCP.Client do
   end
 
   @doc """
+  Reconnect a dead connection using its saved connect_params.
+
+  ## Parameters
+    - `client` - PID of the MCP client GenServer
+    - `connection_id` - ID of the dead connection to reconnect
+
+  ## Returns
+    - `{:ok, %{connection_id, tools}}` on success
+    - `{:error, :connection_alive}` if the connection is still alive
+    - `{:error, :connection_not_found}` if the connection_id doesn't exist
+    - `{:error, {:reconnect_failed, reason}}` if reconnection fails
+  """
+  @spec reconnect(pid(), String.t()) :: {:ok, map()} | {:error, term()}
+  def reconnect(client, connection_id) do
+    GenServer.call(client, {:reconnect, connection_id}, @default_timeout)
+  end
+
+  @doc """
   Terminate a specific connection.
   """
   @spec terminate_connection(pid(), String.t()) :: :ok | {:error, :not_found}
@@ -134,8 +152,7 @@ defmodule Quoracle.MCP.Client do
     transport = Map.fetch!(params, :transport)
     command_or_url = get_command_or_url(params)
 
-    # DEBUG: Log connection state
-    Logger.warning(
+    Logger.debug(
       "MCP.Client #{inspect(self())} connect: existing_connections=#{inspect(Map.keys(state.connections))}, lookup=#{inspect(state.connection_lookup)}"
     )
 
@@ -145,6 +162,12 @@ defmodule Quoracle.MCP.Client do
         # New connection
         case establish_connection(transport, params, state) do
           {:ok, connection} ->
+            # v4.0: Store connect_params and status for reconnection support
+            connection =
+              connection
+              |> Map.put(:status, :alive)
+              |> Map.put(:connect_params, params)
+
             new_state = add_connection(state, connection, command_or_url)
             {:reply, {:ok, format_connection_result(connection)}, new_state}
 
@@ -163,36 +186,93 @@ defmodule Quoracle.MCP.Client do
   def handle_call({:call_tool, connection_id, tool_name, arguments, opts}, _from, state) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
-    # DEBUG: Log connection lookup
-    Logger.warning(
+    Logger.debug(
       "MCP.Client #{inspect(self())} call_tool: looking for #{connection_id} in #{inspect(Map.keys(state.connections))}"
     )
 
     case Map.get(state.connections, connection_id) do
       nil ->
-        Logger.error(
-          "MCP.Client #{inspect(self())} call_tool: CONNECTION NOT FOUND! connection_id=#{connection_id}, available=#{inspect(Map.keys(state.connections))}"
+        Logger.warning(
+          "MCP.Client #{inspect(self())} call_tool: connection not found, connection_id=#{connection_id}, available=#{inspect(Map.keys(state.connections))}"
         )
 
         {:reply, {:error, :connection_not_found}, state}
 
+      # v4.0: Return :connection_dead for dead connections (R30)
+      %{status: :dead} ->
+        {:reply, {:error, :connection_dead}, state}
+
       connection ->
         anubis_module = state.anubis_module
 
-        case anubis_module.call_tool(
-               connection.anubis_client,
-               tool_name,
-               arguments,
-               timeout: timeout
-             ) do
-          {:ok, result} ->
-            # Update last_used_at
-            updated_connection = %{connection | last_used_at: DateTime.utc_now()}
-            new_state = put_in(state.connections[connection_id], updated_connection)
-            {:reply, {:ok, %{connection_id: connection_id, result: result}}, new_state}
+        # v4.0: Wrap in try/catch for crash protection (R36)
+        try do
+          case anubis_module.call_tool(
+                 connection.anubis_client,
+                 tool_name,
+                 arguments,
+                 timeout: timeout
+               ) do
+            {:ok, result} ->
+              # Update last_used_at
+              updated_connection = %{connection | last_used_at: DateTime.utc_now()}
+              new_state = put_in(state.connections[connection_id], updated_connection)
+              {:reply, {:ok, %{connection_id: connection_id, result: result}}, new_state}
+
+            {:error, reason} ->
+              {:reply, {:error, reason}, state}
+          end
+        catch
+          :exit, _reason ->
+            # Anubis client died mid-call — mark connection dead
+            new_state = mark_connection_dead(state, connection_id)
+
+            Logger.warning(
+              "MCP connection #{connection_id} marked dead: anubis client exited during call_tool"
+            )
+
+            {:reply, {:error, :connection_dead}, new_state}
+        end
+    end
+  end
+
+  @impl true
+  def handle_call({:reconnect, connection_id}, _from, state) do
+    case Map.get(state.connections, connection_id) do
+      nil ->
+        {:reply, {:error, :connection_not_found}, state}
+
+      %{status: :alive} ->
+        {:reply, {:error, :connection_alive}, state}
+
+      %{status: :dead} = dead_conn ->
+        # v4.0: Re-establish using saved connect_params
+        transport = dead_conn.connect_params.transport
+
+        case establish_connection(transport, dead_conn.connect_params, state) do
+          {:ok, new_connection} ->
+            # Preserve original connection_id, add status and connect_params
+            new_connection =
+              new_connection
+              |> Map.put(:id, connection_id)
+              |> Map.put(:status, :alive)
+              |> Map.put(:connect_params, dead_conn.connect_params)
+
+            command_or_url = get_command_or_url(dead_conn.connect_params)
+
+            # Replace dead connection in state
+            new_state = %{
+              state
+              | connections: Map.put(state.connections, connection_id, new_connection),
+                anubis_monitors:
+                  Map.put(state.anubis_monitors, new_connection.monitor_ref, connection_id),
+                connection_lookup: Map.put(state.connection_lookup, command_or_url, connection_id)
+            }
+
+            {:reply, {:ok, format_connection_result(new_connection)}, new_state}
 
           {:error, reason} ->
-            {:reply, {:error, reason}, state}
+            {:reply, {:error, {:reconnect_failed, reason}}, state}
         end
     end
   end
@@ -246,7 +326,7 @@ defmodule Quoracle.MCP.Client do
     {:stop, :normal, %{state | connections: %{}}}
   end
 
-  # Clean up when anubis client crashes (Bug 1+6 fix)
+  # v4.0: Mark connection dead on anubis client crash (retain for reconnection)
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
     case Map.get(state.anubis_monitors, ref) do
       nil ->
@@ -254,20 +334,16 @@ defmodule Quoracle.MCP.Client do
         {:noreply, state}
 
       connection_id ->
-        # Remove the dead connection
+        # v4.0: Mark dead instead of removing (R29) — retain connect_params for reconnect
+        new_state = mark_connection_dead(state, connection_id)
+        # Remove from anubis_monitors (monitor ref is gone)
+        new_state = %{new_state | anubis_monitors: Map.delete(new_state.anubis_monitors, ref)}
+
         connection = Map.get(state.connections, connection_id)
-
-        new_state = %{
-          state
-          | connections: Map.delete(state.connections, connection_id),
-            connection_lookup: remove_from_lookup(state.connection_lookup, connection_id),
-            anubis_monitors: Map.delete(state.anubis_monitors, ref)
-        }
-
         transport = connection && connection.transport
 
         Logger.warning(
-          "MCP connection #{connection_id} (#{transport}) removed: anubis client crashed"
+          "MCP connection #{connection_id} (#{transport}) marked dead: anubis client crashed"
         )
 
         {:noreply, new_state}
@@ -323,9 +399,24 @@ defmodule Quoracle.MCP.Client do
     ConnectionManager.stop_connection(connection, anubis_module)
   end
 
+  # v4.0: Mark a connection as dead, retaining connect_params for reconnection
+  defp mark_connection_dead(state, connection_id) do
+    case Map.get(state.connections, connection_id) do
+      nil ->
+        state
+
+      connection ->
+        dead_connection = %{connection | status: :dead}
+        %{state | connections: Map.put(state.connections, connection_id, dead_connection)}
+    end
+  end
+
   defp cleanup_all_connections(state) do
     Enum.each(state.connections, fn {_id, connection} ->
-      stop_connection(connection, state.anubis_module)
+      # v4.0: Only stop alive connections (dead ones have no active anubis client)
+      if Map.get(connection, :status) != :dead do
+        stop_connection(connection, state.anubis_module)
+      end
     end)
   end
 

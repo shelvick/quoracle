@@ -427,7 +427,13 @@ defmodule Quoracle.Actions.ShellNotificationFixTest do
         )
 
       on_exit(fn ->
-        if Process.alive?(router1), do: GenServer.stop(router1, :normal, :infinity)
+        if Process.alive?(router1) do
+          try do
+            GenServer.stop(router1, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
       end)
 
       # Spawn Router for second command
@@ -442,7 +448,13 @@ defmodule Quoracle.Actions.ShellNotificationFixTest do
         )
 
       on_exit(fn ->
-        if Process.alive?(router2), do: GenServer.stop(router2, :normal, :infinity)
+        if Process.alive?(router2) do
+          try do
+            GenServer.stop(router2, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
       end)
 
       # Force async mode with smart_threshold: 0 (don't rely on timing)

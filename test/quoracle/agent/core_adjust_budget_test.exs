@@ -166,6 +166,8 @@ defmodule Quoracle.Agent.CoreAdjustBudgetTest do
     end
 
     # R42: Child Not Found [INTEGRATION]
+    # v3.0: BudgetHandler checks parent's children list first (validate_direct_child),
+    # so a non-existent child returns :not_direct_child (not in parent's children list)
     @tag :r42
     @tag :integration
     test "R42: returns error for missing child", %{deps: deps} do
@@ -185,7 +187,7 @@ defmodule Quoracle.Agent.CoreAdjustBudgetTest do
       result =
         Core.adjust_child_budget(parent_state.agent_id, "nonexistent-child-id", new_budget, opts)
 
-      assert {:error, :child_not_found} = result
+      assert {:error, :not_direct_child} = result
     end
 
     # R43: Parent Not Found [INTEGRATION]

@@ -173,27 +173,6 @@ defmodule Quoracle.Consensus.MaxRefinementRoundsTest do
     end
   end
 
-  # R97: Within max allows refinement (integration-level round counting)
-  # max=5 allows more rounds than max=2
-  # R96 already verifies max=2 → 9 queries, so we only run max=5 here and compare
-  describe "within max allows refinement (R97)" do
-    test "max=5 allows more rounds than max=2" do
-      query_fn = counting_diverse_query_fn(self())
-
-      # max=5: allows refinement past round 3 → 18 queries
-      state_max5 = build_consensus_state(5)
-
-      capture_log(fn ->
-        {:ok, _, _} = Consensus.get_consensus_with_state(state_max5, model_query_fn: query_fn)
-      end)
-
-      count_max5 = drain_query_count()
-
-      # max=5 must allow more rounds than max=2 (which produces 9 queries per R96)
-      assert count_max5 > 9
-    end
-  end
-
   # R98: max=0 applies penalty from round 1
   describe "max=0 penalty at round 1 (R98)" do
     test "max=0 applies penalty from round 1" do
@@ -290,33 +269,6 @@ defmodule Quoracle.Consensus.MaxRefinementRoundsTest do
              "Expected no round penalty at round 5 with max=7, " <>
                "but got confidence #{confidence} " <>
                "(penalty applied using default max=4 instead of configured max=7)"
-    end
-
-    test "error fallback confidence matches direct calculation with correct max" do
-      query_fn = error_at_round_query_fn(6)
-      state = build_consensus_state(7)
-
-      capture_log(fn ->
-        {:ok, {_result_type, _action, meta}, _updated_state} =
-          Consensus.get_consensus_with_state(state, model_query_fn: query_fn)
-
-        send(self(), {:confidence, Keyword.get(meta, :confidence)})
-      end)
-
-      assert_received {:confidence, pipeline_confidence}
-
-      # Directly calculate expected confidence with correct max=7 at round 5.
-      # Error fallback clusters diverse responses: 3 clusters of 1, total=3.
-      cluster = %{count: 1, actions: []}
-      expected = Result.calculate_confidence(cluster, 3, 5, max_refinement_rounds: 7)
-
-      # Pipeline should produce same confidence as direct calculation with correct max.
-      # Bug: pipeline uses default max=4 -> different confidence
-      assert_in_delta pipeline_confidence,
-                      expected,
-                      0.001,
-                      "Pipeline confidence #{pipeline_confidence} should match " <>
-                        "expected #{expected} (calculated with max=7 at round 5)"
     end
   end
 

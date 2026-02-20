@@ -13,7 +13,9 @@ defmodule Quoracle.Actions.MCP do
   alias Quoracle.MCP.Client, as: MCPClient
   alias Quoracle.Utils.ResponseTruncator
 
-  @default_timeout 30_000
+  @default_timeout 120_000
+  @max_retries 2
+  @initial_delay 500
 
   @type params :: map()
   @type agent_id :: String.t()
@@ -40,7 +42,7 @@ defmodule Quoracle.Actions.MCP do
 
   Returns: {:ok, %{connection_id: "...", terminated: true}}
   """
-  @spec execute(params(), agent_id(), opts()) :: {:ok, map()} | {:error, atom()}
+  @spec execute(params(), agent_id(), opts()) :: {:ok, map()} | {:error, term()}
 
   # XOR validation: can't have both transport AND connection_id
   def execute(%{transport: _, connection_id: _}, _agent_id, _opts) do
@@ -61,26 +63,27 @@ defmodule Quoracle.Actions.MCP do
     do_connect(params, opts)
   end
 
-  # Mode 2: Call tool (connection_id + tool, no terminate)
+  # Mode 2: Call tool with retry (connection_id + tool, no terminate)
   def execute(%{connection_id: conn_id, tool: tool_name} = params, _agent_id, opts)
       when not is_map_key(params, :terminate) do
     mcp_client = get_mcp_client(opts)
     arguments = Map.get(params, :arguments, %{})
     timeout = Map.get(params, :timeout, @default_timeout)
 
-    case MCPClient.call_tool(mcp_client, conn_id, tool_name, arguments, timeout: timeout) do
+    case call_tool_with_retry(mcp_client, conn_id, tool_name, arguments, timeout, opts) do
       {:ok, result} ->
         # Truncate result to prevent OOM from massive MCP responses (screenshots, DOM)
         truncated_result = truncate_mcp_result(result.result)
 
         {:ok,
          %{
+           action: "call_mcp",
            connection_id: conn_id,
            result: truncated_result
          }}
 
       {:error, reason} ->
-        {:error, reason}
+        {:error, %{action: "call_mcp", reason: reason}}
     end
   end
 
@@ -116,6 +119,65 @@ defmodule Quoracle.Actions.MCP do
          }}
 
       {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Retry wrapper for call_tool — deterministic, LLM never sees intermediate failures
+  defp call_tool_with_retry(mcp_client, conn_id, tool_name, arguments, timeout, opts) do
+    delay_fn = Keyword.get(opts, :delay_fn, &Process.sleep/1)
+    do_call_tool_with_retry(mcp_client, conn_id, tool_name, arguments, timeout, delay_fn, 0)
+  end
+
+  defp do_call_tool_with_retry(
+         mcp_client,
+         conn_id,
+         tool_name,
+         arguments,
+         timeout,
+         delay_fn,
+         attempt
+       ) do
+    case MCPClient.call_tool(mcp_client, conn_id, tool_name, arguments, timeout: timeout) do
+      {:ok, result} ->
+        {:ok, result}
+
+      {:error, :connection_dead} when attempt < @max_retries ->
+        # Reconnect before retry
+        case MCPClient.reconnect(mcp_client, conn_id) do
+          {:ok, _} ->
+            delay_fn.(@initial_delay * Integer.pow(2, attempt))
+
+            do_call_tool_with_retry(
+              mcp_client,
+              conn_id,
+              tool_name,
+              arguments,
+              timeout,
+              delay_fn,
+              attempt + 1
+            )
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, :timeout} when attempt < @max_retries ->
+        # Retry without reconnect
+        delay_fn.(@initial_delay * Integer.pow(2, attempt))
+
+        do_call_tool_with_retry(
+          mcp_client,
+          conn_id,
+          tool_name,
+          arguments,
+          timeout,
+          delay_fn,
+          attempt + 1
+        )
+
+      {:error, reason} ->
+        # Non-retryable error or retries exhausted — return immediately
         {:error, reason}
     end
   end

@@ -24,19 +24,41 @@ defmodule Quoracle.Models.TableCredentials do
   end
 
   # Provider is derived from model_spec prefix (e.g., "azure:o1" -> azure)
-  @required_fields [:model_id, :model_spec, :api_key]
-  @optional_fields [:deployment_id, :resource_id, :endpoint_url, :api_version, :region]
+  @always_required [:model_id, :model_spec]
+  @optional_fields [:api_key, :deployment_id, :resource_id, :endpoint_url, :api_version, :region]
 
   @doc """
   Creates a changeset for credential with validation.
+
+  v3.0: api_key is conditionally required. When endpoint_url is present
+  (local model), api_key becomes optional. Cloud models (no endpoint_url)
+  still require api_key.
   """
+  @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
   def changeset(credential, attrs) do
     credential
-    |> cast(attrs, @required_fields ++ @optional_fields)
-    |> validate_required(@required_fields)
+    |> cast(attrs, @always_required ++ @optional_fields)
+    |> validate_required(@always_required)
     |> validate_model_spec_format()
+    |> validate_api_key_or_endpoint()
     |> validate_provider_fields()
     |> unique_constraint(:model_id)
+  end
+
+  # v3.0: Require at least one of api_key or endpoint_url.
+  # Local models with endpoint_url don't need api_key.
+  # Cloud models without endpoint_url must have api_key.
+  defp validate_api_key_or_endpoint(changeset) do
+    api_key = get_field(changeset, :api_key)
+    endpoint_url = get_field(changeset, :endpoint_url)
+    api_key_blank? = is_nil(api_key) or api_key == ""
+    endpoint_blank? = is_nil(endpoint_url) or endpoint_url == ""
+
+    if api_key_blank? and endpoint_blank? do
+      add_error(changeset, :api_key, "api_key is required when no endpoint_url is provided")
+    else
+      changeset
+    end
   end
 
   defp validate_model_spec_format(changeset) do
@@ -57,7 +79,7 @@ defmodule Quoracle.Models.TableCredentials do
     case provider_prefix do
       "azure" ->
         changeset
-        |> validate_required([:deployment_id],
+        |> validate_required([:api_key, :deployment_id],
           message: "can't be blank for Azure models"
         )
 

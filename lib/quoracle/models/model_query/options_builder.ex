@@ -83,14 +83,27 @@ defmodule Quoracle.Models.ModelQuery.OptionsBuilder do
           CacheHelper.maybe_add_cache_options(base, options)
 
         _ ->
+          # v19.0: For local models with nil api_key, pass a placeholder
+          # since ReqLLM requires a non-nil api_key value
+          endpoint_url = Map.get(credential, :endpoint_url)
+          api_key = credential.api_key || if(endpoint_url, do: "not-needed", else: nil)
+
           base = [
             on_unsupported: :ignore,
             reasoning_effort: :high,
             reasoning_token_budget: @reasoning_token_budget,
-            api_key: credential.api_key
+            api_key: api_key
           ]
 
-          if skip_json_mode do
+          base =
+            if endpoint_url do
+              Keyword.put(base, :base_url, endpoint_url)
+            else
+              base
+            end
+
+          # Skip json_mode for local models (may not support response_format)
+          if skip_json_mode or endpoint_url do
             base
           else
             Keyword.put(base, :provider_options, response_format: %{type: "json_object"})
@@ -134,8 +147,19 @@ defmodule Quoracle.Models.ModelQuery.OptionsBuilder do
           build_bedrock_embedding_opts(credential)
 
         _ ->
-          # Default: OpenAI-compatible (just api_key)
-          [api_key: Map.get(credential, :api_key)]
+          # Default: OpenAI-compatible
+          # v8.0: For local models with nil api_key, pass a placeholder
+          # since ReqLLM requires a non-nil api_key value
+          endpoint_url = Map.get(credential, :endpoint_url)
+          api_key = Map.get(credential, :api_key) || if(endpoint_url, do: "not-needed", else: nil)
+          base = [api_key: api_key]
+
+          # v19.0: Forward endpoint_url as base_url for local models
+          if endpoint_url do
+            Keyword.put(base, :base_url, endpoint_url)
+          else
+            base
+          end
       end
 
     # Support plug injection for testing
