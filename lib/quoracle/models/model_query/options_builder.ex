@@ -50,7 +50,11 @@ defmodule Quoracle.Models.ModelQuery.OptionsBuilder do
           if skip_json_mode do
             base
           else
+            # response_format: OpenAI-compat MaaS models (GLM, etc.)
+            # additional_model_request_fields: Gemini-native responseMimeType (not yet
+            #   consumed by ReqLLM's Gemini formatter, but preserves intent for when it is)
             merge_provider_options(base,
+              response_format: %{type: "json_object"},
               additional_model_request_fields: %{
                 generationConfig: %{responseMimeType: "application/json"}
               }

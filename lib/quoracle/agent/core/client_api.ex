@@ -11,15 +11,16 @@ defmodule Quoracle.Agent.Core.ClientAPI do
   """
   @spec get_agent_id(pid()) :: {:ok, String.t()} | String.t()
   def get_agent_id(agent) do
-    GenServer.call(agent, :get_agent_id)
+    GenServer.call(agent, :get_agent_id, :infinity)
   end
 
   @doc """
   Get the current state of an agent.
-  Accepts optional timeout (default 15000ms).
+  Accepts optional timeout (default :infinity — agent may be mid-consensus
+  with LLM calls blocking the GenServer for 10-30s+).
   """
   @spec get_state(pid(), timeout()) :: {:ok, map()}
-  def get_state(agent, timeout \\ 15_000) do
+  def get_state(agent, timeout \\ :infinity) do
     GenServer.call(agent, :get_state, timeout)
   end
 
@@ -28,7 +29,7 @@ defmodule Quoracle.Agent.Core.ClientAPI do
   Returns a map of model_id => history list.
   """
   @spec get_model_histories(pid(), timeout()) :: {:ok, map()}
-  def get_model_histories(agent, timeout \\ 15_000) do
+  def get_model_histories(agent, timeout \\ :infinity) do
     GenServer.call(agent, :get_model_histories, timeout)
   end
 
@@ -37,7 +38,7 @@ defmodule Quoracle.Agent.Core.ClientAPI do
   """
   @spec get_pending_actions(pid()) :: {:ok, map()}
   def get_pending_actions(agent) do
-    GenServer.call(agent, :get_pending_actions)
+    GenServer.call(agent, :get_pending_actions, :infinity)
   end
 
   @doc """
@@ -45,7 +46,7 @@ defmodule Quoracle.Agent.Core.ClientAPI do
   """
   @spec get_wait_timer(pid()) :: {:ok, reference() | nil}
   def get_wait_timer(agent) do
-    GenServer.call(agent, :get_wait_timer)
+    GenServer.call(agent, :get_wait_timer, :infinity)
   end
 
   @doc """
@@ -132,7 +133,7 @@ defmodule Quoracle.Agent.Core.ClientAPI do
   """
   @spec dismissing?(pid()) :: boolean()
   def dismissing?(agent) do
-    GenServer.call(agent, :dismissing?)
+    GenServer.call(agent, :dismissing?, :infinity)
   end
 
   # Budget system (v4.0)
@@ -143,7 +144,7 @@ defmodule Quoracle.Agent.Core.ClientAPI do
   """
   @spec update_budget_committed(pid(), Decimal.t()) :: :ok
   def update_budget_committed(agent, amount) do
-    GenServer.call(agent, {:update_budget_committed, amount})
+    GenServer.call(agent, {:update_budget_committed, amount}, :infinity)
   end
 
   @doc """
@@ -152,7 +153,7 @@ defmodule Quoracle.Agent.Core.ClientAPI do
   """
   @spec release_budget_committed(pid(), Decimal.t()) :: :ok
   def release_budget_committed(agent, amount) do
-    GenServer.call(agent, {:release_budget_committed, amount})
+    GenServer.call(agent, {:release_budget_committed, amount}, :infinity)
   end
 
   @doc """
@@ -170,7 +171,7 @@ defmodule Quoracle.Agent.Core.ClientAPI do
   """
   @spec get_budget(pid()) :: {:ok, %{budget_data: map(), over_budget: boolean()}}
   def get_budget(agent) do
-    GenServer.call(agent, :get_budget)
+    GenServer.call(agent, :get_budget, :infinity)
   end
 
   # Budget system (v23.0) - adjust_child_budget
@@ -204,6 +205,6 @@ defmodule Quoracle.Agent.Core.ClientAPI do
   """
   @spec update_budget_data(pid(), map()) :: :ok
   def update_budget_data(pid, budget_data) do
-    GenServer.call(pid, {:update_budget_data, budget_data})
+    GenServer.call(pid, {:update_budget_data, budget_data}, :infinity)
   end
 end

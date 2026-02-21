@@ -359,14 +359,15 @@ defmodule Quoracle.Agent.ActionExecutorRegressionsTest do
         router_pid: router_pid
       ]
 
-      shell_result = {:ok, %{command_id: command_id, async: true, status: :running}}
+      # Use realistic Shell async result format (matches actual Shell.execute output)
+      shell_result = {:ok, %{command_id: command_id, status: :running, sync: false}}
 
       GenServer.cast(agent_pid, {:action_result, action_id, shell_result, result_opts})
 
-      # Wait for result to be processed
+      # Wait for shell_routers to be populated (Phase 1 keeps pending_actions for Phase 2)
       post_state =
         wait_for_condition(agent_pid, fn state ->
-          map_size(state.pending_actions) == 0
+          map_size(state.shell_routers) >= 1
         end)
         |> extract_state()
 

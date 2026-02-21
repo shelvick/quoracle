@@ -174,7 +174,7 @@ defmodule Quoracle.Actions.ShellNotificationFixTest do
         )
 
       # Test process should receive action_result via GenServer.cast
-      assert_receive {:"$gen_cast", {:action_result, ^action_id, {:ok, result}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, ^action_id, {:ok, result}, _opts}}, 30_000
       assert result.action == "shell"
       assert result.stdout =~ "hello"
       assert result.exit_code == 0
@@ -200,7 +200,7 @@ defmodule Quoracle.Actions.ShellNotificationFixTest do
       # Should NOT receive old protocol message
       refute_receive {:shell_completed, ^cmd_id, _}
       # Should receive new protocol via Router
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, _}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, _}, _opts}}, 30_000
     end
   end
 
@@ -291,7 +291,7 @@ defmodule Quoracle.Actions.ShellNotificationFixTest do
         )
 
       # Wait for completion
-      assert_receive {:"$gen_cast", {:action_result, received_action_id, {:ok, _}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, received_action_id, {:ok, _}, _opts}}, 30_000
       # Verify Router used correct action_id mapping
       assert received_action_id == action_id
       # Must be different IDs
@@ -399,7 +399,7 @@ defmodule Quoracle.Actions.ShellNotificationFixTest do
           opts_async
         )
 
-      assert_receive {:"$gen_cast", {:action_result, ^action_id, {:ok, result}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, ^action_id, {:ok, result}, _opts}}, 30_000
       assert result.stdout =~ "async"
       assert result.exit_code == 0
       assert result.status == :completed
@@ -481,10 +481,10 @@ defmodule Quoracle.Actions.ShellNotificationFixTest do
         )
 
       # Should receive both with correct action_ids
-      assert_receive {:"$gen_cast", {:action_result, ^action_id_1, {:ok, result1}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, ^action_id_1, {:ok, result1}, _opts}}, 30_000
       assert result1.stdout =~ "first"
 
-      assert_receive {:"$gen_cast", {:action_result, ^action_id_2, {:ok, result2}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, ^action_id_2, {:ok, result2}, _opts}}, 30_000
       assert result2.stdout =~ "second"
     end
   end
@@ -521,7 +521,7 @@ defmodule Quoracle.Actions.ShellNotificationFixTest do
       GenServer.cast(router, {:mark_completed, cmd_id, 0})
 
       # Should receive properly formatted result
-      assert_receive {:"$gen_cast", {:action_result, ^action_id, {:ok, result}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, ^action_id, {:ok, result}, _opts}}, 30_000
       assert result.stdout == "test output\n"
       assert result.stderr == "warning\n"
       assert result.exit_code == 0

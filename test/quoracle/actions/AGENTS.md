@@ -61,6 +61,12 @@ All action tests verify consistent return format with action: field:
 - FileWrite: action: "file_write" + mode: + (bytes_written: | replacements:)
 - MCP: action: "call_mcp" + connection_id: + result: (success), action: "call_mcp" + reason: (error)
 
+## Shell Phase 2 Protocol Update (2026-02-20, fix-20260220-shell-phase2-lost)
+ShellCompletion now sends 4-arity cast `{:action_result, id, result, [action_atom: :execute_shell]}`.
+All shell test `assert_receive` patterns updated from 3-arity to 4-arity format:
+- shell_test.exs, shell_packet2_test.exs, shell_notification_fix_test.exs, shell_integration_test.exs
+- router_secret_gaps_test.exs, router_secret_integration_test.exs
+
 ## Test Isolation Patterns
 - start_owner! for DB access in spawned processes
 - Isolated PubSub instances per test

@@ -131,14 +131,13 @@ defmodule Quoracle.Agent.Core.TestActionHandler do
           {:error, {:router_exit, reason}}
       end
 
-    # v25.0: Track shell_routers keyed by command_id from result (not action_id)
-    # command_id is what the LLM uses in check_id requests
+    # v25.0: Track shell_routers keyed by command_id from async shell Phase 1 result.
+    # command_id is what the LLM uses in check_id requests.
+    # Matches Shell's actual async result: %{command_id: _, status: :running, sync: false}
     shell_routers =
       case {action_atom, result} do
-        {:execute_shell, {:ok, %{command_id: cmd_id, async: true}}} when is_binary(cmd_id) ->
-          Map.put(state.shell_routers, cmd_id, router_pid)
-
-        {:execute_shell, {:ok, %{command_id: cmd_id, status: :running}}} when is_binary(cmd_id) ->
+        {:execute_shell, {:ok, %{command_id: cmd_id, status: :running, sync: false}}}
+        when is_binary(cmd_id) ->
           Map.put(state.shell_routers, cmd_id, router_pid)
 
         _ ->

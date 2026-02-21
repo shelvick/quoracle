@@ -159,11 +159,16 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
           end
       end
 
-    # Remove from pending_actions
-    new_state = %{
-      new_state
-      | pending_actions: Map.delete(new_state.pending_actions, action_id)
-    }
+    # Remove from pending_actions — UNLESS this is an async shell Phase 1 ack.
+    # Phase 1 results (status: :running, command_id present, sync: false) indicate
+    # the command went async; Phase 2 (completion with stdout/exit_code) will arrive
+    # later with the same action_id. We must keep the entry so Phase 2 finds it.
+    new_state =
+      if async_shell_phase1?(result) do
+        new_state
+      else
+        %{new_state | pending_actions: Map.delete(new_state.pending_actions, action_id)}
+      end
 
     # v35.0 R5: Track spawned children when action_atom is :spawn_child
     new_state = maybe_track_child(new_state, result, opts)
@@ -248,25 +253,19 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
   defp maybe_enrich_shell_error(result, _action_type, _state, _action_info), do: result
 
   # v25.0: Track shell Router PID in shell_routers for check_id routing.
-  # Keyed by command_id from async shell result (what the LLM uses in check_id).
+  # Keyed by command_id from async shell Phase 1 result (what the LLM uses in check_id).
+  # Uses shared async_shell_phase1?/1 predicate (same as pending_actions guard).
   @spec maybe_track_shell_router(map(), any(), keyword()) :: map()
-  defp maybe_track_shell_router(state, {:ok, %{command_id: cmd_id, async: true}}, opts)
+  defp maybe_track_shell_router(state, {:ok, %{command_id: cmd_id}} = result, opts)
        when is_binary(cmd_id) do
-    router_pid = Keyword.get(opts, :router_pid)
+    if async_shell_phase1?(result) do
+      router_pid = Keyword.get(opts, :router_pid)
 
-    if router_pid && is_pid(router_pid) && Process.alive?(router_pid) do
-      %{state | shell_routers: Map.put(state.shell_routers, cmd_id, router_pid)}
-    else
-      state
-    end
-  end
-
-  defp maybe_track_shell_router(state, {:ok, %{command_id: cmd_id, status: :running}}, opts)
-       when is_binary(cmd_id) do
-    router_pid = Keyword.get(opts, :router_pid)
-
-    if router_pid && is_pid(router_pid) && Process.alive?(router_pid) do
-      %{state | shell_routers: Map.put(state.shell_routers, cmd_id, router_pid)}
+      if router_pid && is_pid(router_pid) && Process.alive?(router_pid) do
+        %{state | shell_routers: Map.put(state.shell_routers, cmd_id, router_pid)}
+      else
+        state
+      end
     else
       state
     end
@@ -326,6 +325,18 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
         {:noreply, new_state}
     end
   end
+
+  # Detect async shell Phase 1 result: command went async, Phase 2 will follow.
+  # Used by both pending_actions guard (keep entry for Phase 2) and shell_routers
+  # tracking (register Router for check_id routing). Single source of truth for
+  # "is this an async shell Phase 1 ack?" detection.
+  # Pattern: {:ok, %{status: :running, command_id: binary, sync: false}}
+  @spec async_shell_phase1?(any()) :: boolean()
+  defp async_shell_phase1?({:ok, %{status: :running, command_id: cmd_id, sync: false}})
+       when is_binary(cmd_id),
+       do: true
+
+  defp async_shell_phase1?(_), do: false
 
   # Check if result contains a timer reference (from :wait action)
   defp map_result_with_timer?({:ok, result}) when is_map(result),

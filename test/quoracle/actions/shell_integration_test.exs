@@ -182,7 +182,9 @@ defmodule Quoracle.Actions.ShellIntegrationTest do
       # Wait for completion via new Router protocol
       # The completion result contains the final status
       # Match on 'command' field to distinguish from status check results
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, %{command: _} = result}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, %{command: _} = result}, _opts}},
+                     30_000
+
       assert result.status == :completed
     end
 
@@ -315,7 +317,7 @@ defmodule Quoracle.Actions.ShellIntegrationTest do
       # Note: We may receive status check results first, so wait for the actual completion
       completion_result =
         receive do
-          {:"$gen_cast", {:action_result, _, {:ok, %{stdout: _} = result}}} ->
+          {:"$gen_cast", {:action_result, _, {:ok, %{stdout: _} = result}, _opts}} ->
             result
         after
           2000 ->

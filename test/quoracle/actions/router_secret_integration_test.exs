@@ -20,7 +20,7 @@ defmodule Quoracle.Actions.RouterSecretIntegrationTest do
       {:ok, %{status: :running, command_id: _cmd_id}} ->
         # Shell went async - wait for Core to receive completion
         receive do
-          {:"$gen_cast", {:action_result, _action_id, {:ok, result}}} -> result
+          {:"$gen_cast", {:action_result, _action_id, {:ok, result}, _opts}} -> result
         after
           10_000 -> raise "Timeout waiting for shell completion"
         end
@@ -28,7 +28,7 @@ defmodule Quoracle.Actions.RouterSecretIntegrationTest do
       {:async, _ref} ->
         # Execution layer went async (2-tuple) - wait for completion
         receive do
-          {:"$gen_cast", {:action_result, _action_id, {:ok, result}}} -> result
+          {:"$gen_cast", {:action_result, _action_id, {:ok, result}, _opts}} -> result
         after
           10_000 -> raise "Timeout waiting for shell completion"
         end
@@ -36,7 +36,7 @@ defmodule Quoracle.Actions.RouterSecretIntegrationTest do
       {:async, _ref, _info} ->
         # Execution layer went async (3-tuple with info) - wait for completion
         receive do
-          {:"$gen_cast", {:action_result, _action_id, {:ok, result}}} -> result
+          {:"$gen_cast", {:action_result, _action_id, {:ok, result}, _opts}} -> result
         after
           10_000 -> raise "Timeout waiting for shell completion"
         end

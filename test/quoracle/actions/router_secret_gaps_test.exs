@@ -22,21 +22,21 @@ defmodule Quoracle.Actions.RouterSecretGapsTest do
       # Async result (has status: :running)
       {:ok, %{status: :running}} ->
         receive do
-          {:"$gen_cast", {:action_result, _action_id, {:ok, result}}} -> {:ok, result}
+          {:"$gen_cast", {:action_result, _action_id, {:ok, result}, _opts}} -> {:ok, result}
         after
           10_000 -> raise "Timeout waiting for shell completion"
         end
 
       {:async, _ref} ->
         receive do
-          {:"$gen_cast", {:action_result, _action_id, {:ok, result}}} -> {:ok, result}
+          {:"$gen_cast", {:action_result, _action_id, {:ok, result}, _opts}} -> {:ok, result}
         after
           10_000 -> raise "Timeout waiting for shell completion"
         end
 
       {:async, _ref, _info} ->
         receive do
-          {:"$gen_cast", {:action_result, _action_id, {:ok, result}}} -> {:ok, result}
+          {:"$gen_cast", {:action_result, _action_id, {:ok, result}, _opts}} -> {:ok, result}
         after
           10_000 -> raise "Timeout waiting for shell completion"
         end
