@@ -7,6 +7,8 @@ defmodule Quoracle.Providers.RetryHelper do
 
   v3.0: ReqLLM compatibility (status field), Retry-After support, infinite retries for 429/5xx.
   v3.1: Exception handling for malformed LLM responses (empty body crashes from req_llm).
+  v3.2: Detect HTTP 429/5xx from FunctionClauseError stacktrace args and retry
+        (req_llm providers crash on error response bodies instead of returning proper errors).
   """
 
   require Logger
@@ -60,9 +62,27 @@ defmodule Quoracle.Providers.RetryHelper do
         func.()
       rescue
         # req_llm throws FunctionClauseError on empty/malformed response bodies
-        FunctionClauseError ->
-          Logger.error("LLM provider returned malformed response (empty body or invalid format)")
-          {:error, :malformed_response}
+        # Log the stacktrace to identify which parse_response guard failed and on what input
+        # v3.2: Check if the crash is actually an HTTP error (429/5xx) that the provider
+        # failed to parse - these should be retried, not treated as terminal failures
+        e in [FunctionClauseError] ->
+          stacktrace = __STACKTRACE__
+
+          Logger.error(
+            "LLM provider returned malformed response: #{Exception.message(e)}\n" <>
+              Exception.format_stacktrace(stacktrace)
+          )
+
+          case extract_http_error_code(stacktrace) do
+            code when code == 429 ->
+              {:error, {:retryable_provider_error, code}}
+
+            code when is_integer(code) and code >= 500 and code < 600 ->
+              {:error, {:retryable_provider_error, code}}
+
+            _ ->
+              {:error, :malformed_response}
+          end
 
         e ->
           Logger.error("LLM provider call raised exception: #{Exception.message(e)}")
@@ -73,6 +93,18 @@ defmodule Quoracle.Providers.RetryHelper do
       # Success case
       {{:ok, _}, _} ->
         result
+
+      # Handle retryable HTTP errors extracted from provider FunctionClauseError (v3.2)
+      # req_llm crashes on error response bodies (e.g., 429 from Google Vertex OpenAI-compat)
+      # instead of returning a proper error struct. We extract the status code from the
+      # stacktrace args and retry with the same backoff strategy as structured errors.
+      {{:error, {:retryable_provider_error, code}}, _} ->
+        Logger.warning(
+          "HTTP #{code} from crashed response parser, retrying attempt #{attempt + 1} after #{delay}ms"
+        )
+
+        delay_fn.(delay)
+        do_retry(func, delay * 2, attempt + 1, error_module, delay_fn)
 
       # Handle ReqLLM errors - 429 Rate Limited (infinite retry)
       {{:error, %{__struct__: module, status: 429} = error}, module} ->
@@ -132,6 +164,32 @@ defmodule Quoracle.Providers.RetryHelper do
         fallback_delay
     end
   end
+
+  # Extract HTTP error code from FunctionClauseError stacktrace args.
+  # When req_llm providers crash on error responses, the first stacktrace entry
+  # contains the function args. The first arg to parse_response is the response body,
+  # which may contain an error structure with an HTTP status code.
+  @spec extract_http_error_code(Exception.stacktrace()) :: pos_integer() | nil
+  defp extract_http_error_code([{_mod, _fun, args, _loc} | _]) when is_list(args) do
+    find_error_code_in_args(args)
+  end
+
+  defp extract_http_error_code(_), do: nil
+
+  # Google Vertex OpenAI-compat wraps errors as: [%{"error" => %{"code" => 429, ...}}]
+  defp find_error_code_in_args([response_body | _]) when is_list(response_body) do
+    Enum.find_value(response_body, fn
+      %{"error" => %{"code" => code}} when is_integer(code) -> code
+      _ -> nil
+    end)
+  end
+
+  # Direct error map: %{"error" => %{"code" => 429, ...}}
+  defp find_error_code_in_args([%{"error" => %{"code" => code}} | _]) when is_integer(code) do
+    code
+  end
+
+  defp find_error_code_in_args(_), do: nil
 
   @doc """
   Applies exponential backoff delay.

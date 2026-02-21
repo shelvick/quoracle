@@ -93,7 +93,11 @@ defmodule Quoracle.MCP.ClientHTTPIntegrationTest do
             Client.terminate_connection(client, connection.connection_id)
 
           {:error, {:initialization_timeout, _}} ->
-            # Server reachable via TCP but MCP protocol not responding - skip
+            # Server reachable via TCP but MCP protocol not responding in time - skip
+            :ok
+
+          {:error, {:connection_failed, _}} ->
+            # Server reachable via TCP but MCP handshake timed out - skip
             :ok
 
           {:error, reason} ->

@@ -114,7 +114,6 @@ defmodule Quoracle.Actions.SchemaWebTest do
     test "has exactly the correct optional params" do
       {:ok, schema} = Schema.get_schema(:fetch_web)
 
-      # Note: auto_complete_todo is injected by Validator, not in schema definitions
       expected_optional = [
         :security_check,
         :timeout,

@@ -24,19 +24,18 @@
   - format_action_summary/1: 12 action-specific formatters with key params
   - format_reasoning_history/1: Round-based history with action context
   - truncate_summary/2: Smart truncation at 100 chars
-**Result** (453 lines): Consensus result formatting with 3-level tie-breaking
+**Result**: Consensus result formatting with 2-level tie-breaking
   - format_result/3: Returns {:consensus|:forced_decision, action, confidence}
-  - break_tie/1: 3-level chain (action priority → wait score → auto_complete score)
-  - wait_score/1, auto_complete_score/1: Tuple scoring {true_count, finite_sum}
-  - cluster_wait_score/1, cluster_auto_complete_score/1: Aggregate cluster scores
+  - break_tie/1: 2-level chain (action priority → wait score)
+  - wait_score/1: Tuple scoring {true_count, finite_sum}
+  - cluster_wait_score/1: Aggregate cluster scores
   - merge_cluster_params/1: Schema-specific parameter merging
   - calculate_confidence/4: Confidence scoring with round penalty relative to max_refinement_rounds (v8.0)
 - calculate_cluster_priority/1: Batch-aware priority (max for batch_sync)
-**Result.Scoring** (110 lines, extracted): Scoring and tiebreaking functions
-  - break_tie/1, wait_score/1, auto_complete_score/1
-  - cluster_wait_score/1, cluster_auto_complete_score/1
+**Result.Scoring** (extracted): Scoring and tiebreaking functions
+  - break_tie/1, wait_score/1, cluster_wait_score/1
   - Result delegates to this module for API compatibility
-**ActionParser**: JSON action parsing from LLM responses (154 lines, v2.0: auto_complete_todo extraction)
+**ActionParser**: JSON action parsing from LLM responses
 **Temperature** (117 lines): Round-based temperature calculation for consensus queries
   - get_max_temperature/1: Model family → max temp (2.0 for gpt/o1/o3/o4/gemini, 1.0 for others)
   - calculate_round_temperature/3: Adaptive descent based on max_refinement_rounds (v2.0), clamped to floor
@@ -61,8 +60,6 @@ Sections:
 
 ActionParser:
 - parse_json_response/1: String → {:ok, action_response} | {:error, atom}
-- extract_auto_complete_todo/2: Extracts auto_complete_todo from LLM responses (v2.0)
-- Returns nil for :todo action (special case, like wait parameter)
 
 ## Patterns
 
@@ -139,12 +136,11 @@ ActionParser:
 - 29 new tests (R11-R15 in manager_test, R22-R43 in aggregator_test)
 
 **v10.0 - Enhanced Tie-Breaking (Dec 8, 2025, WorkGroupID: tiebreak-20251208-202952)**:
-- Result: 3-level tie-breaking chain (priority → wait score → auto_complete score)
-- NEW: Tuple scoring `{true_count, finite_sum}` for wait/auto_complete parameters
-- NEW: wait_score/1, auto_complete_score/1, cluster_wait_score/1, cluster_auto_complete_score/1
+- Result: 2-level tie-breaking chain (priority → wait score)
+- Tuple scoring `{true_count, finite_sum}` for wait parameter
+- wait_score/1, cluster_wait_score/1
 - Conservative wins: Lower tuple scores win ties (lexicographic comparison)
 - Fallback clauses for clusters without :actions field
-- 18 new tests (R5-R22) in result_test.exs
 
 **v9.0 - Descending Consensus Temperature (Dec 8, 2025, WorkGroupID: feat-20251208-165509)**:
 - NEW: Temperature module for round-based temperature calculation
@@ -162,13 +158,6 @@ ActionParser:
 - Aggregator: build_final_round_prompt/2 for decisive final round framing
 - Blind consensus preserved: No model attribution in prompts
 - Deliberation framing: Genuine consideration, not matching/voting
-
-**v7.1 - Auto-Complete TODO Documentation (Nov 16, 2025, WorkGroupID: autocomplete-20251116-001905)**:
-- Sections: auto_complete_todo documented in response format (lines 315-318, 337-340, 345)
-- Response-level parameter (not in action params)
-- Excluded from :todo action (like wait parameter pattern)
-- ActionParser v2.0: extract_auto_complete_todo/2 function added
-- Type spec updated: auto_complete_todo: boolean() | nil
 
 **v7.0 - Wait Parameter Schema Propagation (Nov 14, 2025, WorkGroupID: wait-20251114-203234)**:
 - Wait parameter schema updated: `{:union, [:boolean, :number]}` type

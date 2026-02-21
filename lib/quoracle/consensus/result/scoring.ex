@@ -7,10 +7,9 @@ defmodule Quoracle.Consensus.Result.Scoring do
   alias Quoracle.Actions.Schema
 
   @doc """
-  Breaks a tie between clusters using 3-level chain:
+  Breaks a tie between clusters using 2-level chain:
   1. Action priority (lowest wins)
   2. Cluster wait score (lexicographic, lowest wins)
-  3. Cluster auto_complete_todo score (lexicographic, lowest wins)
   """
   @spec break_tie([map()]) :: map()
   def break_tie([cluster]), do: cluster
@@ -20,9 +19,8 @@ defmodule Quoracle.Consensus.Result.Scoring do
     |> Enum.sort_by(fn cluster ->
       priority = calculate_cluster_priority(cluster)
       wait = cluster_wait_score(cluster)
-      auto = cluster_auto_complete_score(cluster)
 
-      {priority, wait, auto}
+      {priority, wait}
     end)
     |> hd()
   end
@@ -39,15 +37,6 @@ defmodule Quoracle.Consensus.Result.Scoring do
   def wait_score(false), do: {1, 0}
 
   @doc """
-  Calculate auto_complete_todo score as {true_count, finite_sum}.
-  Lower score = more conservative = wins ties.
-  """
-  @spec auto_complete_score(boolean() | nil) :: {non_neg_integer(), non_neg_integer()}
-  def auto_complete_score(false), do: {0, 0}
-  def auto_complete_score(nil), do: {0, 1}
-  def auto_complete_score(true), do: {1, 0}
-
-  @doc """
   Sum wait scores across all responses in cluster.
   Missing :wait fields are treated as nil.
   """
@@ -62,22 +51,6 @@ defmodule Quoracle.Consensus.Result.Scoring do
   end
 
   def cluster_wait_score(_cluster), do: {0, 0}
-
-  @doc """
-  Sum auto_complete_todo scores across all responses in cluster.
-  Missing fields are treated as nil.
-  """
-  @spec cluster_auto_complete_score(map()) :: {non_neg_integer(), non_neg_integer()}
-  def cluster_auto_complete_score(%{actions: actions}) do
-    actions
-    |> Enum.map(fn action -> Map.get(action, :auto_complete_todo) end)
-    |> Enum.map(&auto_complete_score/1)
-    |> Enum.reduce({0, 0}, fn {tc, fs}, {acc_tc, acc_fs} ->
-      {tc + acc_tc, fs + acc_fs}
-    end)
-  end
-
-  def cluster_auto_complete_score(_cluster), do: {0, 0}
 
   # Calculate priority for a cluster, with special handling for batch_sync/batch_async
   @doc false

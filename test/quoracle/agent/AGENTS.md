@@ -19,7 +19,7 @@
 
 ## v13.0 Bug Fix Tests (Added 2025-12-11)
 - consensus_handler_race_test.exs: R21-R24 wait:true race condition tests
-- consensus_handler_v13_test.exs: R25-R31 TODO observability + auto_complete_todo tests
+- consensus_handler_v13_test.exs: R25-R27 TODO observability tests
 - wait_true_race_acceptance_test.exs: 2 acceptance tests for Bug 1 (LLM context ordering)
 - sender_info_test.exs: R31-R35 human prompt attribution tests
 - sender_info_acceptance_test.exs: Acceptance tests for sender attribution
@@ -67,6 +67,13 @@
 - shell_phase2_lifecycle_test.exs: 9 tests (R100-R108), 589 lines, async: true
   - Unit (R100-R107): ActionResultHandler conditional pending_actions deletion, Phase 1 keeps / Phase 2 clears, both phases in history, continuation triggers, non-shell/sync unaffected
   - System (R108): End-to-end with real Core GenServer, Phase 1 + Phase 2 delivery via spawn_agent_with_cleanup
+
+## Consensus Interleaving Deferral Tests (Added 2026-02-21)
+- consensus_interleaving_test.exs: 13 tests (R60-R64, R200-R207), 605 lines, async: true
+  - Unit (R60-R64): has_pending_self_contained?/1 predicate — true/false for SC/non-SC/empty/all-types/mixed
+  - Unit (R200-R204): Deferral guard — wait:false, non-SC only, empty (regression), default branch, legacy branch
+  - Integration (R205-R206): Sequential completion flow — last SC triggers, shell deferred for batch_sync
+  - System (R207): End-to-end with real Core GenServer, stale check_id deferred until batch_sync completes
 
 ## Action Executor Regression Tests (Added 2026-02-14)
 - action_executor_regressions_test.exs: 15 tests (R1-R14 + R5b), 1060 lines, async: true

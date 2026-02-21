@@ -87,6 +87,23 @@ defmodule Quoracle.Agent.ConsensusHandler.Helpers do
 
   def extract_shell_check_id(_params, _action_atom), do: nil
 
+  @doc """
+  Check if any pending actions are self-contained (fast, no external responder).
+
+  Used by ActionResultHandler to defer consensus trigger when fast actions are
+  still in-flight. Self-contained actions complete in milliseconds, so deferring
+  until they finish ensures their results and side effects (e.g., TODO updates)
+  are visible in the next consensus round.
+  """
+  @spec has_pending_self_contained?(map()) :: boolean()
+  def has_pending_self_contained?(state) do
+    self_contained = self_contained_actions()
+
+    state.pending_actions
+    |> Map.values()
+    |> Enum.any?(fn %{type: type} -> type in self_contained end)
+  end
+
   @doc "Prepend text to message content, handling both binary and multimodal (list) formats."
   @spec prepend_to_content(String.t(), binary() | list()) :: binary() | list()
   def prepend_to_content(prefix, content) when is_list(content) do

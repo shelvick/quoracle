@@ -12,7 +12,7 @@
 - Core.MessageInfoHandler: Info message dispatch (329 lines), handle_wait_expired/2 with v21.0 staleness check, handle_trigger_consensus/1 (v19.0 unified handler), handle_agent_message_2tuple/3tuple, handle_down/4, handle_exit/3, handle_spawn_failed/2 (v35.0: logs warning, records failure in history, removes child, schedules consensus)
 - RegistryQueries: Registry queries (77 lines), composite value extraction
 - MessageHandler: Message processing (377 lines, was 591 before ActionResultHandler extraction), timer cancellation (R11-R13), consensus integration, NO_EXECUTE action_type tracking, delegates to ConsensusHandler (v9.0), routes images via ImageDetector (v11.0), message queueing (v12.0), v13.0 handles 3-tuple via StateUtils.merge_consensus_state, v15.0 unified run_consensus_cycle/2, handle_consensus_error/4 DRY helper, v16.0 deferred consensus via consensus_scheduled flag, v18.0 deferred consensus for idle agents, v24.0 delegates handle_action_result/4 to ActionResultHandler
-- MessageHandler.ActionResultHandler: Action result processing (339 lines, extracted REFACTOR 2026-02-13), handle_action_result/4 with extended wait parameter handling, handle_batch_action_result/4, flush_queued_messages/1, format_sender_id/1, maybe_track_child/3 (spawn_child tracking), maybe_update_budget_committed/3 (replaces Core.update_budget_committed callback), v25.0: maybe_track_shell_router/3 (shell_routers population), error-aware continuation guard, v26.0: async_shell_phase1?/1 shared predicate (pending_actions guard + shell_routers tracking)
+- MessageHandler.ActionResultHandler: Action result processing (382 lines, extracted REFACTOR 2026-02-13), handle_action_result/4 with extended wait parameter handling, handle_batch_action_result/4, flush_queued_messages/1, format_sender_id/1, maybe_track_child/3 (spawn_child tracking), maybe_update_budget_committed/3 (replaces Core.update_budget_committed callback), v25.0: maybe_track_shell_router/3 (shell_routers population), error-aware continuation guard, v26.0: async_shell_phase1?/1 shared predicate (pending_actions guard + shell_routers tracking), v27.0: maybe_schedule_consensus/1 DRY helper for consensus deferral when self_contained actions pending
 - ImageDetector: Image detection from action results (167 lines), converts MCP screenshots to multimodal content, supports base64 and URL images
 - Consensus: Multi-LLM consensus (494 lines), pre-clustering validation filter (v7.0), per-model refinement context (v10.0), system prompt injection fix, v19.0 threads max_refinement_rounds from state to context
 - TokenManager: Token counting (376 lines), tiktoken integration via Tiktoken.CL100K for accurate BPE tokenization (v5.0), v8.0 adds history_tokens_for_model/2 helper, v16.0 adds estimate_all_messages_tokens/1 (all messages including system) and get_model_output_limit/1 (LLMDB limits.output)
@@ -20,7 +20,7 @@
 - ConfigManager: Config normalization (500 lines), atomic registration, ModelPoolInit submodule extracted, v5.0 preserves model_histories from restoration config, v8.0 extracts capability_groups, v11.0 extracts max_refinement_rounds
 - ConfigManager.ModelPoolInit: Model pool initialization (37 lines), get_model_pool_for_init/2, initialize_model_histories/1
 - ConsensusHandler: Consensus execution (244 lines), v20.0 single prompt_opts for UI/LLM consistency (fix-20260113-skill-injection), extracts active_skills + skills_path from state
-- ConsensusHandler.Helpers: Helper functions (99 lines), normalize_sibling_context/1, self_contained_actions/0, coerce_wait_value/1 (v34.0 DRY extraction), prepend_to_content/2, extract_shell_check_id/2 (v25.0 shared helper for shell routing)
+- ConsensusHandler.Helpers: Helper functions (116 lines), normalize_sibling_context/1, self_contained_actions/0, has_pending_self_contained?/1 (v26.0), coerce_wait_value/1 (v34.0 DRY extraction), prepend_to_content/2, extract_shell_check_id/2 (v25.0 shared helper for shell routing)
 - ConsensusHandler.LogHelper: Logging helpers (40 lines), safe_broadcast_log/5, log_action_error/1 (extracted for 500-line limit)
 - ConsensusHandler.TodoInjector: TODO injection (82 lines), inject_todo_context/2, format_todos_as_xml/1, escape_xml/1
 - ConsensusHandler.ChildrenInjector: Children context injection (78 lines), inject_children_context/2, format_children/1, Registry-based status check
@@ -42,8 +42,8 @@
 - InternalMessageHandler: Internal messages (38 lines)
 
 ## Key Functions
-- Core: start_link/1,/2, get_state/1, handle_message/2, terminate/2, set_dismissing/2, dismissing?/1, switch_model_pool/2 (v21.0), handle_cast({:update_todos, items}), handle_cast(:mark_first_todo_done)
-- Core.TodoHandler: handle_update_todos/2, handle_get_todos/1, handle_mark_first_todo_done/1
+- Core: start_link/1,/2, get_state/1, handle_message/2, terminate/2, set_dismissing/2, dismissing?/1, switch_model_pool/2 (v21.0), handle_cast({:update_todos, items})
+- Core.TodoHandler: handle_update_todos/2, handle_get_todos/1
 - ClientAPI: 13 wrappers (get_agent_id, get_state, handle_message, add_pending_action, etc.)
 - RegistryQueries: find_children_by_parent/1,/2, get_parent_from_registry/1,/2, find_siblings/1
 - MessageHandler: handle_agent_message/3 (queues when pending, R1-R2), handle_action_result/4 (delegates to ActionResultHandler), handle_message/2 (R13), cancel_wait_timer/1, run_consensus_cycle/2 (v15.0 unified entry point), handle_consensus_error/4 (private DRY helper)
@@ -70,7 +70,6 @@
 ## TODO Management (2025-12)
 - Core.TodoHandler: Extracted from Core to maintain 500-line limit
 - handle_update_todos/2: Full list replacement, broadcasts via PubSub
-- handle_mark_first_todo_done/1: Auto-marks first incomplete TODO
 - ConsensusHandler.inject_todo_context/2: Injects up to 20 TODOs into consensus prompts
 - Refactor (2025-10): Simplified cond→if for binary decision in inject_todo_context
 

@@ -47,18 +47,13 @@ defmodule Quoracle.Models.ModelQuery.OptionsBuilder do
             region: credential.region || "global"
           ]
 
-          if skip_json_mode do
+          # Only OpenAI-compat MaaS models (GLM, etc.) support response_format.
+          # Gemini and Claude on Vertex use native formatters that don't consume it
+          # (ReqLLM strips it with a warning).
+          if skip_json_mode or vertex_native_model?(credential.model_spec) do
             base
           else
-            # response_format: OpenAI-compat MaaS models (GLM, etc.)
-            # additional_model_request_fields: Gemini-native responseMimeType (not yet
-            #   consumed by ReqLLM's Gemini formatter, but preserves intent for when it is)
-            merge_provider_options(base,
-              response_format: %{type: "json_object"},
-              additional_model_request_fields: %{
-                generationConfig: %{responseMimeType: "application/json"}
-              }
-            )
+            merge_provider_options(base, response_format: %{type: "json_object"})
           end
 
         "amazon-bedrock" ->
@@ -241,6 +236,20 @@ defmodule Quoracle.Models.ModelQuery.OptionsBuilder do
       opts
     end
   end
+
+  # Gemini and Claude models on Vertex use native formatters (not OpenAI-compat)
+  # and don't support response_format. Matches ReqLLM's get_model_family/1 logic.
+  defp vertex_native_model?(model_spec) when is_binary(model_spec) do
+    case String.split(model_spec, ":", parts: 2) do
+      [_prefix, model_id] ->
+        String.starts_with?(model_id, "gemini-") or String.starts_with?(model_id, "claude-")
+
+      _ ->
+        false
+    end
+  end
+
+  defp vertex_native_model?(_), do: false
 
   defp merge_provider_options(opts, new_provider_opts) do
     existing = Keyword.get(opts, :provider_options, [])

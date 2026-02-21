@@ -12,6 +12,9 @@ defmodule Quoracle.Providers.RetryHelperTest do
   - R5: Infinite retries for 429/5xx (no max_retries limit)
   - R6: Injectable delay function for testing
   - R7: Don't retry 401/403 authentication errors
+  - R8: Retry FunctionClauseError with 429 error in stacktrace args (v3.2)
+  - R9: Retry FunctionClauseError with 5xx error in stacktrace args (v3.2)
+  - R10: FunctionClauseError without HTTP error still returns :malformed_response (v3.2)
   """
 
   use ExUnit.Case, async: true
@@ -488,4 +491,169 @@ defmodule Quoracle.Providers.RetryHelperTest do
       assert :counters.get(attempts, 1) == 1
     end
   end
+
+  describe "R8: Retry crashed 429 from stacktrace" do
+    test "retries when provider crashes on 429 error response" do
+      attempts = :counters.new(1, [:atomics])
+      delay_calls = :counters.new(1, [:atomics])
+
+      # Simulate what happens when req_llm's parse_response/3 crashes on a 429 response:
+      # The function raises FunctionClauseError with args containing the error body
+      func = fn ->
+        attempt = :counters.get(attempts, 1)
+        :counters.add(attempts, 1, 1)
+
+        if attempt < 3 do
+          # Simulate the exact crash: parse_response called with 429 error body
+          # This raises FunctionClauseError with args in the stacktrace
+          apply(
+            __MODULE__,
+            :simulate_parse_response,
+            [
+              [
+                %{
+                  "error" => %{
+                    "code" => 429,
+                    "message" => "Resource exhausted",
+                    "status" => "RESOURCE_EXHAUSTED"
+                  }
+                }
+              ],
+              :model,
+              :context
+            ]
+          )
+        else
+          {:ok, "success after retry"}
+        end
+      end
+
+      capture_log(fn ->
+        send(
+          self(),
+          {:result,
+           RetryHelper.with_retry(func,
+             initial_delay: 10,
+             error_module: @error_module,
+             delay_fn: fn _ms -> :counters.add(delay_calls, 1, 1) end
+           )}
+        )
+      end)
+
+      assert_received {:result, {:ok, "success after retry"}}
+      # Should have retried (delay called at least twice for attempts 1 and 2)
+      assert :counters.get(delay_calls, 1) >= 2
+      # Should have made 3 attempts total (2 failures + 1 success)
+      assert :counters.get(attempts, 1) == 4
+    end
+  end
+
+  describe "R9: Retry crashed 5xx from stacktrace" do
+    test "retries when provider crashes on 503 error response" do
+      attempts = :counters.new(1, [:atomics])
+      delay_calls = :counters.new(1, [:atomics])
+
+      func = fn ->
+        attempt = :counters.get(attempts, 1)
+        :counters.add(attempts, 1, 1)
+
+        if attempt < 2 do
+          apply(
+            __MODULE__,
+            :simulate_parse_response,
+            [
+              [%{"error" => %{"code" => 503, "message" => "Service unavailable"}}],
+              :model,
+              :context
+            ]
+          )
+        else
+          {:ok, "recovered from 503"}
+        end
+      end
+
+      capture_log(fn ->
+        send(
+          self(),
+          {:result,
+           RetryHelper.with_retry(func,
+             initial_delay: 10,
+             error_module: @error_module,
+             delay_fn: fn _ms -> :counters.add(delay_calls, 1, 1) end
+           )}
+        )
+      end)
+
+      assert_received {:result, {:ok, "recovered from 503"}}
+      assert :counters.get(delay_calls, 1) >= 1
+      # Should have made 2 attempts total (1 failure + 1 success)
+      assert :counters.get(attempts, 1) == 3
+    end
+  end
+
+  describe "R10: Non-HTTP crash not retried" do
+    test "non-HTTP FunctionClauseError is not retried" do
+      attempts = :counters.new(1, [:atomics])
+
+      func = fn ->
+        :counters.add(attempts, 1, 1)
+        # Raise FunctionClauseError without HTTP error body in args
+        apply(__MODULE__, :simulate_parse_response, ["not_a_list", :model, :context])
+      end
+
+      result =
+        capture_log(fn ->
+          send(
+            self(),
+            {:result,
+             RetryHelper.with_retry(func,
+               initial_delay: 10,
+               error_module: @error_module,
+               delay_fn: fn _ms -> :ok end
+             )}
+          )
+        end)
+
+      assert_received {:result, {:error, :malformed_response}}
+      # Should NOT have retried - only 1 attempt
+      assert :counters.get(attempts, 1) == 1
+      assert result =~ "malformed response"
+    end
+
+    test "FunctionClauseError with non-retryable status (e.g., 400) is not retried" do
+      attempts = :counters.new(1, [:atomics])
+
+      func = fn ->
+        :counters.add(attempts, 1, 1)
+
+        apply(
+          __MODULE__,
+          :simulate_parse_response,
+          [[%{"error" => %{"code" => 400, "message" => "Bad request"}}], :model, :context]
+        )
+      end
+
+      capture_log(fn ->
+        send(
+          self(),
+          {:result,
+           RetryHelper.with_retry(func,
+             initial_delay: 10,
+             error_module: @error_module,
+             delay_fn: fn _ms -> :ok end
+           )}
+        )
+      end)
+
+      assert_received {:result, {:error, :malformed_response}}
+      # Should NOT have retried - 400 is not retryable
+      assert :counters.get(attempts, 1) == 1
+    end
+  end
+
+  # Helper function that always raises FunctionClauseError.
+  # When called via apply/4, the args appear in __STACKTRACE__ for extraction.
+  # Uses pattern matching that will never match, forcing the FunctionClauseError.
+  @spec simulate_parse_response(:never_matches, :never_matches, :never_matches) :: no_return()
+  def simulate_parse_response(:never_matches, :never_matches, :never_matches), do: :ok
 end

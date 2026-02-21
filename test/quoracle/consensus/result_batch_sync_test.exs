@@ -40,8 +40,7 @@ defmodule Quoracle.Consensus.ResultBatchSyncTest do
                 %{action: :file_read, params: %{path: "/tmp/a.txt"}}
               ]
             },
-            wait: false,
-            auto_complete_todo: false
+            wait: false
           }
         ],
         count: 2
@@ -52,7 +51,7 @@ defmodule Quoracle.Consensus.ResultBatchSyncTest do
       # With max priority logic: batch_sync (10) > todo (6), todo wins
       todo_cluster = %{
         representative: %{action: :todo, params: %{items: []}, reasoning: ""},
-        actions: [%{action: :todo, wait: false, auto_complete_todo: false, params: %{items: []}}],
+        actions: [%{action: :todo, wait: false, params: %{items: []}}],
         count: 2
       }
 
@@ -86,8 +85,7 @@ defmodule Quoracle.Consensus.ResultBatchSyncTest do
                 %{action: :todo, params: %{items: []}}
               ]
             },
-            wait: false,
-            auto_complete_todo: false
+            wait: false
           }
         ],
         count: 2
@@ -114,8 +112,7 @@ defmodule Quoracle.Consensus.ResultBatchSyncTest do
                 %{action: :spawn_child, params: %{task_description: "test"}}
               ]
             },
-            wait: false,
-            auto_complete_todo: false
+            wait: false
           }
         ],
         count: 2
@@ -155,8 +152,7 @@ defmodule Quoracle.Consensus.ResultBatchSyncTest do
                 %{action: :file_read, params: %{path: "/tmp/a.txt"}}
               ]
             },
-            wait: false,
-            auto_complete_todo: false
+            wait: false
           }
         ],
         count: 2
@@ -167,7 +163,7 @@ defmodule Quoracle.Consensus.ResultBatchSyncTest do
       # With max priority: batch_sync (10) > call_api (7), call_api wins
       api_cluster = %{
         representative: %{action: :call_api, params: %{url: "http://test"}, reasoning: ""},
-        actions: [%{action: :call_api, wait: false, auto_complete_todo: false, params: %{}}],
+        actions: [%{action: :call_api, wait: false, params: %{}}],
         count: 2
       }
 
@@ -189,8 +185,7 @@ defmodule Quoracle.Consensus.ResultBatchSyncTest do
           %{
             action: :batch_sync,
             params: %{actions: []},
-            wait: false,
-            auto_complete_todo: false
+            wait: false
           }
         ],
         count: 2
@@ -198,7 +193,7 @@ defmodule Quoracle.Consensus.ResultBatchSyncTest do
 
       orient_cluster = %{
         representative: %{action: :orient, params: %{}, reasoning: ""},
-        actions: [%{action: :orient, wait: false, auto_complete_todo: false, params: %{}}],
+        actions: [%{action: :orient, wait: false, params: %{}}],
         count: 2
       }
 

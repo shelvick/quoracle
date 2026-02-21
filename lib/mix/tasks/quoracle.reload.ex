@@ -2,18 +2,17 @@ defmodule Mix.Tasks.Quoracle.Reload do
   @moduledoc """
   Hot-reload changed modules on the running Quoracle server.
 
-  Compiles the project, identifies modules that differ from what's currently
-  loaded on the running server, and pushes the updated code without restarting.
+  Identifies modules that differ from what's currently loaded on the running
+  server, and pushes the updated code without restarting.
   Running agents, supervision trees, and all state are preserved.
 
   ## Usage
 
       mix quoracle.reload
 
-  Run this directly after merging or editing source files. The task
-  handles compilation internally — do not run `mix compile` separately
-  beforehand, as the change detection depends on comparing .beam files
-  before and after compilation.
+  Run this after merging or editing source files. Change detection compares
+  the compiled .beam files against what's actually loaded on the remote node,
+  so it works correctly regardless of when compilation happens.
 
   ## Prerequisites
 
@@ -52,7 +51,7 @@ defmodule Mix.Tasks.Quoracle.Reload do
 
   @default_node "quoracle"
 
-  @doc "Compiles the project and pushes changed modules to the running server node."
+  @doc "Compares local .beam files against the running server and pushes changed modules."
   @impl Mix.Task
   @spec run([String.t()]) :: :ok
   def run(args) do
@@ -61,13 +60,6 @@ defmodule Mix.Tasks.Quoracle.Reload do
     dry_run? = Keyword.get(opts, :dry_run, false)
 
     beam_dir = beam_directory()
-
-    # Snapshot .beam file checksums BEFORE compiling. These represent
-    # what the running server loaded from (same _build directory).
-    pre_compile = snapshot_beams(beam_dir)
-
-    Mix.shell().info("Compiling...")
-    Mix.Task.run("compile")
 
     ensure_distributed!()
     target = resolve_target(node_name)
@@ -80,7 +72,7 @@ defmodule Mix.Tasks.Quoracle.Reload do
       exit({:shutdown, 1})
     end
 
-    changed = find_changed_modules(target, pre_compile, beam_dir)
+    changed = find_changed_modules(target, beam_dir)
 
     case {changed, dry_run?} do
       {[], _} ->
@@ -125,26 +117,20 @@ defmodule Mix.Tasks.Quoracle.Reload do
     end
   end
 
-  @spec snapshot_beams(String.t()) :: %{String.t() => binary()}
-  defp snapshot_beams(beam_dir) do
-    beam_dir
-    |> Path.join("*.beam")
-    |> Path.wildcard()
-    |> Map.new(fn path -> {path, :erlang.md5(File.read!(path))} end)
-  end
-
-  @spec find_changed_modules(node(), %{String.t() => binary()}, String.t()) ::
+  @spec find_changed_modules(node(), String.t()) ::
           [{module(), String.t(), boolean()}]
-  defp find_changed_modules(target, pre_compile, beam_dir) do
+  defp find_changed_modules(target, beam_dir) do
     beam_dir
     |> Path.join("*.beam")
     |> Path.wildcard()
     |> Enum.filter(fn path ->
-      current_md5 = :erlang.md5(File.read!(path))
-      pre_md5 = Map.get(pre_compile, path)
+      module = beam_path_to_module(path)
+      {:ok, {^module, local_md5}} = :beam_lib.md5(to_charlist(path))
 
-      # Changed if: new module (no pre-compile entry) or file content differs
-      pre_md5 == nil or pre_md5 != current_md5
+      case :rpc.call(target, module, :module_info, [:md5]) do
+        remote_md5 when is_binary(remote_md5) -> local_md5 != remote_md5
+        _ -> true
+      end
     end)
     |> Enum.map(fn path ->
       module = beam_path_to_module(path)

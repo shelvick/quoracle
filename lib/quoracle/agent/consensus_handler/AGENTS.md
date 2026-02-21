@@ -2,7 +2,7 @@
 
 ## Modules
 - ActionExecutor: Non-blocking consensus action execution (346 lines), dispatches Router.execute via Task.Supervisor, result returns via GenServer.cast, v36.0 outer try/rescue/catch crash protection + MCP sync timeout
-- Helpers: Shared helper functions (99 lines), self_contained_actions/0, coerce_wait_value/1, extract_shell_check_id/2, normalize_sibling_context/1
+- Helpers: Shared helper functions (116 lines), self_contained_actions/0, has_pending_self_contained?/1 (v26.0), coerce_wait_value/1, extract_shell_check_id/2, normalize_sibling_context/1
 - LogHelper: Logging helpers (40 lines), safe_broadcast_log/5, log_action_error/1
 - TodoInjector: Todo list context injection (82 lines), inject_todo_context/2
 - ChildrenInjector: Children context injection (78 lines), inject_children_context/2
@@ -15,7 +15,8 @@
 - ActionExecutor.spawn_and_monitor_router/4: Spawn Router + Process.monitor + active_routers tracking (v25.0)
 - ActionExecutor MCP sync timeout: Forces 600_000ms timeout for :call_mcp actions (v36.0, prevents smart_threshold async dispatch)
 - Helpers.extract_shell_check_id/2: Detect check_id in shell params for routing through existing Router (v25.0)
-- Helpers.self_contained_actions/0: 9 actions that complete instantly (wait:true would stall)
+- Helpers.self_contained_actions/0: 10 actions that complete instantly (wait:true would stall)
+- Helpers.has_pending_self_contained?/1: Check if any pending_actions are self_contained (v26.0, used by ActionResultHandler.maybe_schedule_consensus/1)
 - Helpers.coerce_wait_value/1: String "true"/"false" → boolean for wait param
 
 ## ActionExecutor Flow (v35.0 non-blocking + v25.0 fixes)

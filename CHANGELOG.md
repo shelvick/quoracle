@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.15] - 2026-02-21
+
+### Fixed
+
+- **Consensus interleaving** — Defer consensus when self-contained actions are
+  still pending, preventing premature consensus queries.
+- **quoracle.reload change detection** — Fix false positives from non-deterministic
+  compilation.
+- **RetryHelper v3.2** — Retry HTTP 429/5xx errors from crashed response parsers
+  with improved malformed response logging and stacktrace context.
+- **Vertex native model compatibility** — Skip response_format for native Vertex
+  models (Gemini, Claude) that don't support it.
+
+### Changed
+
+- Apply ResponseTruncator to async shell completion path.
+
+### Removed
+
+- Remove obsolete auto_complete_todo parameter.
+
 ## [0.1.14] - 2026-02-21
 
 ### Fixed

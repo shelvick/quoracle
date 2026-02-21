@@ -317,10 +317,6 @@ defmodule Quoracle.Agent.Core do
     {:reply, {:ok, prompt_opts}, state}
   end
 
-  def handle_cast(:mark_first_todo_done, state) do
-    TodoHandler.handle_mark_first_todo_done(state)
-  end
-
   # Uses cast (not call) to avoid deadlock when called from action execution
   # while agent is blocked in handle_cast(:request_consensus)
   def handle_cast({:update_todos, items}, state) when is_list(items) do

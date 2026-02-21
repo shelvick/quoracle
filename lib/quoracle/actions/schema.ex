@@ -102,17 +102,6 @@ defmodule Quoracle.Actions.Schema do
   def wait_required?(action) when action in unquote(Definitions.actions()), do: true
 
   @doc """
-  Returns whether the auto_complete_todo parameter is available for this action.
-  All actions except :todo support auto_complete_todo.
-
-  Returns false for unknown actions.
-  """
-  @spec auto_complete_todo_available?(atom()) :: boolean()
-  def auto_complete_todo_available?(action) when is_atom(action) do
-    action != :todo and action in Definitions.actions()
-  end
-
-  @doc """
   Returns the map of parameter descriptions for LLM prompts.
   """
   @spec param_descriptions() :: map()
