@@ -16,7 +16,7 @@
 - Routes check_id via Helpers.extract_shell_check_id/2 → lookup shell_routers → use existing Router
 - spawn_and_monitor_router/4: Spawn + monitor + active_routers tracking (mirrors ActionExecutor)
 - shell_routers keyed by command_id from result (not action_id)
-- Handles both `async: true` and `status: :running` patterns for shell_routers population
+- Matches Shell's actual async Phase 1 pattern: `{:ok, %{command_id: _, status: :running, sync: false}}`
 
 ## MessageInfoHandler Key Handlers
 - handle_trigger_consensus/1: Unified consensus trigger with staleness check

@@ -74,7 +74,7 @@ defmodule Quoracle.Actions.ShellPacket2Test do
         Shell.execute(%{command: "sleep 0.05 && echo done"}, "agent-1", opts_async)
 
       # Wait for completion via action_result - this is the canonical way
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result}, _opts}}, 30_000
       assert result.status == :completed
       assert result.stdout =~ "done"
       assert result.exit_code == 0
@@ -158,7 +158,7 @@ defmodule Quoracle.Actions.ShellPacket2Test do
                   {:halt, {chunk_count, nil}}
               end
 
-            {:"$gen_cast", {:action_result, _, {:ok, result}}} ->
+            {:"$gen_cast", {:action_result, _, {:ok, result}, _opts}} ->
               {:halt, {chunk_count, result}}
           after
             30_000 -> flunk("Timeout waiting for output")
@@ -172,7 +172,7 @@ defmodule Quoracle.Actions.ShellPacket2Test do
       final_result =
         final_result ||
           receive do
-            {:"$gen_cast", {:action_result, _, {:ok, result}}} -> result
+            {:"$gen_cast", {:action_result, _, {:ok, result}, _opts}} -> result
           after
             5000 -> nil
           end
@@ -203,7 +203,7 @@ defmodule Quoracle.Actions.ShellPacket2Test do
       {:ok, %{command_id: cmd_id}} = Shell.execute(%{command: "echo fast"}, "agent-1", opts_async)
 
       # Wait for completion via action_result - this is the ONLY way to get results
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result}, _opts}}, 30_000
       assert result.stdout =~ "fast"
       assert result.exit_code == 0
       assert result.status == :completed
@@ -303,7 +303,7 @@ defmodule Quoracle.Actions.ShellPacket2Test do
         Shell.execute(%{command: "sleep 0.01 && echo done"}, "agent-1", opts_async)
 
       # Wait for completion via action_result
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, _}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, _}, _opts}}, 30_000
 
       # Try to terminate completed command - Router already terminated
       result = Shell.execute(%{check_id: cmd_id, terminate: true}, "agent-1", opts)
@@ -423,7 +423,7 @@ defmodule Quoracle.Actions.ShellPacket2Test do
         Shell.execute(%{command: "echo hello"}, "agent-1", opts_async)
 
       # Wait for completion via action_result
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result}, _opts}}, 30_000
       assert result.status == :completed
       assert result.stdout =~ "hello"
       assert result.exit_code == 0
@@ -466,7 +466,7 @@ defmodule Quoracle.Actions.ShellPacket2Test do
       File.write!(Path.join(System.tmp_dir!(), fifo_name), "")
 
       # Wait for completion
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result}, _opts}}, 30_000
       assert result.stdout =~ "start"
       assert result.stdout =~ "end"
     end
@@ -553,7 +553,7 @@ defmodule Quoracle.Actions.ShellPacket2Test do
 
       # Step 4: Unblock fifo2 and receive completion message via action_result
       File.write!(Path.join(System.tmp_dir!(), fifo2), "")
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result}, _opts}}, 30_000
       assert result.action == "shell"
       assert result.stdout =~ "starting"
       assert result.stdout =~ "middle"
@@ -650,7 +650,7 @@ defmodule Quoracle.Actions.ShellPacket2Test do
       # Collect all results (order may vary)
       results =
         for _ <- 1..3 do
-          assert_receive {:"$gen_cast", {:action_result, action_id, {:ok, result}}}, 30_000
+          assert_receive {:"$gen_cast", {:action_result, action_id, {:ok, result}, _opts}}, 30_000
           {action_id, result}
         end
 
@@ -685,7 +685,7 @@ defmodule Quoracle.Actions.ShellPacket2Test do
           {:error, :command_not_found} ->
             # Router terminated - get full output from action_result
             receive do
-              {:"$gen_cast", {:action_result, _, {:ok, result}}} -> result.stdout
+              {:"$gen_cast", {:action_result, _, {:ok, result}, _opts}} -> result.stdout
             after
               100 -> acc |> Enum.reverse() |> Enum.join()
             end
@@ -694,7 +694,7 @@ defmodule Quoracle.Actions.ShellPacket2Test do
             collect_incremental_output(cmd_id, opts, max_iterations - 1, acc)
         end
 
-      {:"$gen_cast", {:action_result, _, {:ok, result}}} ->
+      {:"$gen_cast", {:action_result, _, {:ok, result}, _opts}} ->
         # Command completed via action_result - return full stdout
         result.stdout
     after

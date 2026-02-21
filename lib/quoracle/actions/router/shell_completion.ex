@@ -48,11 +48,13 @@ defmodule Quoracle.Actions.Router.ShellCompletion do
     secrets_used = Map.get(command_state, :secrets_used, [])
     {:ok, result} = Security.scrub_output({:ok, raw_result}, secrets_used)
 
-    # Call Core.handle_action_result with action_id
-    Quoracle.Agent.Core.handle_action_result(
+    # Call Core with 4-arity cast to pass action_atom context.
+    # Using GenServer.cast directly (not ClientAPI) ensures Phase 2 results
+    # are processed with proper action_atom, using the standard continuation
+    # path (which triggers consensus via schedule_consensus_continuation/1).
+    GenServer.cast(
       command_state.agent_pid,
-      command_state.action_id,
-      {:ok, result}
+      {:action_result, command_state.action_id, {:ok, result}, [action_atom: :execute_shell]}
     )
 
     # Broadcast completion event via PubSub

@@ -12,7 +12,8 @@
 ## Private Helpers
 - maybe_track_child/3: Track spawned children from non-blocking dispatch results (spawn_child action only)
 - maybe_update_budget_committed/3: Update budget_data.committed for spawn_child results (replaces removed Core.update_budget_committed callback)
-- maybe_track_shell_router/3: Populate shell_routers with {command_id, router_pid} from async shell results (v25.0). Handles both `async: true` and `status: :running` patterns. Uses `is_binary(cmd_id)` guard.
+- maybe_track_shell_router/3: Populate shell_routers with {command_id, router_pid} from async shell Phase 1 results (v25.0, v26.0 refactor: uses shared `async_shell_phase1?/1` predicate). Matches `{:ok, %{status: :running, command_id: binary, sync: false}}`.
+- async_shell_phase1?/1: Shared predicate detecting async shell Phase 1 ack. Used by both pending_actions guard and shell_routers tracking. Pattern: `{:ok, %{status: :running, command_id: binary, sync: false}}`.
 - handle_action_result_continuation/3: Extended wait parameter cond with 6 branches: legacy path, always_sync+wait:true+success (v25.0: error guard), :wait with timer, wait:false/0/true, timed wait, default
 - map_result_with_timer?/1: Detect {:ok, %{timer_id: ref}} pattern
 - get_timer_from_result/1: Extract timer_id from {:ok, result} tuple

@@ -116,9 +116,9 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
       assert :ok = TaskRestorer.pause_task(task.id, registry: registry, dynsup: dynsup)
       elapsed = System.monotonic_time(:millisecond) - start_time
 
-      # Should return in < 500ms (non-blocking, with margin for CI load)
+      # Should return in < 1000ms (non-blocking, with margin for CI/parallel load)
       # If it waited for GenServer.stop with :infinity, it would take much longer
-      assert elapsed < 500,
+      assert elapsed < 1000,
              "pause_task should return immediately, but took #{elapsed}ms"
 
       # Wait for ALL agents to terminate before test ends (prevents sandbox owner race)

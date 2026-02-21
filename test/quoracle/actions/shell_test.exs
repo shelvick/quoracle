@@ -152,7 +152,7 @@ defmodule Quoracle.Actions.ShellTest do
              )
 
       # Receive proactive completion message - [INTEGRATION] I1.3
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result_map}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result_map}, _opts}}, 30_000
       assert result_map.exit_code == 0
       assert result_map.stdout =~ "done"
     end
@@ -173,7 +173,7 @@ defmodule Quoracle.Actions.ShellTest do
                           stderr: "",
                           exit_code: 0,
                           execution_time_ms: time
-                        }}}},
+                        }}, _opts}},
                      30_000
 
       assert time >= 150
@@ -232,9 +232,9 @@ defmodule Quoracle.Actions.ShellTest do
         Shell.execute(%{command: "sleep 0.15 && echo cmd3"}, "agent-3", opts3)
 
       # Should receive 3 completions via Router-mediated protocol
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result1}}}, 30_000
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result2}}}, 30_000
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result3}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result1}, _opts}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result2}, _opts}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result3}, _opts}}, 30_000
       # Verify all completed with correct outputs
       results = [result1, result2, result3]
       assert Enum.any?(results, &(&1.stdout =~ "cmd1"))
@@ -250,7 +250,7 @@ defmodule Quoracle.Actions.ShellTest do
 
       assert {:ok, %{command_id: _cmd_id}} = result
 
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result_map}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result_map}, _opts}}, 30_000
       assert byte_size(result_map.stdout) >= 1_048_576
     end
 
@@ -290,7 +290,7 @@ defmodule Quoracle.Actions.ShellTest do
       assert {:ok, %{command_id: _cmd_id, status: :running}} = result
 
       # Wait for completion message
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result_map}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result_map}, _opts}}, 30_000
       # Command field present in async completion messages
       assert result_map.command == cmd
       assert result_map.stdout =~ "context test"
@@ -310,7 +310,7 @@ defmodule Quoracle.Actions.ShellTest do
       assert {:ok, %{command_id: _cmd_id, status: :running}} = result
 
       # Wait for completion message
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result_map}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result_map}, _opts}}, 30_000
       assert result_map.stdout =~ "immediate"
       assert result_map.stdout =~ "delayed"
     end
@@ -323,7 +323,7 @@ defmodule Quoracle.Actions.ShellTest do
       assert {:ok, %{command_id: _cmd_id, status: :running}} = result
 
       # Wait for completion message
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result_map}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result_map}, _opts}}, 30_000
       # Port cleanup is verified by successful completion without errors
       assert result_map.exit_code == 0
     end
@@ -339,7 +339,7 @@ defmodule Quoracle.Actions.ShellTest do
       case result do
         {:ok, %{command_id: _cmd_id}} ->
           # Async path: command still running at yield time
-          assert_receive {:"$gen_cast", {:action_result, _, {:ok, result_map}}}, 30_000
+          assert_receive {:"$gen_cast", {:action_result, _, {:ok, result_map}, _opts}}, 30_000
           assert result_map.exit_code != 0
 
         {:ok, %{exit_code: exit_code}} ->
@@ -398,9 +398,9 @@ defmodule Quoracle.Actions.ShellTest do
       end)
 
       # Collect all 3 completion messages
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result1}}}, 30_000
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result2}}}, 30_000
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result3}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result1}, _opts}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result2}, _opts}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result3}, _opts}}, 30_000
       received = [result1, result2, result3]
 
       # Verify each command produced correct output
@@ -443,7 +443,7 @@ defmodule Quoracle.Actions.ShellTest do
       assert is_binary(cmd_id)
 
       # Wait for actual completion
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, completion}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, completion}, _opts}}, 30_000
       assert completion.stdout =~ "slow"
     end
 
@@ -456,7 +456,7 @@ defmodule Quoracle.Actions.ShellTest do
       assert {:ok, %{status: :running, command_id: _}} = result
 
       # Wait for completion
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, completion}}}, 30_000
+      assert_receive {:"$gen_cast", {:action_result, _, {:ok, completion}, _opts}}, 30_000
       # Verify executed once
       occurrences = length(String.split(completion.stdout, marker)) - 1
       assert occurrences == 1, "Command executed #{occurrences} times instead of once"
