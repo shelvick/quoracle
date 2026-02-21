@@ -71,7 +71,6 @@ defmodule Quoracle.Actions.Router do
     base_opts =
       opts
       |> Keyword.merge(agent_id: agent_id, agent_pid: agent_pid, action_id: action_id)
-      |> Keyword.put(:auto_complete_todo, Map.get(action_map, :auto_complete_todo))
       |> Keyword.put(:mcp_client, existing_mcp_client)
 
     opts_with_meta = MCPHelpers.maybe_lazy_init_mcp_client(action_type, base_opts)

@@ -286,7 +286,7 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
     end)
   end
 
-  defp build_execute_opts(state, action_id, agent_pid, action_response) do
+  defp build_execute_opts(state, action_id, agent_pid, _action_response) do
     budget_data = Map.get(state, :budget_data)
 
     [
@@ -311,7 +311,6 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
     ]
     |> maybe_put(:sandbox_owner, Map.get(state, :sandbox_owner))
     |> maybe_put(:spawn_complete_notify, Map.get(state, :spawn_complete_notify))
-    |> maybe_put(:auto_complete_todo, Map.get(action_response, :auto_complete_todo))
   end
 
   # Conditionally add a key to opts when the value is non-nil

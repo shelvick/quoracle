@@ -43,7 +43,7 @@ defmodule Quoracle.Actions.Schema.Definitions do
 
   @doc """
   Returns global parameter descriptions that apply across multiple actions.
-  Currently empty - wait and auto_complete_todo are injected at schema formatter level.
+  Currently empty - wait is injected at schema formatter level.
   """
   @spec param_descriptions() :: map()
   def param_descriptions do

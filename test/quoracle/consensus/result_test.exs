@@ -35,23 +35,6 @@ defmodule Quoracle.Consensus.ResultTest do
     end
   end
 
-  describe "auto_complete_score/1" do
-    # R9: Auto-Complete Score False
-    test "returns {0, 0} for false" do
-      assert Result.auto_complete_score(false) == {0, 0}
-    end
-
-    # R10: Auto-Complete Score Nil
-    test "returns {0, 1} for nil" do
-      assert Result.auto_complete_score(nil) == {0, 1}
-    end
-
-    # R11: Auto-Complete Score True
-    test "returns {1, 0} for true" do
-      assert Result.auto_complete_score(true) == {1, 0}
-    end
-  end
-
   describe "cluster_wait_score/1" do
     # R12: Cluster Wait Score Sum
     test "sums all action wait scores" do
@@ -107,62 +90,19 @@ defmodule Quoracle.Consensus.ResultTest do
     end
   end
 
-  describe "cluster_auto_complete_score/1" do
-    # R14: Cluster Auto-Complete Score Sum
-    test "sums all action scores" do
-      cluster = %{
-        actions: [
-          %{action: :spawn_child, auto_complete_todo: false, params: %{}},
-          %{action: :spawn_child, auto_complete_todo: true, params: %{}},
-          %{action: :spawn_child, auto_complete_todo: nil, params: %{}}
-        ]
-      }
-
-      # false → {0,0}, true → {1,0}, nil → {0,1}
-      # Sum: {0+1+0, 0+0+1} = {1, 1}
-      assert Result.cluster_auto_complete_score(cluster) == {1, 1}
-    end
-
-    # R15: Cluster Auto-Complete Score Missing Fields
-    test "treats missing field as nil" do
-      cluster = %{
-        actions: [
-          %{action: :spawn_child, auto_complete_todo: false, params: %{}},
-          %{action: :spawn_child, params: %{}}
-        ]
-      }
-
-      # false → {0,0}, missing(nil) → {0,1}
-      # Sum: {0+0, 0+1} = {0, 1}
-      assert Result.cluster_auto_complete_score(cluster) == {0, 1}
-    end
-
-    test "sums correctly for all-false cluster" do
-      cluster = %{
-        actions: [
-          %{action: :orient, auto_complete_todo: false, params: %{}},
-          %{action: :orient, auto_complete_todo: false, params: %{}}
-        ]
-      }
-
-      # {0,0} + {0,0} = {0, 0}
-      assert Result.cluster_auto_complete_score(cluster) == {0, 0}
-    end
-  end
-
-  describe "break_tie/1 enhanced 3-level chain" do
+  describe "break_tie/1 enhanced chain" do
     # R16: Tiebreak Level 1 - Action Priority
     test "selects action with lowest priority" do
       # orient has priority 1, spawn_child has priority 10
       tied_clusters = [
         %{
           representative: %{action: :spawn_child, params: %{}, reasoning: ""},
-          actions: [%{action: :spawn_child, wait: false, auto_complete_todo: false, params: %{}}],
+          actions: [%{action: :spawn_child, wait: false, params: %{}}],
           count: 2
         },
         %{
           representative: %{action: :orient, params: %{}, reasoning: ""},
-          actions: [%{action: :orient, wait: false, auto_complete_todo: false, params: %{}}],
+          actions: [%{action: :orient, wait: false, params: %{}}],
           count: 2
         }
       ]
@@ -199,37 +139,6 @@ defmodule Quoracle.Consensus.ResultTest do
       # cluster_b wait score: {0,0} + {0,0} = {0,0}
       # {0,0} < {2,0}, so cluster_b should win (not cluster_a)
       assert winner.representative.params.task == "b"
-    end
-
-    # R18: Tiebreak Level 3 - Auto-Complete Score
-    test "uses auto_complete score as final tiebreaker" do
-      # Same priority, same wait scores, different auto_complete_todo
-      # Put cluster_b FIRST to ensure test fails without proper auto_complete handling
-      cluster_a = %{
-        representative: %{action: :spawn_child, params: %{task: "a"}, reasoning: ""},
-        actions: [
-          %{action: :spawn_child, wait: false, auto_complete_todo: false, params: %{task: "a"}},
-          %{action: :spawn_child, wait: false, auto_complete_todo: false, params: %{task: "a"}}
-        ],
-        count: 2
-      }
-
-      cluster_b = %{
-        representative: %{action: :spawn_child, params: %{task: "b"}, reasoning: ""},
-        actions: [
-          %{action: :spawn_child, wait: false, auto_complete_todo: true, params: %{task: "b"}},
-          %{action: :spawn_child, wait: false, auto_complete_todo: true, params: %{task: "b"}}
-        ],
-        count: 2
-      }
-
-      # cluster_b is FIRST - without auto_complete logic, stable sort would return cluster_b
-      winner = Result.break_tie([cluster_b, cluster_a])
-      # Both have wait score {0,0}
-      # cluster_a auto_complete: {0,0} + {0,0} = {0,0}
-      # cluster_b auto_complete: {1,0} + {1,0} = {2,0}
-      # {0,0} < {2,0}, so cluster_a should win (not cluster_b)
-      assert winner.representative.params.task == "a"
     end
 
     # R19: Tiebreak True vs Finite (true-biased: true preferred over finite)
@@ -320,76 +229,62 @@ defmodule Quoracle.Consensus.ResultTest do
       assert winner.representative.params.task == "all_true"
     end
 
-    # R22: Full 3-Level Chain [INTEGRATION] (true-biased wait scoring)
-    test "applies full 3-level chain" do
-      # Create 4 clusters that require all 3 levels to distinguish
-      # Put clusters in "wrong" order to ensure failures without 3-level chain
+    # R22: Full 2-Level Chain [INTEGRATION] (true-biased wait scoring)
+    test "applies full 2-level chain" do
+      # Create 3 clusters that require both levels to distinguish
 
-      # Cluster A: priority 10, wait {1,0} (false), auto {0,0}
+      # Cluster A: priority 10, wait {1,0} (false)
       cluster_a = %{
         representative: %{action: :spawn_child, params: %{id: "A"}, reasoning: ""},
         actions: [
-          %{action: :spawn_child, wait: false, auto_complete_todo: false, params: %{id: "A"}}
+          %{action: :spawn_child, wait: false, params: %{id: "A"}}
         ],
         count: 2
       }
 
-      # Cluster B: priority 10, wait {1,0} (false), auto {1,0} - loses to A on level 3
-      cluster_b = %{
-        representative: %{action: :spawn_child, params: %{id: "B"}, reasoning: ""},
-        actions: [
-          %{action: :spawn_child, wait: false, auto_complete_todo: true, params: %{id: "B"}}
-        ],
-        count: 2
-      }
-
-      # Cluster C: priority 10, wait {0,0} (true), auto {0,0} - wins on level 2
+      # Cluster C: priority 10, wait {0,0} (true) - wins on level 2
       cluster_c = %{
         representative: %{action: :spawn_child, params: %{id: "C"}, reasoning: ""},
         actions: [
-          %{action: :spawn_child, wait: true, auto_complete_todo: false, params: %{id: "C"}}
+          %{action: :spawn_child, wait: true, params: %{id: "C"}}
         ],
         count: 2
       }
 
-      # Cluster D: priority 1 (orient), wait {0,0} (true), auto {1,0} - wins on level 1
+      # Cluster D: priority 1 (orient), wait {0,0} (true) - wins on level 1
       cluster_d = %{
         representative: %{action: :orient, params: %{id: "D"}, reasoning: ""},
         actions: [
-          %{action: :orient, wait: true, auto_complete_todo: true, params: %{id: "D"}}
+          %{action: :orient, wait: true, params: %{id: "D"}}
         ],
         count: 2
       }
 
       # D should win because it has lowest priority (level 1)
-      winner = Result.break_tie([cluster_a, cluster_b, cluster_c, cluster_d])
+      winner = Result.break_tie([cluster_a, cluster_c, cluster_d])
       assert winner.representative.action == :orient
 
       # Without D: C wins on level 2 (true-biased: wait:true = {0,0} beats wait:false = {1,0})
-      winner_without_d = Result.break_tie([cluster_b, cluster_a, cluster_c])
+      winner_without_d = Result.break_tie([cluster_a, cluster_c])
       assert winner_without_d.representative.params.id == "C"
-
-      # Without D and C: A and B both have wait {1,0}, A wins on level 3 (auto_complete)
-      winner_ab = Result.break_tie([cluster_b, cluster_a])
-      assert winner_ab.representative.params.id == "A"
     end
 
     # R24: Deterministic (existing test enhanced)
     test "returns first when all scores are the same" do
       cluster1 = %{
         representative: %{action: :orient, params: %{id: "first"}, reasoning: ""},
-        actions: [%{action: :orient, wait: false, auto_complete_todo: false, params: %{}}],
+        actions: [%{action: :orient, wait: false, params: %{}}],
         count: 3
       }
 
       cluster2 = %{
         representative: %{action: :orient, params: %{id: "second"}, reasoning: ""},
-        actions: [%{action: :orient, wait: false, auto_complete_todo: false, params: %{}}],
+        actions: [%{action: :orient, wait: false, params: %{}}],
         count: 3
       }
 
       winner = Result.break_tie([cluster1, cluster2])
-      # Same action (same priority), same wait score, same auto_complete score
+      # Same action (same priority), same wait score
       # Should return first cluster deterministically
       assert winner.representative.params.id == "first"
     end

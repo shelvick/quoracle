@@ -5,7 +5,6 @@ defmodule Quoracle.Consensus.PromptBuilder.ResponseFormat do
   Extracted from Sections to improve maintainability. Contains:
   - Response JSON schema
   - Wait parameter documentation
-  - Auto-complete TODO documentation
   - Bug report field documentation
   - Condense parameter documentation
   - Action examples (delegated to Examples module)
@@ -18,7 +17,7 @@ defmodule Quoracle.Consensus.PromptBuilder.ResponseFormat do
 
   This section tells the LLM how to structure its JSON response, including
   the reasoning/action/params structure and optional parameters like wait,
-  auto_complete_todo, bug_report, and condense.
+  bug_report, and condense.
   """
   @spec build_format_section([atom()] | nil) :: String.t()
   def build_format_section(allowed_actions \\ nil) do
@@ -34,8 +33,6 @@ defmodule Quoracle.Consensus.PromptBuilder.ResponseFormat do
     #{Examples.build_action_examples(allowed_actions)}
 
     #{wait_parameter_docs()}
-
-    #{auto_complete_todo_docs()}
 
     #{bug_report_docs()}
 
@@ -70,10 +67,6 @@ defmodule Quoracle.Consensus.PromptBuilder.ResponseFormat do
           "type": ["boolean", "integer"],
           "minimum": 0,
           "description": "Controls flow continuation (required for all actions except :wait)"
-        },
-        "auto_complete_todo": {
-          "type": "boolean",
-          "description": "When true, marks the first TODO item as done after successful action execution (optional for all actions except :todo)"
         },
         "bug_report": {
           "type": "string",
@@ -110,18 +103,6 @@ defmodule Quoracle.Consensus.PromptBuilder.ResponseFormat do
       WARNING: wait:true on internal actions will STALL indefinitely if no external message arrives!
     - EXTERNAL actions (API calls, web fetches, shell commands, MCP): These may take seconds to minutes.
       Use wait:true when you need the result before continuing. Use wait:false to proceed in parallel.
-    """
-    |> String.trim()
-  end
-
-  @doc "Auto-complete TODO parameter documentation."
-  @spec auto_complete_todo_docs() :: String.t()
-  def auto_complete_todo_docs do
-    """
-    Auto-Complete TODO Parameter:
-    All actions (except the :todo action itself) support an optional "auto_complete_todo" parameter:
-    - true: Marks the first TODO item as done after successful action execution
-    - false or omitted: No automatic TODO completion (default behavior)
     """
     |> String.trim()
   end
@@ -197,7 +178,6 @@ defmodule Quoracle.Consensus.PromptBuilder.ResponseFormat do
     - You must select exactly ONE action per response
     - Include all required parameters for the chosen action
     - Include the "wait" parameter for all actions except :wait
-    - Optionally include "auto_complete_todo": true to mark first TODO as done after action succeeds
     - Provide clear reasoning for your decision
     - Your response MUST be a single raw JSON object. No preamble, no postamble, no markdown code fences, no explanation. Start with { and end with }.
     """

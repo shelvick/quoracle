@@ -119,7 +119,6 @@ defmodule Quoracle.Actions.SchemaTodoEnhancementTest do
   describe "backward compatibility" do
     test "other actions still return their original schemas" do
       # Verify wait action has new union type (breaking change)
-      # Note: auto_complete_todo is injected by Validator, not in schema definitions
       {:ok, wait_schema} = Schema.get_schema(:wait)
       assert wait_schema.optional_params == [:wait]
       assert wait_schema.param_types.wait == {:union, [:boolean, :number]}

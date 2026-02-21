@@ -257,7 +257,6 @@ defmodule Quoracle.Actions.SchemaTest do
     end
 
     test "has wait as optional param" do
-      # Note: auto_complete_todo is injected by Validator, not in schema definitions
       {:ok, schema} = Schema.get_schema(:wait)
       assert schema.optional_params == [:wait]
     end
@@ -314,10 +313,7 @@ defmodule Quoracle.Actions.SchemaTest do
     test "all params use semantic similarity consensus" do
       {:ok, schema} = Schema.get_schema(:orient)
 
-      # TEST-FIX: auto_complete_todo uses :exact_match (boolean), exclude from semantic_similarity check
-      params_to_check =
-        (schema.required_params ++ schema.optional_params)
-        |> Enum.reject(&(&1 == :auto_complete_todo))
+      params_to_check = schema.required_params ++ schema.optional_params
 
       Enum.each(params_to_check, fn param ->
         assert schema.consensus_rules[param] == {:semantic_similarity, threshold: 0.8}

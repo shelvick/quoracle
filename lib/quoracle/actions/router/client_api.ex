@@ -248,17 +248,6 @@ defmodule Quoracle.Actions.Router.ClientAPI do
     case result do
       {:ok, _} = success ->
         AgentEvents.broadcast_action_completed(agent_id, action_id, success, pubsub)
-
-        # Auto-complete TODO if requested (R7: only on success)
-        # Note: auto_complete_todo is at response level, passed via opts
-        if Keyword.get(opts, :auto_complete_todo) == true do
-          agent_pid = Keyword.get(opts, :agent_pid)
-
-          if agent_pid && Process.alive?(agent_pid) do
-            GenServer.cast(agent_pid, :mark_first_todo_done)
-          end
-        end
-
         success
 
       {:error, _} = error ->

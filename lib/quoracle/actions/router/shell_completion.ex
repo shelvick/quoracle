@@ -8,6 +8,7 @@ defmodule Quoracle.Actions.Router.ShellCompletion do
 
   alias Quoracle.Actions.Router.Security
   alias Quoracle.PubSub.AgentEvents
+  alias Quoracle.Utils.ResponseTruncator
 
   @doc """
   Handle Shell command completion.
@@ -36,8 +37,8 @@ defmodule Quoracle.Actions.Router.ShellCompletion do
     raw_result = %{
       action: "shell",
       command: truncated_command,
-      stdout: command_state.stdout_buffer,
-      stderr: command_state.stderr_buffer,
+      stdout: ResponseTruncator.truncate_if_large(command_state.stdout_buffer),
+      stderr: ResponseTruncator.truncate_if_large(command_state.stderr_buffer),
       exit_code: exit_code,
       execution_time_ms: execution_time_ms,
       status: :completed,

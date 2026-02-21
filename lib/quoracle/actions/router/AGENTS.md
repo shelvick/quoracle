@@ -12,7 +12,7 @@
 - Persistence: DB persistence for action results (135 lines) - Added 2025-10-14
 - ShellCompletion: Shell completion notifications (71 lines) - Added 2025-10-17, v2.0 sends 4-arity cast with `[action_atom: :execute_shell]` opts (2026-02-20)
 - ClientHelpers: Client API wrappers (48 lines) - Added 2025-10-26
-- ClientAPI: Action execution with auto_complete_todo hook (139 lines, v16.0: auto_complete_todo integration)
+- ClientAPI: Action execution (139 lines)
 - Security: Secret resolution and output scrubbing (added with secret system)
 
 ## Key Functions
@@ -28,7 +28,7 @@
 - ShellCommandManager.init/0, register/3 (validates action_id), get/2, append_output/4, update_check_position/3, mark_completed/3, mark_terminated/2
 - Persistence.execute_with_persistence/5, persist_action_result/4: DB audit trail logging
 - ShellCompletion.handle_completion/5: Builds result, notifies Core via 4-arity GenServer.cast with `[action_atom: :execute_shell]` opts, broadcasts, stores async result (2025-10-17, v2.0 2026-02-20)
-- ClientAPI.execute/5: Main execution flow with auto_complete_todo hook (v16.0, lines 107-115)
+- ClientAPI.execute/5: Main execution flow
 - ClientHelpers.await_result/3: Wait for async action completion (default 5s timeout)
 - ClientHelpers.interrupt_wait/1: Interrupt pending wait
 - ClientHelpers.cancel_action/1: Cancel action execution
@@ -44,20 +44,3 @@ Two-layer safety: Core.terminate/2 stops Router explicitly + Router monitors Cor
 
 ConfigManager must pass `agent_pid: self()` when spawning Router
 
-## Auto-Complete TODO Integration (v16.0, Nov 16, 2025)
-
-**Response-level parameter** (not in params): LLMs return auto_complete_todo alongside action, params, reasoning, wait
-
-**Extraction flow:**
-1. Router.execute/3 extracts from action_map: `Map.get(action_map, :auto_complete_todo)` (line 59)
-2. Adds to opts: `Keyword.put(:auto_complete_todo, ...)` (line 59)
-3. ClientAPI checks after success: `Keyword.get(opts, :auto_complete_todo) == true` (line 109)
-4. Triggers: `GenServer.cast(agent_pid, :mark_first_todo_done)` (line 113)
-
-**Behavior:**
-- Only on successful actions ({:ok, result})
-- Only when auto_complete_todo: true
-- Silent no-op if no agent_pid or no TODOs
-- Never triggers on failures
-
-**Integration:** Core.TodoHandler handles cast, broadcasts PubSub updates

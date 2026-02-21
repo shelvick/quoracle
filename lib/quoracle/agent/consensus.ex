@@ -26,8 +26,7 @@ defmodule Quoracle.Agent.Consensus do
           action: atom(),
           params: map(),
           reasoning: String.t(),
-          wait: boolean() | integer() | nil,
-          auto_complete_todo: boolean() | nil
+          wait: boolean() | integer() | nil
         }
 
   @doc "Build query options (max_tokens, temperature) for a model/round. Delegates to PerModelQuery."

@@ -13,8 +13,7 @@ defmodule Quoracle.Consensus.ActionParser do
           action: atom(),
           params: map(),
           reasoning: String.t(),
-          wait: boolean() | integer() | nil,
-          auto_complete_todo: boolean() | nil
+          wait: boolean() | integer() | nil
         }
 
   @doc """
@@ -51,15 +50,13 @@ defmodule Quoracle.Consensus.ActionParser do
          {:ok, params} <- extract_params(parsed),
          {:ok, reasoning} <- extract_reasoning(parsed),
          {:ok, wait} <- extract_wait(parsed, action),
-         {:ok, auto_complete_todo} <- extract_auto_complete_todo(parsed, action),
          :ok <- validate_action_type(action) do
       {:ok,
        %{
          action: action,
          params: params,
          reasoning: reasoning,
-         wait: wait,
-         auto_complete_todo: auto_complete_todo
+         wait: wait
        }}
     else
       {:error, reason} -> {:error, reason}
@@ -101,19 +98,6 @@ defmodule Quoracle.Consensus.ActionParser do
   end
 
   defp extract_wait(_parsed, _action) do
-    {:ok, nil}
-  end
-
-  defp extract_auto_complete_todo(_parsed, :todo) do
-    {:ok, nil}
-  end
-
-  defp extract_auto_complete_todo(%{"auto_complete_todo" => auto_complete_todo}, _action)
-       when is_boolean(auto_complete_todo) do
-    {:ok, auto_complete_todo}
-  end
-
-  defp extract_auto_complete_todo(_parsed, _action) do
     {:ok, nil}
   end
 

@@ -19,7 +19,7 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
     StateUtils
   }
 
-  alias Quoracle.Agent.ConsensusHandler.LogHelper
+  alias Quoracle.Agent.ConsensusHandler.{Helpers, LogHelper}
   alias Quoracle.PubSub.AgentEvents
 
   @doc """
@@ -273,6 +273,19 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
 
   defp maybe_track_shell_router(state, _result, _opts), do: state
 
+  # Schedule consensus unless self_contained actions are still pending.
+  # When self_contained actions remain in pending_actions, their results will
+  # arrive imminently and trigger consensus with all effects visible.
+  # Returns {:noreply, state} for direct use in cond branches.
+  @spec maybe_schedule_consensus(map()) :: {:noreply, map()}
+  defp maybe_schedule_consensus(state) do
+    if Helpers.has_pending_self_contained?(state) do
+      {:noreply, state}
+    else
+      {:noreply, StateUtils.schedule_consensus_continuation(state)}
+    end
+  end
+
   # v35.0 R4: Extended wait parameter handling for non-blocking dispatch
   defp handle_action_result_continuation(new_state, result, opts) do
     action_atom = Keyword.get(opts, :action_atom)
@@ -283,9 +296,7 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
       # No wait info (legacy async path) -> use existing continue logic
       is_nil(action_atom) ->
         if Keyword.get(opts, :continue, true) do
-          new_state = Map.put(new_state, :consensus_scheduled, true)
-          send(self(), :trigger_consensus)
-          {:noreply, new_state}
+          maybe_schedule_consensus(new_state)
         else
           {:noreply, new_state}
         end
@@ -295,8 +306,7 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
       # If messages were queued during action execution, the "external event" already arrived
       always_sync and wait_value == true and match?({:ok, _}, result) ->
         if Keyword.get(opts, :had_queued, false) do
-          new_state = StateUtils.schedule_consensus_continuation(new_state)
-          {:noreply, new_state}
+          maybe_schedule_consensus(new_state)
         else
           {:noreply, new_state}
         end
@@ -309,8 +319,7 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
 
       # wait:false/0 or wait:true (non-always-sync) -> continue consensus
       wait_value in [false, 0] or wait_value == true ->
-        new_state = StateUtils.schedule_consensus_continuation(new_state)
-        {:noreply, new_state}
+        maybe_schedule_consensus(new_state)
 
       # Timed wait (positive integer) -> set timer via handle_wait_parameter
       is_integer(wait_value) and wait_value > 0 ->
@@ -321,8 +330,7 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
 
       # Default -> continue consensus
       true ->
-        new_state = StateUtils.schedule_consensus_continuation(new_state)
-        {:noreply, new_state}
+        maybe_schedule_consensus(new_state)
     end
   end
 

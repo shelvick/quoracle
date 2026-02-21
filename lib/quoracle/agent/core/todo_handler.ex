@@ -27,29 +27,4 @@ defmodule Quoracle.Agent.Core.TodoHandler do
     todos = state.todos
     {:reply, todos, state}
   end
-
-  @doc """
-  Handle mark_first_todo_done GenServer cast - mark first incomplete TODO as done.
-  """
-  @spec handle_mark_first_todo_done(map()) :: {:noreply, map()}
-  def handle_mark_first_todo_done(state) do
-    todos = state.todos
-
-    updated_todos =
-      case Enum.find_index(todos, fn t -> t.state in [:todo, :pending] end) do
-        nil ->
-          todos
-
-        index ->
-          List.update_at(todos, index, fn t -> %{t | state: :done} end)
-      end
-
-    if updated_todos != todos do
-      pubsub = state.pubsub
-      AgentEvents.broadcast_todos_updated(state.agent_id, updated_todos, pubsub)
-      {:noreply, %{state | todos: updated_todos}}
-    else
-      {:noreply, state}
-    end
-  end
 end

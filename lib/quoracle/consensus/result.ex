@@ -12,9 +12,7 @@ defmodule Quoracle.Consensus.Result do
   # Delegate scoring functions to extracted module (API compatibility)
   defdelegate break_tie(clusters), to: Scoring
   defdelegate wait_score(value), to: Scoring
-  defdelegate auto_complete_score(value), to: Scoring
   defdelegate cluster_wait_score(cluster), to: Scoring
-  defdelegate cluster_auto_complete_score(cluster), to: Scoring
 
   @doc """
   Formats the final consensus result from clustered responses.
@@ -99,12 +97,6 @@ defmodule Quoracle.Consensus.Result do
           |> Enum.map(& &1[:wait])
           |> Enum.reject(&is_nil/1)
 
-        # Extract auto_complete_todo values for consensus
-        auto_complete_todo_values =
-          actions
-          |> Enum.map(& &1[:auto_complete_todo])
-          |> Enum.reject(&is_nil/1)
-
         # Include reasoning (take first non-empty one)
         reasoning =
           actions
@@ -128,16 +120,7 @@ defmodule Quoracle.Consensus.Result do
             Map.put(result, :wait, merged_wait)
           end
 
-        # Add auto_complete_todo using conservative rule: any false → false
-        action =
-          if Enum.empty?(auto_complete_todo_values) do
-            result
-          else
-            merged_auto_complete = merge_auto_complete_todo(auto_complete_todo_values)
-            Map.put(result, :auto_complete_todo, merged_auto_complete)
-          end
-
-        {action, final_acc}
+        {result, final_acc}
 
       {:error, :unknown_action} ->
         # Fallback for unknown actions - no accumulator threading
@@ -262,13 +245,6 @@ defmodule Quoracle.Consensus.Result do
       # Fallback to first value
       {:error, _} -> hd(values)
     end
-  end
-
-  # Merge auto_complete_todo using conservative rule: any false → false
-  defp merge_auto_complete_todo([]), do: false
-
-  defp merge_auto_complete_todo(values) do
-    if Enum.any?(values, &(&1 == false)), do: false, else: true
   end
 
   @doc """
