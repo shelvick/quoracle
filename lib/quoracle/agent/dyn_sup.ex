@@ -261,6 +261,14 @@ defmodule Quoracle.Agent.DynSup do
             |> Map.put(:test_mode, true)
         end
 
+      # Pass through force_persist from opts (for tests that verify DB state)
+      config =
+        if Keyword.get(opts, :force_persist, false) do
+          Map.put(config, :force_persist, true)
+        else
+          config
+        end
+
       # Pass through registry and pubsub from opts
       start_agent(dynsup_pid, config, opts)
     end

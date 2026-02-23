@@ -41,29 +41,23 @@ defmodule Quoracle.Agent.Core do
   @spec start_link(map() | {pid(), String.t()} | {pid(), String.t(), keyword()}, keyword()) ::
           GenServer.on_start()
 
-  # Production interface - uses global registry
   def start_link(config) do
     start_link(config, [])
   end
 
-  # Dependency injection interface - accepts registry and dynsup options
   def start_link(config, opts) when is_list(config) and is_list(opts) do
-    # Handle keyword list config - convert to map and proceed
     GenServer.start_link(__MODULE__, {Map.new(config), opts})
   end
 
   def start_link(%{} = config, opts) do
-    # Pass options through to init
     GenServer.start_link(__MODULE__, {config, opts})
   end
 
   def start_link({parent_pid, initial_prompt}, opts) do
-    # Handle tuple config from tests with options
     GenServer.start_link(__MODULE__, {{parent_pid, initial_prompt}, opts})
   end
 
   def start_link({parent_pid, initial_prompt, test_opts}, opts) do
-    # Handle tuple config with test options from tests
     GenServer.start_link(__MODULE__, {{parent_pid, initial_prompt, test_opts}, opts})
   end
 
@@ -340,10 +334,10 @@ defmodule Quoracle.Agent.Core do
     BudgetHandler.handle_set_budget_allocated(new_budget, state)
   end
 
-  # Skills system (v27.0) - append learned skills to active_skills
+  # Skills system (v27.0), v38.0: invalidate cached prompt on skill changes
   def handle_cast({:learn_skills, skills_metadata}, state) when is_list(skills_metadata) do
     updated_skills = state.active_skills ++ skills_metadata
-    {:noreply, %{state | active_skills: updated_skills}}
+    {:noreply, invalidate_cached_system_prompt(%{state | active_skills: updated_skills})}
   end
 
   # Message and action handling - delegated to CastHandler (v24.0)
@@ -464,7 +458,10 @@ defmodule Quoracle.Agent.Core do
       end
     end
 
-    Persistence.persist_ace_state(state)
+    # Skip persistence in test mode for speed (unless force_persist is set)
+    unless Map.get(state, :test_mode, false) && !force_persist?(state) do
+      Persistence.persist_ace_state(state)
+    end
 
     try do
       AgentEvents.broadcast_agent_terminated(state.agent_id, reason, state.pubsub)
@@ -490,4 +487,11 @@ defmodule Quoracle.Agent.Core do
       router_pid -> {:reply, GenServer.call(router_pid, message), state}
     end
   end
+
+  defp force_persist?(state) do
+    state |> Map.get(:test_opts, []) |> Keyword.get(:force_persist, false)
+  end
+
+  # v38.0: Reset cached system prompt; called when prompt-affecting state changes.
+  defp invalidate_cached_system_prompt(state), do: %{state | cached_system_prompt: nil}
 end

@@ -5,7 +5,7 @@ defmodule Quoracle.Consensus.ResultBatchSyncTest do
   Packet: 2 (Consensus Logic)
   """
 
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
   alias Quoracle.Consensus.Result
 
   # =============================================================================

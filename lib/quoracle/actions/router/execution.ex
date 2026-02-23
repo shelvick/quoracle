@@ -104,6 +104,7 @@ defmodule Quoracle.Actions.Router.Execution do
             {:error, {:action_crashed, Exception.message(e)}}
         catch
           :exit, reason ->
+            Logger.error("Action execution crashed (exit): #{inspect(reason)}")
             {:error, {:action_crashed, reason}}
         end
       end)

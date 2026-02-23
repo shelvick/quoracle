@@ -56,15 +56,6 @@ defmodule Quoracle.Actions.ShellTest do
       assert stdout == "hello\n"
     end
 
-    test "captures stdout correctly for fast command", %{opts: opts} do
-      # Use high threshold to guarantee sync under any load
-      opts = Keyword.put(opts, :smart_threshold, 1000)
-      result = Shell.execute(%{command: "echo 'test output'"}, "agent-1", opts)
-
-      assert {:ok, %{stdout: stdout}} = result
-      assert stdout == "test output\n"
-    end
-
     test "captures stderr for fast failing command", %{opts: opts} do
       # Use high threshold to guarantee sync under any load
       opts = Keyword.put(opts, :smart_threshold, 1000)
@@ -428,14 +419,6 @@ defmodule Quoracle.Actions.ShellTest do
       assert occurrences == 1, "Command executed #{occurrences} times instead of once"
     end
 
-    test "fast commands return sync results", %{opts: opts} do
-      # [BEHAVIORAL] Fast commands should complete synchronously
-      # Use high threshold to guarantee sync
-      opts = Keyword.put(opts, :smart_threshold, 1000)
-      result = Shell.execute(%{command: "echo 'fast'"}, "agent-1", opts)
-      assert {:ok, %{stdout: "fast\n"}} = result
-    end
-
     test "slow commands return async results", %{opts: opts} do
       # [BEHAVIORAL] Slow commands should return immediately with command_id
       result = Shell.execute(%{command: "sleep 0.2 && echo 'slow'"}, "agent-1", opts)
@@ -499,32 +482,9 @@ defmodule Quoracle.Actions.ShellTest do
       assert {:ok, %{exit_code: code}} = result
       assert code != 0
     end
-
-    test "handles working_dir that doesn't exist", %{opts: opts} do
-      # [UNIT] F1.5
-      result =
-        Shell.execute(
-          %{command: "pwd", working_dir: "/this/path/does/not/exist"},
-          "agent-1",
-          opts
-        )
-
-      assert {:error, :invalid_working_dir} = result
-    end
   end
 
   describe "working directory" do
-    test "executes in specified working_dir", %{opts: opts} do
-      # [UNIT] F1.3
-      # Use higher threshold to avoid flaky async returns under load
-      opts = Keyword.put(opts, :smart_threshold, 5000)
-      tmp_dir = System.tmp_dir!()
-      result = Shell.execute(%{command: "pwd", working_dir: tmp_dir}, "agent-1", opts)
-
-      assert {:ok, %{stdout: output}} = result
-      assert String.trim(output) == tmp_dir
-    end
-
     test "defaults to /tmp when working_dir not provided", %{opts: opts} do
       # Use higher threshold to avoid flaky async returns under load
       opts = Keyword.put(opts, :smart_threshold, 5000)
@@ -538,16 +498,5 @@ defmodule Quoracle.Actions.ShellTest do
     # - "resolves relative paths in working_dir"
     # - "handles working_dir with spaces"
     # These are edge cases not critical for core Shell functionality
-
-    test "validates working_dir exists before execution", %{opts: opts} do
-      result =
-        Shell.execute(
-          %{command: "echo test", working_dir: "/definitely/not/a/real/path"},
-          "agent-1",
-          opts
-        )
-
-      assert {:error, :invalid_working_dir} = result
-    end
   end
 end

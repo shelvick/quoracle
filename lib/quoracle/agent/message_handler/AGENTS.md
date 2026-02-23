@@ -1,7 +1,7 @@
 # lib/quoracle/agent/message_handler/
 
 ## Modules
-- ActionResultHandler: Action result processing (382 lines, extracted from MessageHandler 2026-02-13, v25.0 shell_routers + error-aware continuation, v27.0 consensus deferral)
+- ActionResultHandler: Action result processing (383 lines, extracted from MessageHandler 2026-02-13, v25.0 shell_routers + error-aware continuation, v27.0 consensus deferral, v28.0 LogHelper.log_action_error wiring for server-side error logging)
 
 ## Key Functions
 - handle_action_result/4: Process action results with extended wait parameter handling. Routes through process_action_result → store in history → maybe_track_child → maybe_update_budget_committed → maybe_track_shell_router → flush_queued_messages → handle_action_result_continuation
@@ -32,4 +32,5 @@
 ## Dependencies
 - StateUtils: cancel_wait_timer/1, schedule_consensus_continuation/1, add_history_entry_with_action/4
 - ConsensusHandler: handle_wait_parameter/3 (for timed waits)
+- ConsensusHandler.LogHelper: log_action_error/1 (v28.0, server-side action error logging)
 - ImageDetector: detect/2 (for image result routing)

@@ -15,6 +15,10 @@ defmodule Quoracle.Providers.RetryHelperTest do
   - R8: Retry FunctionClauseError with 429 error in stacktrace args (v3.2)
   - R9: Retry FunctionClauseError with 5xx error in stacktrace args (v3.2)
   - R10: FunctionClauseError without HTTP error still returns :malformed_response (v3.2)
+  - R11: Retry FunctionClauseError with string throttling message in error map (v3.3)
+  - R12: Retry FunctionClauseError with string error body containing throttling keywords (v3.3)
+  - R13: String error body with unavailable/overloaded keywords maps to 503 (v3.3)
+  - R14: String error body without recognizable keywords still returns :malformed_response (v3.3)
   """
 
   use ExUnit.Case, async: true
@@ -647,6 +651,306 @@ defmodule Quoracle.Providers.RetryHelperTest do
 
       assert_received {:result, {:error, :malformed_response}}
       # Should NOT have retried - 400 is not retryable
+      assert :counters.get(attempts, 1) == 1
+    end
+  end
+
+  describe "R11: Retry string throttle in error map" do
+    test "retries when provider crashes with string error containing 'throttled'" do
+      attempts = :counters.new(1, [:atomics])
+      delay_calls = :counters.new(1, [:atomics])
+
+      func = fn ->
+        attempt = :counters.get(attempts, 1)
+        :counters.add(attempts, 1, 1)
+
+        if attempt < 2 do
+          # Simulate Google Vertex throttling: {"error": "The request is throttled..."}
+          apply(
+            __MODULE__,
+            :simulate_parse_response,
+            [
+              %{"error" => "The request is throttled due to too many concurrent requests."},
+              :model,
+              :context
+            ]
+          )
+        else
+          {:ok, "recovered from throttle"}
+        end
+      end
+
+      capture_log(fn ->
+        send(
+          self(),
+          {:result,
+           RetryHelper.with_retry(func,
+             initial_delay: 10,
+             error_module: @error_module,
+             delay_fn: fn _ms -> :counters.add(delay_calls, 1, 1) end
+           )}
+        )
+      end)
+
+      assert_received {:result, {:ok, "recovered from throttle"}}
+      assert :counters.get(delay_calls, 1) >= 1
+    end
+
+    test "retries when error message contains 'rate limit'" do
+      attempts = :counters.new(1, [:atomics])
+
+      func = fn ->
+        attempt = :counters.get(attempts, 1)
+        :counters.add(attempts, 1, 1)
+
+        if attempt < 2 do
+          apply(
+            __MODULE__,
+            :simulate_parse_response,
+            [
+              %{"error" => "Rate limit exceeded for this model"},
+              :model,
+              :context
+            ]
+          )
+        else
+          {:ok, "recovered"}
+        end
+      end
+
+      capture_log(fn ->
+        send(
+          self(),
+          {:result,
+           RetryHelper.with_retry(func,
+             initial_delay: 10,
+             error_module: @error_module,
+             delay_fn: fn _ms -> :ok end
+           )}
+        )
+      end)
+
+      assert_received {:result, {:ok, "recovered"}}
+    end
+
+    test "retries when error message contains 'too many'" do
+      attempts = :counters.new(1, [:atomics])
+
+      func = fn ->
+        attempt = :counters.get(attempts, 1)
+        :counters.add(attempts, 1, 1)
+
+        if attempt < 2 do
+          apply(
+            __MODULE__,
+            :simulate_parse_response,
+            [
+              %{"error" => "Too many requests, please slow down"},
+              :model,
+              :context
+            ]
+          )
+        else
+          {:ok, "recovered"}
+        end
+      end
+
+      capture_log(fn ->
+        send(
+          self(),
+          {:result,
+           RetryHelper.with_retry(func,
+             initial_delay: 10,
+             error_module: @error_module,
+             delay_fn: fn _ms -> :ok end
+           )}
+        )
+      end)
+
+      assert_received {:result, {:ok, "recovered"}}
+    end
+  end
+
+  describe "R12: Retry raw string throttle body" do
+    test "retries when raw string body contains throttling keyword" do
+      attempts = :counters.new(1, [:atomics])
+
+      func = fn ->
+        attempt = :counters.get(attempts, 1)
+        :counters.add(attempts, 1, 1)
+
+        if attempt < 2 do
+          # Simulate undecoded string body passed to parse_response
+          apply(
+            __MODULE__,
+            :simulate_parse_response,
+            [
+              ~s({"error":"The request is throttled due to too many concurrent requests."}),
+              :model,
+              :context
+            ]
+          )
+        else
+          {:ok, "recovered from raw string throttle"}
+        end
+      end
+
+      capture_log(fn ->
+        send(
+          self(),
+          {:result,
+           RetryHelper.with_retry(func,
+             initial_delay: 10,
+             error_module: @error_module,
+             delay_fn: fn _ms -> :ok end
+           )}
+        )
+      end)
+
+      assert_received {:result, {:ok, "recovered from raw string throttle"}}
+    end
+  end
+
+  describe "R13: String error maps to 503" do
+    test "retries when error message contains 'overloaded'" do
+      attempts = :counters.new(1, [:atomics])
+
+      func = fn ->
+        attempt = :counters.get(attempts, 1)
+        :counters.add(attempts, 1, 1)
+
+        if attempt < 2 do
+          apply(
+            __MODULE__,
+            :simulate_parse_response,
+            [
+              %{"error" => "The model is currently overloaded"},
+              :model,
+              :context
+            ]
+          )
+        else
+          {:ok, "recovered from overload"}
+        end
+      end
+
+      capture_log(fn ->
+        send(
+          self(),
+          {:result,
+           RetryHelper.with_retry(func,
+             initial_delay: 10,
+             error_module: @error_module,
+             delay_fn: fn _ms -> :ok end
+           )}
+        )
+      end)
+
+      assert_received {:result, {:ok, "recovered from overload"}}
+    end
+
+    test "retries when error message contains 'unavailable'" do
+      attempts = :counters.new(1, [:atomics])
+
+      func = fn ->
+        attempt = :counters.get(attempts, 1)
+        :counters.add(attempts, 1, 1)
+
+        if attempt < 2 do
+          apply(
+            __MODULE__,
+            :simulate_parse_response,
+            [
+              %{"error" => "Service temporarily unavailable"},
+              :model,
+              :context
+            ]
+          )
+        else
+          {:ok, "recovered from unavailable"}
+        end
+      end
+
+      capture_log(fn ->
+        send(
+          self(),
+          {:result,
+           RetryHelper.with_retry(func,
+             initial_delay: 10,
+             error_module: @error_module,
+             delay_fn: fn _ms -> :ok end
+           )}
+        )
+      end)
+
+      assert_received {:result, {:ok, "recovered from unavailable"}}
+    end
+  end
+
+  describe "R14: Unrecognized string not retried" do
+    test "string error without recognizable keywords is not retried" do
+      attempts = :counters.new(1, [:atomics])
+
+      func = fn ->
+        :counters.add(attempts, 1, 1)
+
+        apply(
+          __MODULE__,
+          :simulate_parse_response,
+          [
+            %{"error" => "Invalid request format"},
+            :model,
+            :context
+          ]
+        )
+      end
+
+      capture_log(fn ->
+        send(
+          self(),
+          {:result,
+           RetryHelper.with_retry(func,
+             initial_delay: 10,
+             error_module: @error_module,
+             delay_fn: fn _ms -> :ok end
+           )}
+        )
+      end)
+
+      assert_received {:result, {:error, :malformed_response}}
+      assert :counters.get(attempts, 1) == 1
+    end
+
+    test "raw string body without recognizable keywords is not retried" do
+      attempts = :counters.new(1, [:atomics])
+
+      func = fn ->
+        :counters.add(attempts, 1, 1)
+
+        apply(
+          __MODULE__,
+          :simulate_parse_response,
+          [
+            ~s({"error":"Something completely unexpected"}),
+            :model,
+            :context
+          ]
+        )
+      end
+
+      capture_log(fn ->
+        send(
+          self(),
+          {:result,
+           RetryHelper.with_retry(func,
+             initial_delay: 10,
+             error_module: @error_module,
+             delay_fn: fn _ms -> :ok end
+           )}
+        )
+      end)
+
+      assert_received {:result, {:error, :malformed_response}}
       assert :counters.get(attempts, 1) == 1
     end
   end

@@ -62,7 +62,8 @@ defmodule QuoracleWeb.DashboardPauseResumeIntegrationTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Wait for initialization
@@ -129,7 +130,8 @@ defmodule QuoracleWeb.DashboardPauseResumeIntegrationTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       assert {:ok, _state} = Quoracle.Agent.Core.get_state(task_agent_pid)
@@ -208,7 +210,8 @@ defmodule QuoracleWeb.DashboardPauseResumeIntegrationTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       assert {:ok, _state} = Quoracle.Agent.Core.get_state(task_agent_pid)
@@ -366,7 +369,8 @@ defmodule QuoracleWeb.DashboardPauseResumeIntegrationTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       assert {:ok, _state} = Quoracle.Agent.Core.get_state(task_agent_pid)
@@ -446,7 +450,8 @@ defmodule QuoracleWeb.DashboardPauseResumeIntegrationTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       assert {:ok, _state} = Quoracle.Agent.Core.get_state(task_agent_pid)
@@ -522,7 +527,8 @@ defmodule QuoracleWeb.DashboardPauseResumeIntegrationTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       assert {:ok, _state} = Quoracle.Agent.Core.get_state(task_agent_pid)
@@ -571,7 +577,8 @@ defmodule QuoracleWeb.DashboardPauseResumeIntegrationTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       assert {:ok, _state} = Quoracle.Agent.Core.get_state(task_agent_pid)
@@ -680,7 +687,8 @@ defmodule QuoracleWeb.DashboardPauseResumeIntegrationTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       assert {:ok, _state} = Quoracle.Agent.Core.get_state(task_agent_pid)
@@ -796,7 +804,8 @@ defmodule QuoracleWeb.DashboardPauseResumeIntegrationTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       assert {:ok, _state} = Quoracle.Agent.Core.get_state(task_agent_pid)
@@ -937,7 +946,8 @@ defmodule QuoracleWeb.DashboardPauseResumeIntegrationTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       assert {:ok, _state} = Quoracle.Agent.Core.get_state(task_agent_pid)

@@ -118,7 +118,7 @@ defmodule Quoracle.Agent.Consensus.PerModelQueryDynamicMaxTokensTest do
          }}
       end
 
-      opts = [model_query_fn: mock_query_fn, test_mode: true]
+      opts = [model_query_fn: mock_query_fn, test_mode: true, force_token_management: true]
 
       # This should calculate dynamic max_tokens using the formula
       # max_tokens = min(context_window - input_tokens, output_limit)
@@ -174,7 +174,7 @@ defmodule Quoracle.Agent.Consensus.PerModelQueryDynamicMaxTokensTest do
          }}
       end
 
-      opts = [model_query_fn: mock_query_fn, test_mode: true]
+      opts = [model_query_fn: mock_query_fn, test_mode: true, force_token_management: true]
 
       # calculate_max_tokens doesn't exist yet - the query will still use
       # the old static max_tokens: 4096 default until implemented
@@ -263,7 +263,8 @@ defmodule Quoracle.Agent.Consensus.PerModelQueryDynamicMaxTokensTest do
           :ets.insert(condensation_triggered, {:triggered, true})
           {:ok, %{lessons: [], state: []}}
         end,
-        test_mode: true
+        test_mode: true,
+        force_token_management: true
       ]
 
       # When available_output < 4096, proactive condensation should trigger
@@ -352,7 +353,8 @@ defmodule Quoracle.Agent.Consensus.PerModelQueryDynamicMaxTokensTest do
         reflector_fn: fn _messages, _model_id, _opts ->
           {:ok, %{lessons: [], state: []}}
         end,
-        test_mode: true
+        test_mode: true,
+        force_token_management: true
       ]
 
       # If condensation happens, messages should be rebuilt from condensed state
@@ -442,7 +444,8 @@ defmodule Quoracle.Agent.Consensus.PerModelQueryDynamicMaxTokensTest do
         reflector_fn: fn _messages, _model_id, _opts ->
           {:ok, %{lessons: [], state: []}}
         end,
-        test_mode: true
+        test_mode: true,
+        force_token_management: true
       ]
 
       # Query should succeed even when context is tight
@@ -536,7 +539,8 @@ defmodule Quoracle.Agent.Consensus.PerModelQueryDynamicMaxTokensTest do
         reflector_fn: fn _messages, _model_id, _opts ->
           {:ok, %{lessons: [], state: []}}
         end,
-        test_mode: true
+        test_mode: true,
+        force_token_management: true
       ]
 
       {:ok, _response, _result_state} =
@@ -630,7 +634,8 @@ defmodule Quoracle.Agent.Consensus.PerModelQueryDynamicMaxTokensTest do
         reflector_fn: fn _messages, _model_id, _opts ->
           {:ok, %{lessons: [], state: []}}
         end,
-        test_mode: true
+        test_mode: true,
+        force_token_management: true
       ]
 
       # After condensation, the max_tokens passed to query should reflect

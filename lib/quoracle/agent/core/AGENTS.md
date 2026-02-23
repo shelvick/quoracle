@@ -5,7 +5,8 @@
 - Initialization: Init and DB setup (154 lines), start_link opts normalization
 - Persistence: DB persistence (149 lines), extract_parent_agent_id with state.parent_id fallback (v36.0), delegates ACE to submodule
 - Persistence.ACEState: ACE state serialization (332 lines), context_lessons + model_states
-- MessageInfoHandler: Info message dispatch (329 lines), handle_trigger_consensus/1, handle_down/4, handle_spawn_failed/2
+- CastHandler: GenServer cast handling (150 lines), handle_store_mcp_client/2 (v38.0: Process.monitor on MCP client PID)
+- MessageInfoHandler: Info message dispatch (333 lines), handle_trigger_consensus/1, handle_down/4, handle_spawn_failed/2
 - TodoHandler: Per-agent task list management (57 lines)
 - BudgetHandler: Budget GenServer callbacks (247 lines), adjust_child_budget/4 (v37.0: cast-based, no child calls), handle_set_budget_allocated/2, release_child_budget/3
 - ChildrenTracker: Children state management (63 lines), handle_child_spawned/2, handle_child_dismissed/2
@@ -20,10 +21,11 @@
 
 ## MessageInfoHandler Key Handlers
 - handle_trigger_consensus/1: Unified consensus trigger with staleness check
-- handle_down/4: Cleans up active_routers (by ref) and shell_routers (by PID scan) on Router death
+- handle_down/4: Cleans up active_routers (by ref) and shell_routers (by PID scan) on Router death, clears mcp_client on MCP Client death (v38.0)
 - handle_spawn_failed/2: Logs warning, records failure in history, removes child, schedules consensus
 
 ## Patterns
 - Router lifecycle coupling: Core.terminate/2 stops Router via active_routers with :infinity timeout
 - Two-layer safety: Core stops Router explicitly + Router monitors Core as backup
+- MCP Client lifecycle: Core monitors MCP Client via Process.monitor, clears state.mcp_client to nil on DOWN (v38.0)
 - Sandbox.allow in handle_continue (not init/1) to avoid race condition

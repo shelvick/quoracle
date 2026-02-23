@@ -54,15 +54,27 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
   end
 
   defp query_model_with_retry_logic(state, model_id, opts) do
+    lightweight? = lightweight_test_query?(opts)
+
+    # Skip token counting in message builder for lightweight mode
+    build_opts =
+      if lightweight?, do: Keyword.put(opts, :skip_context_tokens, true), else: opts
+
     # Use unified message-building helper (R65-R70)
-    messages_with_system = build_query_messages(state, model_id, opts)
+    messages_with_system = build_query_messages(state, model_id, build_opts)
 
-    # Dynamic max_tokens: proactive condensation if available output below floor
-    {messages_with_system, state} =
-      maybe_proactive_condense(messages_with_system, state, model_id, opts)
+    # In lightweight mode, skip proactive condensation + dynamic max_tokens
+    # (eliminates tiktoken BPE encoding + LLMDB scans per model per round)
+    {messages_with_system, state, dynamic_max_tokens} =
+      if lightweight? do
+        {messages_with_system, state, @output_floor}
+      else
+        {condensed_msgs, condensed_state} =
+          maybe_proactive_condense(messages_with_system, state, model_id, opts)
 
-    # Calculate dynamic max_tokens from built messages
-    dynamic_max_tokens = calculate_max_tokens(messages_with_system, model_id)
+        {condensed_msgs, condensed_state, calculate_max_tokens(condensed_msgs, model_id)}
+      end
+
     query_opts = build_query_options(model_id, Keyword.put(opts, :max_tokens, dynamic_max_tokens))
 
     # Support injectable model_query_fn for testing
@@ -226,10 +238,15 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
       end
     else
       # Production path - query each model, threading state through
+      lightweight? = lightweight_test_query?(opts)
+
       {results, final_state} =
         Enum.map_reduce(model_pool, state, fn model_id, acc_state ->
-          # Check condensation first (updates state if needed)
-          pre_query_state = maybe_condense_for_model(acc_state, model_id, opts)
+          # Skip condensation check for lightweight test queries (no tiktoken/LLMDB)
+          pre_query_state =
+            if lightweight?,
+              do: acc_state,
+              else: maybe_condense_for_model(acc_state, model_id, opts)
 
           # Query returns state to propagate any condensation from retry path
           {result, post_query_state} =
@@ -367,6 +384,15 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
   defp extract_raw_response_map(_), do: %{}
 
   defp test_mode?(opts), do: Keyword.get(opts, :test_mode, false)
+
+  # Lightweight query path: test mode with injected query fn.
+  # Skips tiktoken BPE encoding, LLMDB scans, and condensation checks
+  # since test query functions don't depend on accurate token management.
+  # Tests that specifically verify token management pass force_token_management: true.
+  defp lightweight_test_query?(opts) do
+    test_mode?(opts) && Keyword.has_key?(opts, :model_query_fn) &&
+      !Keyword.get(opts, :force_token_management, false)
+  end
 
   defp build_test_options(opts) do
     %{

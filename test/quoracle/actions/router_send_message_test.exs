@@ -359,12 +359,4 @@ defmodule Quoracle.Actions.RouterSendMessageTest do
       assert response[:action] == "send_message"
     end
   end
-
-  describe "Router integration with action priorities" do
-    test "send_message has correct priority in Schema", %{router: _router} do
-      # The Schema already defines send_message with priority 3
-      # This test verifies it's accessible through the Router's validation
-      assert Quoracle.Actions.Schema.get_action_priority(:send_message) == 3
-    end
-  end
 end

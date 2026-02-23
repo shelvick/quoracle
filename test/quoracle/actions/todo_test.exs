@@ -79,38 +79,6 @@ defmodule Quoracle.Actions.TodoTest do
       assert result.count == 2
     end
 
-    test "preserves order of TODO items", %{
-      pubsub: pubsub,
-      agent_pid: agent_pid,
-      agent_id: agent_id
-    } do
-      items = for i <- 1..10, do: %{content: "Task #{i}", state: :todo}
-      params = %{items: items}
-      opts = [pubsub: pubsub, agent_pid: agent_pid]
-
-      assert {:ok, result} = Todo.execute(params, agent_id, opts)
-      assert result.count == 10
-    end
-
-    test "allows multiple items with same state", %{
-      pubsub: pubsub,
-      agent_pid: agent_pid,
-      agent_id: agent_id
-    } do
-      params = %{
-        items: [
-          %{content: "First todo", state: :todo},
-          %{content: "Second todo", state: :todo},
-          %{content: "Third todo", state: :todo}
-        ]
-      }
-
-      opts = [pubsub: pubsub, agent_pid: agent_pid]
-
-      assert {:ok, result} = Todo.execute(params, agent_id, opts)
-      assert result.count == 3
-    end
-
     test "handles very long content strings", %{
       pubsub: pubsub,
       agent_pid: agent_pid,

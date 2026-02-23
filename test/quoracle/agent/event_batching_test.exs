@@ -25,7 +25,7 @@ defmodule Quoracle.Agent.EventBatchingTest do
   - P1: Event ordering preserved [PROPERTY]
   - P2: Flag invariant [PROPERTY]
   """
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
   use ExUnitProperties
 
   @moduletag capture_log: true

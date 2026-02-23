@@ -3,7 +3,7 @@ defmodule Quoracle.Agent.ConsensusHandlerSentMessagesTest do
   Acceptance test for sent_messages in consensus log broadcasts.
   Verifies that the actual message content is included, not empty lists.
   """
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
 
   alias Quoracle.Agent.ConsensusHandler
 

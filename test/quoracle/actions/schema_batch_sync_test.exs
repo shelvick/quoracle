@@ -12,24 +12,6 @@ defmodule Quoracle.Actions.SchemaBatchSyncTest do
   # ARC Verification Criteria from ACTION_Schema v29.0
 
   describe "batch_sync action definition (v29.0)" do
-    # R1: Action Registered
-    test "batch_sync in action list" do
-      # [UNIT] - WHEN list_actions/0 called THEN includes :batch_sync
-      actions = Schema.list_actions()
-      assert :batch_sync in actions
-    end
-
-    # R2: Schema Defined
-    test "batch_sync schema exists" do
-      # [UNIT] - WHEN get_schema(:batch_sync) called THEN returns valid schema
-      assert {:ok, schema} = Schema.get_schema(:batch_sync)
-      assert is_map(schema)
-      assert Map.has_key?(schema, :required_params)
-      assert Map.has_key?(schema, :optional_params)
-      assert Map.has_key?(schema, :param_types)
-      assert Map.has_key?(schema, :consensus_rules)
-    end
-
     # R3: Required Params
     test "batch_sync requires actions param" do
       # [UNIT] - WHEN get_schema(:batch_sync) called THEN required_params includes :actions
@@ -100,23 +82,9 @@ defmodule Quoracle.Actions.SchemaBatchSyncTest do
       actions = ActionList.batchable_actions()
       refute :batch_sync in actions
     end
-
-    # R11: Total Actions Updated
-    test "action list has 21 actions" do
-      # [UNIT] - WHEN list_actions/0 called THEN returns 21 actions (20 + batch_sync)
-      actions = Schema.list_actions()
-      assert length(actions) == 22
-    end
   end
 
   describe "batch_sync param description" do
-    test "batch_sync has param description for actions" do
-      # [UNIT] - WHEN get_schema(:batch_sync) called THEN param_descriptions includes :actions
-      {:ok, schema} = Schema.get_schema(:batch_sync)
-      assert Map.has_key?(schema.param_descriptions, :actions)
-      assert is_binary(schema.param_descriptions[:actions])
-    end
-
     test "batch_sync actions description mentions minimum 2 actions" do
       # Verify LLM guidance mentions minimum requirement
       {:ok, schema} = Schema.get_schema(:batch_sync)

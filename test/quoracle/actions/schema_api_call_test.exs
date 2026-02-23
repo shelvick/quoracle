@@ -7,17 +7,6 @@ defmodule Quoracle.Actions.SchemaApiCallTest do
       # R1: WHEN list_actions called THEN includes :call_api in action list
       actions = Schema.list_actions()
       assert :call_api in actions
-      assert length(actions) == 22
-    end
-
-    test "retrieves call_api schema" do
-      # R2: WHEN get_schema(:call_api) called THEN returns call_api schema
-      assert {:ok, schema} = Schema.get_schema(:call_api)
-      assert Map.has_key?(schema, :required_params)
-      assert Map.has_key?(schema, :optional_params)
-      assert Map.has_key?(schema, :param_types)
-      assert Map.has_key?(schema, :consensus_rules)
-      assert Map.has_key?(schema, :param_descriptions)
     end
 
     test "call_api has correct required parameters" do
@@ -42,12 +31,6 @@ defmodule Quoracle.Actions.SchemaApiCallTest do
       assert description =~ "REST"
       assert description =~ "GraphQL"
       assert description =~ "JSON-RPC"
-    end
-
-    test "call_api has priority 17" do
-      # R6: WHEN get_action_priority(:call_api) called THEN returns 17
-      priority = Schema.get_action_priority(:call_api)
-      assert priority == 17
     end
 
     test "call_api has correct optional parameters" do

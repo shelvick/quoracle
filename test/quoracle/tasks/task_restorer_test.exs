@@ -35,7 +35,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, agent_pid} =
@@ -89,7 +90,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, agent_pid} =
@@ -143,7 +145,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Monitor agent BEFORE pause (Task.start fire-and-forget requires waiting)
@@ -181,7 +184,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Get agent_id for registry lookup
@@ -214,7 +218,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Spawn agent tree: root -> child1 -> child2 (with automatic cleanup)
@@ -313,7 +318,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Spawn and terminate agent first (with automatic cleanup)
@@ -327,7 +333,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
             status: "running",
             task: "Temp",
             test_mode: true,
-            test_opts: [skip_initial_consultation: true]
+            test_opts: [skip_initial_consultation: true],
+            force_persist: true
           },
           registry: registry,
           pubsub: pubsub,
@@ -359,7 +366,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Spawn two agents (with automatic cleanup)
@@ -412,7 +420,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, pid} =
@@ -467,7 +476,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # TODO: Need DynSup.get_dynsup_pid/0 to return nil for testing
@@ -488,7 +498,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Create agent records in database (simulating paused state)
@@ -569,7 +580,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Create parent and child in database
@@ -642,7 +654,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, _root_db} =
@@ -696,7 +709,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Terminate the root agent so we can test restoration
@@ -728,7 +742,7 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           task_id: task.id,
           status: "running",
           parent_id: nil,
-          config: %{test_mode: true},
+          config: %{test_mode: true, force_persist: true},
           inserted_at: ~N[2025-01-01 10:00:00]
         })
 
@@ -787,7 +801,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, _root_db} =
@@ -845,7 +860,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Pause to remove agents
@@ -870,7 +886,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, _root_db} =
@@ -921,7 +938,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, _agent} =
@@ -953,7 +971,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, root_pid} =
@@ -1068,7 +1087,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Monitor BEFORE pause (to catch fast terminations)
@@ -1107,7 +1127,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Inject model_histories via :sys.replace_state (simulates conversation)
@@ -1196,7 +1217,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, pid} =
@@ -1233,7 +1255,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Create child without parent in DB (orphan)
@@ -1286,7 +1309,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Both agents will succeed (empty config is valid)
@@ -1296,7 +1320,7 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           task_id: task.id,
           status: "running",
           parent_id: nil,
-          config: %{test_mode: true},
+          config: %{test_mode: true, force_persist: true},
           inserted_at: ~N[2025-01-01 10:00:00]
         })
 
@@ -1366,7 +1390,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, agent_pid} =
@@ -1426,7 +1451,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, agent_pid} =
@@ -1482,7 +1508,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, agent_pid} =
@@ -1583,7 +1610,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Stop task agent before restore
@@ -1694,7 +1722,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Stop task agent before restore
@@ -1783,7 +1812,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Stop task agent before restore
@@ -1870,7 +1900,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Stop task agent and mark its DB record as stopped so it's excluded
@@ -1929,7 +1960,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Stop task agent
@@ -2030,7 +2062,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, agent_pid} =
@@ -2095,7 +2128,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, agent_pid} =
@@ -2147,7 +2181,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Stop task agent
@@ -2236,7 +2271,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Stop task agent
@@ -2349,7 +2385,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Stop task agent
@@ -2427,7 +2464,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, root_pid} =
@@ -2439,6 +2477,7 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
             parent_pid: nil,
             status: "running",
             task: "Root agent",
+            force_persist: true,
             sandbox_owner: sandbox_owner
           },
           registry: registry,
@@ -2455,6 +2494,7 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
             parent_pid: root_pid,
             status: "running",
             task: "First child",
+            force_persist: true,
             sandbox_owner: sandbox_owner
           },
           registry: registry,
@@ -2471,6 +2511,7 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
             parent_pid: root_pid,
             status: "running",
             task: "Second child",
+            force_persist: true,
             sandbox_owner: sandbox_owner
           },
           registry: registry,
@@ -2613,7 +2654,8 @@ defmodule Quoracle.Tasks.TaskRestorerTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, agent_pid} =

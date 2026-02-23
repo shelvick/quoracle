@@ -141,7 +141,8 @@ defmodule Quoracle.Agent.Core.ACEContextTest do
         sandbox_owner: deps.sandbox_owner,
         pubsub: deps.pubsub,
         registry: deps.registry,
-        dynsup: deps.dynsup
+        dynsup: deps.dynsup,
+        force_persist: true
       ]
 
       {:ok, {_task, agent_pid}} = create_task_with_cleanup("Test task for ACE", opts)
@@ -191,7 +192,8 @@ defmodule Quoracle.Agent.Core.ACEContextTest do
         sandbox_owner: deps.sandbox_owner,
         pubsub: deps.pubsub,
         registry: deps.registry,
-        dynsup: deps.dynsup
+        dynsup: deps.dynsup,
+        force_persist: true
       ]
 
       {:ok, {_task, agent_pid}} = create_task_with_cleanup("Test task for ACE", opts)

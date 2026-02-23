@@ -330,7 +330,16 @@ defmodule Quoracle.Agent.Reflector do
     # Handle ReqLLM.Response struct
     cond do
       is_struct(response, ReqLLM.Response) ->
-        ReqLLM.Response.text(response)
+        case ReqLLM.Response.text(response) do
+          text when is_binary(text) and text != "" ->
+            text
+
+          _ ->
+            # Fallback: ReqLLM's build_content_parts detects pure JSON responses
+            # and stores them as %{type: :object} instead of %{type: :text}.
+            # Response.text() is blind to :object parts, so re-serialize.
+            if response.object, do: Jason.encode!(response.object), else: ""
+        end
 
       is_map(response) and is_binary(Map.get(response, :text)) ->
         Map.get(response, :text)

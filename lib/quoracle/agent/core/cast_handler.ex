@@ -111,6 +111,7 @@ defmodule Quoracle.Agent.Core.CastHandler do
   """
   @spec handle_store_mcp_client(pid(), State.t()) :: {:noreply, State.t()}
   def handle_store_mcp_client(mcp_client_pid, state) do
+    Process.monitor(mcp_client_pid)
     {:noreply, %{state | mcp_client: mcp_client_pid}}
   end
 

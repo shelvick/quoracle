@@ -80,43 +80,49 @@ defmodule Quoracle.Agent.Core.Initialization do
     # Auto-detect restarts: Check if agent already exists in DB
     # This handles both supervisor restarts (crashes) AND manual restore_agent calls
     # Skip DB check entirely if already in restoration_mode (restore_agent set it explicitly)
+    # Skip DB entirely in test_mode unless force_persist is set (Option D optimization)
     state =
       if Map.get(state, :restoration_mode, false) do
         # Already flagged as restoration - skip DB check
         state
       else
-        # Defensive DB check - handle ownership errors gracefully
-        try do
-          case Quoracle.Tasks.TaskManager.get_agent(state.agent_id) do
-            {:ok, db_agent} ->
-              # DB record exists - this is a restart or restore
-              Logger.info("Agent #{state.agent_id} restarting, restoring state from DB")
+        if Map.get(state, :test_mode, false) && !force_persist?(state) do
+          # Test mode: skip DB round-trips for faster tests
+          state
+        else
+          # Defensive DB check - handle ownership errors gracefully
+          try do
+            case Quoracle.Tasks.TaskManager.get_agent(state.agent_id) do
+              {:ok, db_agent} ->
+                # DB record exists - this is a restart or restore
+                Logger.info("Agent #{state.agent_id} restarting, restoring state from DB")
 
-              # Restore ACE state (context_lessons, model_states, model_histories) from DB
-              ace_state = Persistence.restore_ace_state(db_agent)
+                # Restore ACE state (context_lessons, model_states, model_histories) from DB
+                ace_state = Persistence.restore_ace_state(db_agent)
 
-              %State{
+                %State{
+                  state
+                  | model_histories: ace_state.model_histories,
+                    context_lessons: ace_state.context_lessons,
+                    model_states: ace_state.model_states,
+                    restoration_mode: true
+                }
+
+              {:error, :not_found} ->
+                # Fresh spawn - persist to DB
+                Persistence.persist_agent(state)
                 state
-                | model_histories: ace_state.model_histories,
-                  context_lessons: ace_state.context_lessons,
-                  model_states: ace_state.model_states,
-                  restoration_mode: true
-              }
+            end
+          rescue
+            e in [DBConnection.OwnershipError, DBConnection.ConnectionError] ->
+              # DB not accessible - either no sandbox_owner OR owner exited during query
+              # Skip persistence entirely - agent will try again on next operation
+              Logger.debug(
+                "Skipping DB check for agent #{state.agent_id}: #{inspect(e.__struct__)}"
+              )
 
-            {:error, :not_found} ->
-              # Fresh spawn - persist to DB
-              Persistence.persist_agent(state)
               state
           end
-        rescue
-          e in [DBConnection.OwnershipError, DBConnection.ConnectionError] ->
-            # DB not accessible - either no sandbox_owner OR owner exited during query
-            # Skip persistence entirely - agent will try again on next operation
-            Logger.debug(
-              "Skipping DB check for agent #{state.agent_id}: #{inspect(e.__struct__)}"
-            )
-
-            state
         end
       end
 
@@ -158,5 +164,9 @@ defmodule Quoracle.Agent.Core.Initialization do
     end
 
     {:noreply, state}
+  end
+
+  defp force_persist?(state) do
+    state |> Map.get(:test_opts, []) |> Keyword.get(:force_persist, false)
   end
 end

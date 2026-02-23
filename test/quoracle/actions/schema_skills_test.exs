@@ -19,19 +19,6 @@ defmodule Quoracle.Actions.SchemaSkillsTest do
   # ==========================================================================
 
   describe "learn_skills schema (R5-R9)" do
-    # R5: Action Registered
-    test "learn_skills in action list" do
-      actions = Schema.list_actions()
-      assert :learn_skills in actions
-    end
-
-    # R6: Schema Defined
-    test "learn_skills schema exists" do
-      result = Schema.get_schema(:learn_skills)
-      assert {:ok, schema} = result
-      assert is_map(schema)
-    end
-
     # R7: Required Params
     test "learn_skills requires skills" do
       {:ok, schema} = Schema.get_schema(:learn_skills)
@@ -57,19 +44,6 @@ defmodule Quoracle.Actions.SchemaSkillsTest do
   # ==========================================================================
 
   describe "create_skill schema (R10-R14)" do
-    # R10: Action Registered
-    test "create_skill in action list" do
-      actions = Schema.list_actions()
-      assert :create_skill in actions
-    end
-
-    # R11: Schema Defined
-    test "create_skill schema exists" do
-      result = Schema.get_schema(:create_skill)
-      assert {:ok, schema} = result
-      assert is_map(schema)
-    end
-
     # R12: Required Params
     test "create_skill requires name, description, content" do
       {:ok, schema} = Schema.get_schema(:create_skill)
@@ -108,21 +82,6 @@ defmodule Quoracle.Actions.SchemaSkillsTest do
         assert is_binary(desc), "#{action} should have description"
         assert String.contains?(desc, "WHEN"), "#{action} description should have WHEN guidance"
       end
-    end
-
-    # R16: Priorities Defined
-    test "skill actions have priorities" do
-      for action <- [:learn_skills, :create_skill] do
-        priority = Schema.get_action_priority(action)
-        assert is_integer(priority), "#{action} should have integer priority"
-        assert priority > 0, "#{action} priority should be positive"
-      end
-    end
-
-    # R17: Total Actions Updated
-    test "action list has 20 actions" do
-      actions = Schema.list_actions()
-      assert length(actions) == 22
     end
   end
 end

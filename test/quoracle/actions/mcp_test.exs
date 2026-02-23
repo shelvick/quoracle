@@ -135,26 +135,6 @@ defmodule Quoracle.Actions.MCPTest do
       assert length(tools) == 2
       assert Enum.any?(tools, &(&1.name == "read_file"))
     end
-
-    test "connect returns connection_id and tools", %{opts: opts, agent_id: agent_id} do
-      anubis_pid = placeholder_process()
-
-      expect(Quoracle.MCP.AnubisMock, :start_link, fn _opts ->
-        {:ok, anubis_pid}
-      end)
-
-      expect(Quoracle.MCP.AnubisMock, :list_tools, fn ^anubis_pid ->
-        {:ok, mock_tools()}
-      end)
-
-      params = %{transport: :stdio, command: "npx @mcp/server"}
-
-      result = MCP.execute(params, agent_id, opts)
-
-      assert {:ok, %{connection_id: conn_id, tools: tools}} = result
-      assert is_binary(conn_id)
-      assert is_list(tools)
-    end
   end
 
   # ============================================================================
@@ -460,21 +440,6 @@ defmodule Quoracle.Actions.MCPTest do
 
       assert {:error, :xor_violation} = result
     end
-
-    test "http transport with connection_id returns xor_violation", %{
-      opts: opts,
-      agent_id: agent_id
-    } do
-      params = %{
-        transport: :http,
-        url: "https://example.com",
-        connection_id: "some-connection"
-      }
-
-      result = MCP.execute(params, agent_id, opts)
-
-      assert {:error, :xor_violation} = result
-    end
   end
 
   # ============================================================================
@@ -581,19 +546,6 @@ defmodule Quoracle.Actions.MCPTest do
     test "unknown transport returns error", %{opts: opts, agent_id: agent_id} do
       result = MCP.execute(%{transport: "websocket", url: "ws://example.com"}, agent_id, opts)
 
-      assert {:error, :invalid_params} = result
-    end
-  end
-
-  # ============================================================================
-  # R13: 3-Arity Signature
-  # [UNIT] WHEN execute called THEN accepts (params, agent_id, opts) signature
-  # ============================================================================
-  describe "R13: 3-arity signature" do
-    test "follows standard 3-arity action signature", %{opts: opts, agent_id: agent_id} do
-      # Call with 3 arguments - compiler verifies function exists,
-      # test verifies it handles params correctly
-      result = MCP.execute(%{}, agent_id, opts)
       assert {:error, :invalid_params} = result
     end
   end

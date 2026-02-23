@@ -6,7 +6,7 @@ defmodule Quoracle.Agent.ConfigManagerModelHistoriesTest do
   Tests R1-R7 from AGENT_ConfigManager_PerModelHistories.md spec.
   """
   # Use DataCase for R5 integration test (needs DB access)
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
 
   alias Quoracle.Agent.ConfigManager
   alias Quoracle.Consensus.Manager

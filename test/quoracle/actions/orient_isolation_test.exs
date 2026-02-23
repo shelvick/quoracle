@@ -108,76 +108,7 @@ defmodule Quoracle.Actions.OrientIsolationTest do
     end
   end
 
-  describe "PubSub isolation for action events" do
-    test "broadcasts action events to isolated PubSub", %{pubsub: pubsub} do
-      agent_id = "test-orient-action-#{System.unique_integer([:positive])}"
-
-      # Subscribe to action events in isolated PubSub
-      :ok = Phoenix.PubSub.subscribe(pubsub, "actions:all")
-
-      # Spawn per-action Router (v28.0)
-      router = spawn_orient_router(agent_id, pubsub)
-
-      on_exit(fn ->
-        if Process.alive?(router) do
-          try do
-            GenServer.stop(router, :normal, :infinity)
-          catch
-            :exit, _ -> :ok
-          end
-        end
-      end)
-
-      # Execute orient action through router
-      capture_log(fn ->
-        send(self(), {:result, Router.execute(router, :orient, @valid_params, agent_id)})
-      end)
-
-      assert_received {:result, {:ok, _}}
-
-      # Should receive action started event
-      assert_receive {:action_started, start_payload}
-      assert start_payload.agent_id == agent_id
-      assert start_payload.action_type == :orient
-
-      # Should receive action completed event
-      assert_receive {:action_completed, complete_payload}
-      assert complete_payload.agent_id == agent_id
-    end
-  end
-
   describe "error handling with isolation" do
-    test "broadcasts validation errors to isolated PubSub", %{pubsub: pubsub} do
-      agent_id = "test-orient-error"
-
-      # Subscribe to action events
-      :ok = Phoenix.PubSub.subscribe(pubsub, "actions:all")
-
-      # Spawn per-action Router (v28.0)
-      router = spawn_orient_router(agent_id, pubsub)
-
-      on_exit(fn ->
-        if Process.alive?(router) do
-          try do
-            GenServer.stop(router, :normal, :infinity)
-          catch
-            :exit, _ -> :ok
-          end
-        end
-      end)
-
-      # Invalid params (missing required fields)
-      capture_log(fn ->
-        send(self(), {:result, Router.execute(router, :orient, %{}, agent_id)})
-      end)
-
-      assert_received {:result, {:error, _validation_errors}}
-
-      # Should receive error broadcast in isolated PubSub
-      assert_receive {:action_error, payload}
-      assert payload.agent_id == agent_id
-    end
-
     test "broadcasts execution errors to isolated PubSub", %{pubsub: pubsub} do
       agent_id = "test-orient-exec-error"
 

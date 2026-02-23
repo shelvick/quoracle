@@ -1,9 +1,9 @@
 # lib/quoracle/agent/consensus_handler/
 
 ## Modules
-- ActionExecutor: Non-blocking consensus action execution (346 lines), dispatches Router.execute via Task.Supervisor, result returns via GenServer.cast, v36.0 outer try/rescue/catch crash protection + MCP sync timeout
+- ActionExecutor: Non-blocking consensus action execution (363 lines), dispatches Router.execute via Task.Supervisor, result returns via GenServer.cast, v36.0 outer try/rescue/catch crash protection + MCP sync timeout, timeout overrides: :adjust_budget → :infinity, :call_mcp → 600_000, :answer_engine → 120_000, :fetch_web → 60_000, :call_api → 120_000, :generate_images → 300_000 (v39.0)
 - Helpers: Shared helper functions (116 lines), self_contained_actions/0, has_pending_self_contained?/1 (v26.0), coerce_wait_value/1, extract_shell_check_id/2, normalize_sibling_context/1
-- LogHelper: Logging helpers (40 lines), safe_broadcast_log/5, log_action_error/1
+- LogHelper: Logging helpers (63 lines), safe_broadcast_log/5, log_action_error/1 (v28.0: {:error, _} unwrap, {:action_crashed, tuple} clause, extended @warning_errors)
 - TodoInjector: Todo list context injection (82 lines), inject_todo_context/2
 - ChildrenInjector: Children context injection (78 lines), inject_children_context/2
 - AceInjector: ACE context injection (82 lines), inject_ace_context/3
@@ -13,7 +13,7 @@
 - ActionExecutor.execute_consensus_action/3: Entry point, validates wait params, dispatches action
 - ActionExecutor.dispatch_action/9: Task.Supervisor.start_child with outer try/rescue/catch, Router.execute in background, casts result to Core, crash_in_task injection for testing (v36.0)
 - ActionExecutor.spawn_and_monitor_router/4: Spawn Router + Process.monitor + active_routers tracking (v25.0)
-- ActionExecutor MCP sync timeout: Forces 600_000ms timeout for :call_mcp actions (v36.0, prevents smart_threshold async dispatch)
+- ActionExecutor timeout overrides: Forces 600_000ms for :call_mcp (v36.0), :infinity for :adjust_budget (fix-20260223), 120_000ms for :answer_engine, 60_000ms for :fetch_web, 120_000ms for :call_api, 300_000ms for :generate_images (v39.0 — prevents 100ms smart_threshold from losing HTTP action results)
 - Helpers.extract_shell_check_id/2: Detect check_id in shell params for routing through existing Router (v25.0)
 - Helpers.self_contained_actions/0: 10 actions that complete instantly (wait:true would stall)
 - Helpers.has_pending_self_contained?/1: Check if any pending_actions are self_contained (v26.0, used by ActionResultHandler.maybe_schedule_consensus/1)
@@ -26,7 +26,7 @@
 4. Route check_id via Helpers.extract_shell_check_id → lookup shell_routers → use existing Router
 5. For normal actions: spawn_and_monitor_router (spawn + monitor + active_routers)
 6. Add to pending_actions
-7. For :call_mcp actions: inject 600_000ms timeout to force sync execution (v36.0)
+7. Timeout overrides: :call_mcp → 600_000ms (v36.0), :adjust_budget → :infinity (fix-20260223)
 8. dispatch_action → Task.Supervisor.start_child → try/rescue/catch → Router.execute → cast result to Core
 9. Return state immediately (Core is free for GenServer.call)
 

@@ -306,6 +306,30 @@ defmodule Quoracle.Agent.MessageHandler do
 
   # R10-R13: execute_consensus_action now always returns state (defaults wait: false)
   # Kept as helper because it's passed as function reference (&execute_consensus_action/2)
+  # v39.0: Fast-path actions skip ActionExecutor entirely (no Router/Task spawn, no continuation loop).
+  # Emits broadcasts inline so tests using {:action_started, _} as sync signals still work.
+  defp execute_consensus_action(state, %{_fast_path: true} = decision) do
+    state = StateUtils.add_history_entry(state, :decision, decision)
+    counter = Map.get(state, :action_counter, 0)
+    action_id = "action_#{state.agent_id}_#{counter + 1}"
+    state = Map.update(state, :action_counter, 1, &(&1 + 1))
+
+    pubsub = Map.get(state, :pubsub)
+
+    AgentEvents.broadcast_action_started(
+      state.agent_id,
+      decision.action,
+      action_id,
+      decision.params,
+      pubsub
+    )
+
+    result = {:ok, decision.params}
+    AgentEvents.broadcast_action_completed(state.agent_id, action_id, result, pubsub)
+
+    state
+  end
+
   defp execute_consensus_action(state, decision) do
     ConsensusHandler.execute_consensus_action(state, decision, self())
   end

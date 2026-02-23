@@ -63,13 +63,6 @@ defmodule Quoracle.Actions.ConsensusRulesTest do
       assert {:ok, ""} = ConsensusRules.apply_rule(rule, values)
     end
 
-    test "handles caching for repeated identical strings" do
-      # All identical - triggers optimization, no API call
-      values = ["Query database", "Query database", "Query database"]
-      rule = {:semantic_similarity, threshold: 0.85}
-      assert {:ok, "Query database"} = ConsensusRules.apply_rule(rule, values)
-    end
-
     test "returns no_consensus when embeddings unavailable for different strings" do
       # Different strings need embedding API - without credentials returns error
       values = ["Process data", "Beautiful sunset", "Pizza recipe"]

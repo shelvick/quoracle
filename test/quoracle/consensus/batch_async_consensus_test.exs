@@ -16,7 +16,7 @@ defmodule Quoracle.Consensus.BatchAsyncConsensusTest do
   - R45: batch_async cluster competes with non-batch clusters
   - R46: Empty batch_async uses default priority
   """
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
   use ExUnitProperties
 
   alias Quoracle.Consensus.Aggregator

@@ -9,6 +9,8 @@ defmodule Quoracle.Providers.RetryHelper do
   v3.1: Exception handling for malformed LLM responses (empty body crashes from req_llm).
   v3.2: Detect HTTP 429/5xx from FunctionClauseError stacktrace args and retry
         (req_llm providers crash on error response bodies instead of returning proper errors).
+  v3.3: Handle string error bodies from Google Vertex throttling
+        (body is {"error":"The request is throttled..."} - string message, not {"error":{"code":429}}).
   """
 
   require Logger
@@ -189,7 +191,33 @@ defmodule Quoracle.Providers.RetryHelper do
     code
   end
 
+  # v3.3: Error map with string message: %{"error" => "The request is throttled..."}
+  # Google Vertex returns this format for throttling instead of structured error codes
+  defp find_error_code_in_args([%{"error" => message} | _]) when is_binary(message) do
+    infer_status_from_message(message)
+  end
+
+  # v3.3: Undecoded string body (Req may skip JSON decode on some error responses)
+  defp find_error_code_in_args([response_body | _]) when is_binary(response_body) do
+    infer_status_from_message(response_body)
+  end
+
   defp find_error_code_in_args(_), do: nil
+
+  # Infer HTTP status code from error message keywords
+  @spec infer_status_from_message(String.t()) :: pos_integer() | nil
+  defp infer_status_from_message(message) do
+    lowered = String.downcase(message)
+
+    cond do
+      String.contains?(lowered, "throttl") -> 429
+      String.contains?(lowered, "rate limit") -> 429
+      String.contains?(lowered, "too many") -> 429
+      String.contains?(lowered, "overloaded") -> 503
+      String.contains?(lowered, "unavailable") -> 503
+      true -> nil
+    end
+  end
 
   @doc """
   Applies exponential backoff delay.

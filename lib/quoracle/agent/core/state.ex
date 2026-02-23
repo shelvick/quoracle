@@ -150,7 +150,9 @@ defmodule Quoracle.Agent.Core.State do
     # active_routers: monitor_ref => router_pid (all spawned Routers)
     active_routers: %{},
     # shell_routers: command_id => router_pid (shell command Routers for status routing)
-    shell_routers: %{}
+    shell_routers: %{},
+    # v38.0: Cached system prompt for consensus (lazy build, invalidated by learn_skills)
+    cached_system_prompt: nil
   ]
 
   @type t :: %__MODULE__{
@@ -232,7 +234,9 @@ defmodule Quoracle.Agent.Core.State do
           active_skills: [skill_metadata()],
           # v30.0: Per-action Router lifecycle
           active_routers: %{reference() => pid()},
-          shell_routers: %{String.t() => pid()}
+          shell_routers: %{String.t() => pid()},
+          # v38.0: Cached system prompt
+          cached_system_prompt: String.t() | nil
         }
 
   @type queued_message :: %{
@@ -414,7 +418,9 @@ defmodule Quoracle.Agent.Core.State do
       active_skills: Map.get(config, :active_skills, []),
       # v30.0: Per-action Router lifecycle
       active_routers: Map.get(config, :active_routers, %{}),
-      shell_routers: Map.get(config, :shell_routers, %{})
+      shell_routers: Map.get(config, :shell_routers, %{}),
+      # v38.0: Cached system prompt
+      cached_system_prompt: Map.get(config, :cached_system_prompt)
     }
   end
 

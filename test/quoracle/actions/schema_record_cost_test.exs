@@ -16,15 +16,6 @@ defmodule Quoracle.Actions.SchemaRecordCostTest do
       assert :record_cost in actions
     end
 
-    # R2: Schema Defined [UNIT]
-    test "R2: record_cost schema exists" do
-      result = Schema.get_schema(:record_cost)
-      assert {:ok, schema} = result
-      assert Map.has_key?(schema, :required_params)
-      assert Map.has_key?(schema, :optional_params)
-      assert Map.has_key?(schema, :param_types)
-    end
-
     # R3: Required Params [UNIT]
     test "R3: record_cost requires amount only" do
       {:ok, schema} = Schema.get_schema(:record_cost)
@@ -59,12 +50,6 @@ defmodule Quoracle.Actions.SchemaRecordCostTest do
       priority = Schema.get_action_priority(:record_cost)
       assert priority == 15
     end
-
-    # R8: Total Actions Updated [UNIT]
-    test "R8: action list has 21 actions" do
-      actions = Schema.list_actions()
-      assert length(actions) == 22
-    end
   end
 
   describe "record_cost param_descriptions" do
@@ -72,21 +57,6 @@ defmodule Quoracle.Actions.SchemaRecordCostTest do
       {:ok, schema} = Schema.get_schema(:record_cost)
       assert Map.has_key?(schema.param_descriptions, :amount)
       assert schema.param_descriptions[:amount] =~ "USD"
-    end
-
-    test "has description for description parameter" do
-      {:ok, schema} = Schema.get_schema(:record_cost)
-      assert Map.has_key?(schema.param_descriptions, :description)
-    end
-
-    test "has description for category parameter" do
-      {:ok, schema} = Schema.get_schema(:record_cost)
-      assert Map.has_key?(schema.param_descriptions, :category)
-    end
-
-    test "has description for metadata parameter" do
-      {:ok, schema} = Schema.get_schema(:record_cost)
-      assert Map.has_key?(schema.param_descriptions, :metadata)
     end
   end
 

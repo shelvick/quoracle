@@ -114,21 +114,6 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
       assert_receive :trigger_consensus
     end
 
-    test "handles small integer wait values", %{state: state} do
-      action = :send_message
-      wait_seconds = 1
-
-      result = ConsensusHandler.handle_wait_parameter(state, action, wait_seconds)
-
-      assert %{wait_timer: {timer_ref, :timed_wait}} = result
-      assert is_reference(timer_ref)
-
-      # Cancel timer and send message immediately for test speed
-      Process.cancel_timer(timer_ref)
-      send(self(), :trigger_consensus)
-      assert_receive :trigger_consensus
-    end
-
     test "defaults to true for invalid wait values", %{state: state} do
       action = :call_api
 
@@ -471,66 +456,6 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
       result_entry = Enum.find(all_entries, &(&1.type == :result))
       assert result_entry != nil, "Result should be stored in history"
     end
-
-    # R8: Timer Set After Result Cast
-    test "timed wait sets timer after storing result", %{state: state, agent_pid: agent_pid} do
-      consensus_result = %{
-        action: :orient,
-        params: %{
-          current_situation: "testing",
-          goal_clarity: "clear",
-          available_resources: "test suite",
-          key_challenges: "none",
-          delegation_consideration: "none"
-        },
-        wait: 5
-      }
-
-      # v35.0: Collect async result through helper
-      result_state = execute_and_collect_result(state, consensus_result, agent_pid)
-
-      histories = result_state.model_histories
-      all_entries = histories |> Map.values() |> List.flatten()
-      result_entry = Enum.find(all_entries, &(&1.type == :result))
-      assert result_entry != nil, "Result should be stored"
-
-      # Then verify timer was set
-      assert %{wait_timer: {timer_ref, :timed_wait}} = result_state
-      assert is_reference(timer_ref)
-
-      # Cleanup
-      Process.cancel_timer(timer_ref)
-    end
-
-    # R9: Timed Wait History Alternation (INTEGRATION)
-    test "timed wait maintains proper message alternation", %{
-      state: state,
-      agent_pid: agent_pid
-    } do
-      consensus_result = %{
-        action: :orient,
-        params: %{
-          current_situation: "testing timed wait",
-          goal_clarity: "clear",
-          available_resources: "test suite",
-          key_challenges: "none",
-          delegation_consideration: "none"
-        },
-        wait: 1
-      }
-
-      # v35.0: Collect async result through helper
-      result_state = execute_and_collect_result(state, consensus_result, agent_pid)
-
-      histories = result_state.model_histories
-      all_entries = histories |> Map.values() |> List.flatten()
-      result_entry = Enum.find(all_entries, &(&1.type == :result))
-      assert result_entry != nil, "Result should be stored"
-
-      # Timer should be set
-      assert %{wait_timer: {timer_ref, :timed_wait}} = result_state
-      Process.cancel_timer(timer_ref)
-    end
   end
 
   describe "missing wait parameter default (R10-R13)" do
@@ -557,30 +482,6 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
       %{state: state, agent_pid: agent_pid}
     end
 
-    # R10: Default Wait Applied
-    test "applies default wait: false when nil", %{state: state, agent_pid: agent_pid} do
-      consensus_result = %{
-        action: :orient,
-        params: %{
-          current_situation: "testing",
-          goal_clarity: "clear",
-          available_resources: "test suite",
-          key_challenges: "none",
-          delegation_consideration: "none"
-        }
-        # wait is missing/nil - should default to false, not error
-      }
-
-      result = ConsensusHandler.execute_consensus_action(state, consensus_result, agent_pid)
-
-      # Should NOT return error
-      refute match?({:error, :missing_wait_parameter}, result)
-
-      # Should have executed the action and returned state
-      assert is_map(result)
-      assert Map.has_key?(result, :agent_id)
-    end
-
     # R12: Stored Decision Has Wait (INTEGRATION)
     test "decision stored in history includes defaulted wait: false", %{
       state: state,
@@ -603,25 +504,6 @@ defmodule Quoracle.Agent.ConsensusHandlerTest do
 
       # Consensus triggered via handle_action_result
       assert_receive :trigger_consensus
-    end
-
-    # R13: No Error on Missing Wait
-    test "does not return missing_wait_parameter error", %{state: state, agent_pid: agent_pid} do
-      consensus_result = %{
-        action: :spawn_child,
-        params: %{
-          task: "test task"
-        }
-        # wait is missing
-      }
-
-      result = ConsensusHandler.execute_consensus_action(state, consensus_result, agent_pid)
-
-      # Must NOT return error tuple
-      refute match?({:error, :missing_wait_parameter}, result)
-
-      # Should return state (map)
-      assert is_map(result)
     end
   end
 

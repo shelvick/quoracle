@@ -78,7 +78,12 @@ defmodule Quoracle.Agent.Consensus.MessageBuilder do
 
     # Step 8: Inject context token count LAST (at end of last user message)
     # Counts all non-system message tokens from steps 1-7
-    ContextInjector.inject_context_tokens(messages)
+    # Skip in lightweight query mode (eliminates tiktoken BPE encoding)
+    if Keyword.get(opts, :skip_context_tokens, false) do
+      messages
+    else
+      ContextInjector.inject_context_tokens(messages)
+    end
   end
 
   @doc """

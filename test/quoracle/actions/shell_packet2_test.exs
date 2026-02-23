@@ -605,6 +605,8 @@ defmodule Quoracle.Actions.ShellPacket2Test do
       # Isolation is inherent - each Router handles exactly one command
 
       # Helper to spawn Router and execute command
+      # Uses smart_threshold: :infinity to force synchronous completion,
+      # avoiding non-deterministic sync/async race with fast commands.
       spawn_and_execute = fn agent_id, command ->
         action_id = "action-#{agent_id}"
 
@@ -623,17 +625,17 @@ defmodule Quoracle.Actions.ShellPacket2Test do
           pubsub: pubsub,
           router_pid: router,
           action_id: action_id,
-          smart_threshold: 0
+          smart_threshold: :infinity
         ]
 
-        {:ok, %{command_id: cmd_id}} = Shell.execute(%{command: command}, agent_id, opts)
-        {action_id, cmd_id, router}
+        {:ok, result} = Shell.execute(%{command: command}, agent_id, opts)
+        {result, router}
       end
 
-      # Execute three commands concurrently with separate Routers
-      {action1, _cmd1, router1} = spawn_and_execute.("agent-1", "echo agent1")
-      {action2, _cmd2, router2} = spawn_and_execute.("agent-2", "echo agent2")
-      {action3, _cmd3, router3} = spawn_and_execute.("agent-3", "echo agent3")
+      # Execute three commands with separate Routers (isolation via per-action Router)
+      {result1, router1} = spawn_and_execute.("agent-1", "echo agent1")
+      {result2, router2} = spawn_and_execute.("agent-2", "echo agent2")
+      {result3, router3} = spawn_and_execute.("agent-3", "echo agent3")
 
       on_exit(fn ->
         for r <- [router1, router2, router3] do
@@ -647,18 +649,7 @@ defmodule Quoracle.Actions.ShellPacket2Test do
         end
       end)
 
-      # Collect all results (order may vary)
-      results =
-        for _ <- 1..3 do
-          assert_receive {:"$gen_cast", {:action_result, action_id, {:ok, result}, _opts}}, 30_000
-          {action_id, result}
-        end
-
       # Verify each agent got its own isolated result
-      result1 = Enum.find_value(results, fn {id, r} -> if id == action1, do: r end)
-      result2 = Enum.find_value(results, fn {id, r} -> if id == action2, do: r end)
-      result3 = Enum.find_value(results, fn {id, r} -> if id == action3, do: r end)
-
       assert result1.stdout =~ "agent1"
       assert result2.stdout =~ "agent2"
       assert result3.stdout =~ "agent3"

@@ -6,7 +6,7 @@ defmodule Quoracle.Consensus.ManagerTest do
   """
 
   # Changed to DataCase for database access (config-driven tests need DB)
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
   alias Quoracle.Consensus.Manager
 
   # NOTE: Old tests for get_model_pool/0 with hardcoded defaults removed (v3.0)

@@ -22,7 +22,7 @@ defmodule Quoracle.Agent.ConsensusRetryTest do
   - R12: Parent receives notification after exhaustion [SYSTEM]
   - R73: State field defaults to 0 [UNIT]
   """
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
 
   @moduletag capture_log: true
 

@@ -6,7 +6,7 @@
 - PerModelQuery: Per-model query functions for consensus, 371 lines (v15.0: Condensation extraction, v16.0: dynamic max_tokens calculation)
 - PerModelQuery.Helpers: Extracted helper functions, 106 lines (v14.0: uses ContentStringifier for multimodal content, context length error detection)
 - PerModelQuery.Condensation: ACE condensation logic, 186 lines (v15.0: extracted from PerModelQuery for <500 line limit)
-- SystemPromptInjector: System prompt injection for messages, 142 lines (v13.0: human prompt JSON with from:"parent")
+- SystemPromptInjector: System prompt injection for messages, 80 lines (v13.0: human prompt JSON with from:"parent", v38.0: cached_system_prompt check in opts before PromptBuilder call)
 
 ## TestMode Functions
 - enabled?/1: keyword→boolean, checks test_mode or test flags

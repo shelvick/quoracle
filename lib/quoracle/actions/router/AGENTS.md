@@ -1,12 +1,12 @@
 # lib/quoracle/actions/router/
 
 ## Sub-modules (extracted for 500-line limit, Router now 496 lines)
-- MCPHelpers: MCP client lazy initialization (52 lines) - Added 2025-12-16
+- MCPHelpers: MCP client lazy initialization (60 lines, v32.0: Process.alive? guard for stale PID detection) - Added 2025-12-16
 - MockExecution: Mock action execution (174 lines)
 - WaitFlow: Wait flow control (48 lines, v26.0 simplified to no-ops - all triggers moved to Agent layer)
 - Metrics: Action metrics tracking (50 lines)
 - TaskManager: Async task lifecycle (96 lines)
-- Execution: Smart mode execution (264 lines, v31.0: Logger.warning on timeout)
+- Execution: Smart mode execution (265 lines, v31.0: Logger.warning on timeout, v32.0: Logger.error in catch :exit block)
 - ActionMapper: Action type→module mapping (29 lines)
 - ShellCommandManager: Shell command state management (142 lines) - Added 2025-10-14, updated 2025-10-17
 - Persistence: DB persistence for action results (135 lines) - Added 2025-10-14
@@ -16,7 +16,7 @@
 - Security: Secret resolution and output scrubbing (added with secret system)
 
 ## Key Functions
-- MCPHelpers.get_or_init_mcp_client/1: Get existing or create new MCP client from opts
+- MCPHelpers.get_or_init_mcp_client/1: Get existing or create new MCP client from opts (v32.0: Process.alive? guard re-initializes dead clients)
 - MCPHelpers.maybe_lazy_init_mcp_client/2: Only initializes for :call_mcp action type
 - MockExecution.execute_action_mock/5: Simulates action responses
 - WaitFlow.handle_immediate/3: Timer notification only for timed waits (no triggers - v26.0)

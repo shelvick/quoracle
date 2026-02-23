@@ -152,7 +152,7 @@ defmodule Quoracle.Actions.Spawn do
         {:error,
          "Budget is required when spawning children. " <>
            "Specify a budget amount (e.g., budget: \"50.00\"). " <>
-           "Use get_budget to check your available funds."}
+           "Check your <budget> context for available funds."}
 
       error ->
         error

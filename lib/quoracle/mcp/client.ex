@@ -355,7 +355,14 @@ defmodule Quoracle.MCP.Client do
   end
 
   @impl true
-  def terminate(_reason, state) do
+  def terminate(reason, state) do
+    case reason do
+      :normal -> Logger.info("MCP Client #{state.agent_id} terminating normally")
+      :shutdown -> Logger.info("MCP Client #{state.agent_id} shutting down")
+      {:shutdown, _} -> Logger.info("MCP Client #{state.agent_id} shutting down")
+      _ -> Logger.warning("MCP Client #{state.agent_id} terminating: #{inspect(reason)}")
+    end
+
     cleanup_all_connections(state)
     :ok
   end

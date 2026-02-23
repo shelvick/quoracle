@@ -75,6 +75,17 @@
   - Integration (R205-R206): Sequential completion flow — last SC triggers, shell deferred for batch_sync
   - System (R207): End-to-end with real Core GenServer, stale check_id deferred until batch_sync completes
 
+## System Prompt Cache Tests (Added 2026-02-22)
+- consensus/system_prompt_cache_test.exs: 10 tests (R1-R9), 523 lines, async: true
+  - Unit (R1): State.new cached_system_prompt field default
+  - Integration (R2-R3): Lazy build on first consensus, reuse on subsequent
+  - Unit (R4): learn_skills invalidation
+  - Integration (R5): Rebuild after invalidation reflects new skills
+  - Unit (R6): Cached prompt matches fresh PromptBuilder build
+  - Integration (R7): Fast-path (Option E) bypasses cache entirely
+  - Integration (R8): Multi-model uniformity (3-model pool)
+  - Integration (R9, regression): field_prompts content included in cached prompt (2 tests)
+
 ## Action Executor Regression Tests (Added 2026-02-14)
 - action_executor_regressions_test.exs: 15 tests (R1-R14 + R5b), 1060 lines, async: true
   - Bug 1 (error stall): R1, R2, R3, R4 — always-sync error + wait:true continues consensus
@@ -82,6 +93,14 @@
   - Bug 3 (Router leak): R10, R11 — Router monitoring and active_routers tracking
   - TestActionHandler: R12 — shell_routers keyed by command_id not action_id
   - System: R13 (failed spawn recovery), R14 (shell + check_id round-trip)
+
+## HTTP Action Timeout Override Tests (Added 2026-02-23)
+- consensus_handler/action_executor_http_timeout_test.exs: 5 tests (R78-R82), async: true
+  - Unit (R78): answer_engine returns real result, not async tuple (120_000ms override)
+  - Unit (R79): fetch_web returns real result, not async tuple (60_000ms override)
+  - Unit (R80): call_api returns real result, not async tuple (120_000ms override)
+  - Unit (R81): generate_images returns real result, not async tuple (300_000ms override)
+  - Unit (R82): existing call_mcp/adjust_budget overrides preserved
 
 ## Removed Files
 core_injection_test.exs, config_manager_injection_test.exs, dyn_sup_injection_test.exs (redundant after isolation)

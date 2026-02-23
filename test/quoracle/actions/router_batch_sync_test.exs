@@ -234,5 +234,37 @@ defmodule Quoracle.Actions.RouterBatchSyncTest do
       assert :batch_sync in sync_actions,
              "batch_sync should be in always_sync_actions for synchronous execution"
     end
+
+    # TEST-FIX: R63 regression guard — deferred from TEST phase because the current
+    # code already matches the spec (13 actions). This guards against accidental
+    # additions/removals from the canonical list.
+    test "always_sync_actions contains exactly the canonical 13 actions" do
+      # [UNIT] - R63: Canonical @always_sync_actions list per ACTION_Router v33.0
+      sync_actions = ClientAPI.always_sync_actions()
+
+      expected =
+        MapSet.new([
+          :spawn_child,
+          :send_message,
+          :orient,
+          :wait,
+          :todo,
+          :generate_secret,
+          :adjust_budget,
+          :learn_skills,
+          :create_skill,
+          :search_secrets,
+          :file_read,
+          :file_write,
+          :batch_sync
+        ])
+
+      actual = MapSet.new(sync_actions)
+
+      assert actual == expected,
+             "always_sync_actions mismatch.\n" <>
+               "Missing: #{inspect(MapSet.difference(expected, actual) |> MapSet.to_list())}\n" <>
+               "Extra: #{inspect(MapSet.difference(actual, expected) |> MapSet.to_list())}"
+    end
   end
 end

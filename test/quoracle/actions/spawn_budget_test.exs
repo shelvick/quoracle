@@ -322,7 +322,7 @@ defmodule Quoracle.Actions.SpawnBudgetTest do
     @tag :integration
     test "R31: N/A parent can spawn child with budget", %{deps: deps, profile: profile} do
       # Create parent with N/A budget (unlimited)
-      parent_budget = %{mode: :na, allocated: nil, committed: nil}
+      parent_budget = Quoracle.Budget.Schema.new_na()
       {:ok, parent_pid} = spawn_parent_with_budget(deps, parent_budget)
       {:ok, parent_state} = Core.get_state(parent_pid)
 
@@ -384,7 +384,7 @@ defmodule Quoracle.Actions.SpawnBudgetTest do
     # R57: Error Message Contains Guidance [INTEGRATION]
     # The :budget_required error, when surfaced through Spawn.execute, should
     # return a descriptive string message (not just the atom) that guides the
-    # LLM on what to do: include "budget" param and use "get_budget" to check funds.
+    # LLM on what to do: include "budget" param
     @tag :r57
     @tag :integration
     test "R57: budget_required error message guides LLM", %{deps: deps, profile: profile} do
@@ -421,11 +421,9 @@ defmodule Quoracle.Actions.SpawnBudgetTest do
       # Assert: Error contains guidance for the LLM agent
       # The error should be a string message (not just atom) that mentions:
       # 1. "budget" - what's required
-      # 2. "get_budget" - how to check available funds
       assert {:error, message} = result
       assert is_binary(message), "Error should be a descriptive string, got: #{inspect(message)}"
       assert message =~ "budget", "Error message should mention 'budget'"
-      assert message =~ "get_budget", "Error message should mention 'get_budget' action"
     end
 
     # NOTE: R53 (N/A parent unchanged), R54 (nil budget unchanged), R55 (root + budget OK),

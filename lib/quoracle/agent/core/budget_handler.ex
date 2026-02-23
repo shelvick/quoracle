@@ -214,7 +214,10 @@ defmodule Quoracle.Agent.Core.BudgetHandler do
   """
   @spec handle_set_budget_allocated(Decimal.t(), State.t()) :: {:noreply, State.t()}
   def handle_set_budget_allocated(new_budget, state) do
-    new_budget_data = %{state.budget_data | allocated: new_budget}
+    budget_data = state.budget_data
+    # Ensure committed is a valid Decimal when transitioning from N/A mode
+    committed = budget_data[:committed] || Decimal.new(0)
+    new_budget_data = %{budget_data | allocated: new_budget, committed: committed}
     new_state = %{state | budget_data: new_budget_data}
     new_state = update_over_budget_status(new_state)
     {:noreply, new_state}

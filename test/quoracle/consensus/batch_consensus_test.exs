@@ -11,7 +11,7 @@ defmodule Quoracle.Consensus.BatchConsensusTest do
   - R46: Dual key support (string keys from LLM)
   - R47: format_action_summary for batch_sync
   """
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
 
   alias Quoracle.Consensus.Aggregator
   alias Quoracle.Consensus.Aggregator.ActionSummary

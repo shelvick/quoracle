@@ -106,38 +106,6 @@ defmodule Quoracle.Agent.TokenManagerTest do
       assert tokens > 0
     end
 
-    test "estimates tokens for different content types uniformly" do
-      # tiktoken v5.0: Single encoding for all content types (type option removed)
-      code_content = """
-      def process_data(items) do
-        items
-        |> Enum.map(&transform/1)
-        |> Enum.filter(&valid?/1)
-        |> Enum.reduce(%{}, &aggregate/2)
-      end
-      """
-
-      # Regular text
-      text_content = "This is regular text without any special formatting or code"
-
-      # JSON structure
-      json_content = ~s({"action": "orient", "params": {"key": "value"}})
-
-      # All content uses cl100k_base encoding uniformly
-      code_tokens = TokenManager.estimate_tokens(code_content)
-      text_tokens = TokenManager.estimate_tokens(text_content)
-      json_tokens = TokenManager.estimate_tokens(json_content)
-
-      assert code_tokens > 0
-      assert text_tokens > 0
-      assert json_tokens > 0
-
-      # tiktoken handles all content types accurately
-      assert is_integer(code_tokens)
-      assert is_integer(text_tokens)
-      assert is_integer(json_tokens)
-    end
-
     test "handles empty or nil content gracefully" do
       # These functions don't exist yet - will fail
       assert TokenManager.estimate_tokens("") == 0

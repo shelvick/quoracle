@@ -49,6 +49,7 @@ defmodule Quoracle.Agent.CorePersistenceTest do
         parent_pid: nil,
         initial_prompt: "Test prompt",
         test_mode: true,
+        force_persist: true,
         sandbox_owner: sandbox_owner
       }
 
@@ -78,7 +79,8 @@ defmodule Quoracle.Agent.CorePersistenceTest do
         task_id: invalid_task_id,
         parent_pid: nil,
         initial_prompt: "Test prompt",
-        test_mode: true
+        test_mode: true,
+        force_persist: true
       }
 
       # Agent should spawn despite persistence failure (defensive)
@@ -111,7 +113,8 @@ defmodule Quoracle.Agent.CorePersistenceTest do
         task_id: task_id,
         restoration_mode: true,
         initial_prompt: "Restored prompt",
-        test_mode: true
+        test_mode: true,
+        force_persist: true
       }
 
       # Spawn agent with restoration_mode
@@ -138,6 +141,7 @@ defmodule Quoracle.Agent.CorePersistenceTest do
         parent_pid: nil,
         initial_prompt: "Parent prompt",
         test_mode: true,
+        force_persist: true,
         sandbox_owner: sandbox_owner
       }
 
@@ -173,6 +177,7 @@ defmodule Quoracle.Agent.CorePersistenceTest do
         parent_pid: parent_pid,
         initial_prompt: "Child prompt",
         test_mode: true,
+        force_persist: true,
         sandbox_owner: sandbox_owner
       }
 
@@ -217,6 +222,7 @@ defmodule Quoracle.Agent.CorePersistenceTest do
         parent_pid: fake_parent_pid,
         initial_prompt: "Orphan child",
         test_mode: true,
+        force_persist: true,
         sandbox_owner: sandbox_owner
       }
 
@@ -248,6 +254,7 @@ defmodule Quoracle.Agent.CorePersistenceTest do
         initial_prompt: "Test prompt",
         models: ["test-model"],
         test_mode: true,
+        force_persist: true,
         sandbox_owner: sandbox_owner
       }
 
@@ -380,6 +387,7 @@ defmodule Quoracle.Agent.CorePersistenceTest do
         parent_pid: nil,
         initial_prompt: "Parent",
         test_mode: true,
+        force_persist: true,
         sandbox_owner: sandbox_owner
       }
 
@@ -456,6 +464,7 @@ defmodule Quoracle.Agent.CorePersistenceTest do
         parent_pid: nil,
         initial_prompt: "Parent",
         test_mode: true,
+        force_persist: true,
         sandbox_owner: sandbox_owner
       }
 
@@ -583,6 +592,7 @@ defmodule Quoracle.Agent.CorePersistenceTest do
         parent_id: "v36-parent",
         initial_prompt: "Child",
         test_mode: true,
+        force_persist: true,
         sandbox_owner: sandbox_owner
       }
 
@@ -629,6 +639,7 @@ defmodule Quoracle.Agent.CorePersistenceTest do
         parent_id: "v36-parent",
         initial_prompt: "Orphan child",
         test_mode: true,
+        force_persist: true,
         sandbox_owner: sandbox_owner
       }
 

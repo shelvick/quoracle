@@ -127,6 +127,7 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
         AgentEvents.broadcast_action_completed(state.agent_id, action_id, success, pubsub)
 
       {:error, _} = error ->
+        LogHelper.log_action_error(error)
         AgentEvents.broadcast_action_error(state.agent_id, action_id, error, pubsub)
 
       _ ->

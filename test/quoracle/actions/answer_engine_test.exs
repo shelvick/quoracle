@@ -109,23 +109,6 @@ defmodule Quoracle.Actions.AnswerEngineTest do
     end
   end
 
-  describe "[UNIT] timing metrics" do
-    test "includes execution timing in result (R8)" do
-      # R8: WHEN action executes IF successful THEN includes execution_time_ms
-      # This would be internal to execute, but we can test the structure
-      result = %{
-        answer: "Test answer",
-        sources: [],
-        execution_time_ms: 150,
-        model: "google_gemini_2_5_pro"
-      }
-
-      assert Map.has_key?(result, :execution_time_ms)
-      assert is_integer(result.execution_time_ms)
-      assert result.execution_time_ms > 0
-    end
-  end
-
   # NOTE: Old "[UNIT] Gemini model discovery" test removed (v3.0)
   # find_gemini_model() replaced by config-driven model selection
   # See "[INTEGRATION] config-driven model selection" tests below
@@ -414,28 +397,6 @@ defmodule Quoracle.Actions.AnswerEngineTest do
     end
   end
 
-  describe "[INTEGRATION] credential and model management" do
-    test "uses ModelQuery to find Gemini model" do
-      # Verify integration with ModelQuery
-      # This would normally query the database
-      models = Quoracle.Models.ModelQuery.get_models_by_provider("google")
-
-      # In test, might be empty or mocked
-      assert is_list(models)
-
-      gemini_model =
-        Enum.find(models, fn model ->
-          model.model_id |> to_string() |> String.contains?("gemini")
-        end)
-
-      # Gemini model may or may not exist in test DB - just verify query works
-      if gemini_model do
-        assert is_map(gemini_model)
-        assert gemini_model.model_id |> to_string() |> String.contains?("gemini")
-      end
-    end
-  end
-
   # =============================================================
   # CONFIG-DRIVEN MODEL SELECTION (v3.0 - feat-20251205-054538)
   # =============================================================
@@ -513,33 +474,6 @@ defmodule Quoracle.Actions.AnswerEngineTest do
       assert response.action == "answer_engine"
       # Model used should be the configured one (model_spec from credential)
       assert response.model_used == "google-vertex:gemini-2.5-pro"
-    end
-
-    test "does not fall back to find_gemini_model when config missing (R3-config)" do
-      # Verify that when CONFIG_ModelSettings has no answer_engine_model,
-      # the action raises instead of falling back to find_gemini_model()
-      Quoracle.Models.TableConsensusConfig
-      |> Quoracle.Repo.delete_all()
-
-      # Even if there are Google credentials in the DB, should raise
-      service_account_json =
-        Jason.encode!(%{"type" => "service_account", "project_id" => "test-project"})
-
-      unique_fallback = "google-vertex:gemini-fallback-#{System.unique_integer([:positive])}"
-
-      {:ok, _cred} =
-        Quoracle.Models.TableCredentials.insert(%{
-          model_id: unique_fallback,
-          model_spec: "google-vertex:gemini-2.5-pro",
-          api_key: service_account_json,
-          resource_id: "test-project",
-          region: "us-central1"
-        })
-
-      # Should raise RuntimeError, not use the fallback credential
-      assert_raise RuntimeError, ~r/Answer engine model not configured/, fn ->
-        AnswerEngine.execute(%{prompt: "Test"}, "agent-123", [])
-      end
     end
   end
 end

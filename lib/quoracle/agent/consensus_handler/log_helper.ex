@@ -23,7 +23,12 @@ defmodule Quoracle.Agent.ConsensusHandler.LogHelper do
     :missing_required_param,
     :invalid_param,
     :unknown_parameter,
-    :service_unavailable
+    :unknown_action,
+    :service_unavailable,
+    :connection_refused,
+    :connection_closed,
+    :timeout,
+    :econnrefused
   ]
 
   @doc """
@@ -32,6 +37,16 @@ defmodule Quoracle.Agent.ConsensusHandler.LogHelper do
   @spec log_action_error(term()) :: :ok
   def log_action_error(reason) when reason in @warning_errors do
     Logger.warning("Action failed: #{inspect(reason)}")
+  end
+
+  # L5: Unwrap {:error, reason} wrapper (from ActionResultHandler)
+  def log_action_error({:error, reason}) do
+    log_action_error(reason)
+  end
+
+  # L4: Handle {:action_crashed, tuple_reason} (noproc, timeout, etc.)
+  def log_action_error({:action_crashed, reason}) when is_tuple(reason) do
+    Logger.error("Action execution crashed: {:action_crashed, #{inspect(reason)}}")
   end
 
   # Registry errors during test cleanup are warnings, not errors

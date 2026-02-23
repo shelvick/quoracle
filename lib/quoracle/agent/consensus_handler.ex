@@ -114,20 +114,45 @@ defmodule Quoracle.Agent.ConsensusHandler do
       skills_path: Map.get(state, :skills_path)
     ]
 
-    # Calculate per-model message counts by actually building messages
-    # This accounts for merging consecutive same-role messages
-    per_model_counts =
-      Enum.map(models_list, fn model_id ->
-        # Build messages as PerModelQuery will (includes merging)
-        messages = Quoracle.Agent.ContextManager.build_conversation_messages(state, model_id)
+    # v38.0: Lazy-build and cache system prompt for reuse across consensus cycles.
+    # Skip caching on fast-path (Option E) since it bypasses the entire pipeline.
+    {prompt_opts, state} =
+      if Quoracle.Agent.Consensus.TestMode.fast_test_path?(state, consensus_opts) do
+        {prompt_opts, state}
+      else
+        case Map.get(state, :cached_system_prompt) do
+          nil ->
+            # Include field_prompts so the agent's role/cognitive_style/constraints
+            # are embedded in the identity section of the cached prompt
+            cache_build_opts =
+              prompt_opts ++
+                [
+                  field_prompts: %{system_prompt: Map.get(state, :system_prompt)},
+                  sandbox_owner: Map.get(state, :sandbox_owner)
+                ]
 
-        # Add system prompt (+1) - user_prompt no longer injected (flows through history)
-        length(messages) + 1
-      end)
+            prompt =
+              Quoracle.Consensus.PromptBuilder.build_system_prompt_with_context(cache_build_opts)
 
-    counts_str = Enum.join(per_model_counts, "/")
+            {Keyword.put(prompt_opts, :cached_system_prompt, prompt),
+             Map.put(state, :cached_system_prompt, prompt)}
+
+          existing ->
+            {Keyword.put(prompt_opts, :cached_system_prompt, existing), state}
+        end
+      end
 
     if is_atom(pubsub) and pubsub != :test_pubsub do
+      # Calculate per-model message counts by actually building messages
+      # This accounts for merging consecutive same-role messages
+      per_model_counts =
+        Enum.map(models_list, fn model_id ->
+          messages = Quoracle.Agent.ContextManager.build_conversation_messages(state, model_id)
+          length(messages) + 1
+        end)
+
+      counts_str = Enum.join(per_model_counts, "/")
+
       # Build sent_messages for UI using shared MessageBuilder
       sent_messages = MessageBuilder.build_messages_for_models(state, models_list, prompt_opts)
 

@@ -33,7 +33,7 @@ defmodule Quoracle.Actions.Spawn.BudgetValidation do
             # N/A, nil, or unknown parent - child gets N/A budget (unlimited)
             {:ok,
              %{
-               child_budget_data: %{mode: :na, allocated: nil, committed: nil},
+               child_budget_data: Quoracle.Budget.Schema.new_na(),
                escrow_amount: nil
              }}
         end

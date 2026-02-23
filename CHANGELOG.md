@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.16] - 2026-02-23
+
+### Added
+
+- System prompt caching in the consensus pipeline for improved performance.
+- MCP Client lifecycle monitoring with liveness guards and crash-to-error logging.
+
+### Fixed
+
+- Cost display budget timeouts and model attribution loss after child dismissal.
+- Infinite continuation loop in fast-path consensus.
+- `Decimal.decimal(nil)` crash in `Tracker.over_budget?` for N/A budgets.
+- `Response.text()` blindness to pure JSON responses.
+- Google Vertex string error body handling in RetryHelper v3.3.
+- Silent result loss from HTTP actions missing timeout overrides.
+
+### Changed
+
+- DRY Aggregator SQL with extracted ResponseLogger module.
+- Test suite optimization: removed ~230 redundant tests, split heavy modules, migrated 23 files from DataCase to ExUnit.Case.
+
 ## [0.1.15] - 2026-02-21
 
 ### Fixed

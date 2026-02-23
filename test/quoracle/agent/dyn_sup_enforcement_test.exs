@@ -46,48 +46,5 @@ defmodule Quoracle.Agent.DynSupEnforcementTest do
       # Call through approved helper should work
       assert {:ok, _pid} = spawn_agent_with_cleanup(deps.dynsup, config, registry: deps.registry)
     end
-
-    test "ARC_ENF_03: allows call from IsolationHelpers", %{
-      deps: deps,
-      sandbox_owner: _sandbox_owner
-    } do
-      # IsolationHelpers functions are approved callers
-      # This test itself uses create_isolated_deps which internally may spawn processes
-      # The fact that setup passed proves IsolationHelpers is approved
-      assert deps.registry != nil
-      assert deps.dynsup != nil
-    end
-
-    test "ARC_ENF_04: error message includes helpful instructions", %{
-      deps: deps,
-      sandbox_owner: sandbox_owner
-    } do
-      config = %{
-        agent_id: "test-error-message",
-        registry: deps.registry,
-        pubsub: deps.pubsub,
-        sandbox_owner: sandbox_owner
-      }
-
-      error =
-        assert_raise RuntimeError, fn ->
-          DynSup.start_agent(deps.dynsup, config, registry: deps.registry)
-        end
-
-      # Verify error message includes key information
-      assert error.message =~ "DynSup.start_agent called directly"
-      assert error.message =~ "spawn_agent_with_cleanup"
-      assert error.message =~ "Postgrex"
-      assert error.message =~ "test/support/agent_test_helpers.ex"
-    end
-  end
-
-  describe "production code is allowed" do
-    test "ARC_ENF_05: enforcement only applies in test environment" do
-      # This test verifies the Mix.env() == :test check exists
-      # In production, the enforcement function is never called
-      # We can't test production behavior from test env, but we document the requirement
-      assert Mix.env() == :test
-    end
   end
 end

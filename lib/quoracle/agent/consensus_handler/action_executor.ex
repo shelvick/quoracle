@@ -99,8 +99,10 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
     # Add decision to history using StateUtils (with corrected wait value)
     state = StateUtils.add_history_entry(state, :decision, action_response)
 
-    # Persist updated conversation history to database
-    Core.persist_conversation(state)
+    # Persist updated conversation history to database (skip in test mode for speed)
+    unless Map.get(state, :test_mode, false) && !force_persist?(state) do
+      Core.persist_conversation(state)
+    end
 
     # Generate action ID using current counter
     # Use Map.get for optional fields (works with both structs and maps)
@@ -112,14 +114,26 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
 
     execute_opts = build_execute_opts(state, action_id, agent_pid, action_response)
 
-    # v36.0: Force synchronous execution for MCP actions.
-    # MCP retry delays (500ms+) exceed the 100ms smart_threshold, causing async dispatch
-    # which loses results. A 10-minute timeout covers worst-case retry scenarios.
+    # Force synchronous execution for actions whose latency exceeds the 100ms
+    # smart_threshold.  Without an explicit timeout the Router enters "smart mode",
+    # yields for only 100ms, and returns {:async_task, ...}.  The ActionExecutor
+    # background Task then casts that opaque tuple as the "result", the agent
+    # removes the action from pending_actions, and the *real* result arriving
+    # later is silently discarded (unknown action_id).
+    #
+    # v36.0: :call_mcp — MCP retry delays (500ms+) exceed threshold.
+    # v28.0: :adjust_budget — GenServer.call(parent, ..., :infinity) blocks.
+    # v39.0: :answer_engine, :fetch_web, :call_api, :generate_images — HTTP
+    #        API calls routinely exceed 100ms (DNS + TLS + server processing).
     execute_opts =
-      if action_atom == :call_mcp do
-        Keyword.put_new(execute_opts, :timeout, 600_000)
-      else
-        execute_opts
+      case action_atom do
+        :call_mcp -> Keyword.put_new(execute_opts, :timeout, 600_000)
+        :adjust_budget -> Keyword.put_new(execute_opts, :timeout, :infinity)
+        :answer_engine -> Keyword.put_new(execute_opts, :timeout, 120_000)
+        :fetch_web -> Keyword.put_new(execute_opts, :timeout, 60_000)
+        :call_api -> Keyword.put_new(execute_opts, :timeout, 120_000)
+        :generate_images -> Keyword.put_new(execute_opts, :timeout, 300_000)
+        _ -> execute_opts
       end
 
     # v25.0: Route check_id through existing Router from shell_routers,
@@ -345,5 +359,9 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
     active_routers = Map.get(state, :active_routers, %{})
     state = Map.put(state, :active_routers, Map.put(active_routers, monitor_ref, router_pid))
     {router_pid, state}
+  end
+
+  defp force_persist?(state) do
+    state |> Map.get(:test_opts, []) |> Keyword.get(:force_persist, false)
   end
 end
