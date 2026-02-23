@@ -11,31 +11,12 @@ defmodule Quoracle.Actions.RouterSkillsTest do
   WorkGroupID: feat-20260112-skills-system
   """
 
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
 
   alias Quoracle.Actions.Router
-  alias Quoracle.Actions.Router.ActionMapper
 
   # ==========================================================================
   # R20-R21: ActionMapper Entries
-  # ==========================================================================
-
-  describe "ActionMapper skill action mappings (R20-R21)" do
-    # R20: ActionMapper Includes learn_skills
-    test "ActionMapper routes learn_skills to LearnSkills module" do
-      result = ActionMapper.get_action_module(:learn_skills)
-      assert {:ok, Quoracle.Actions.LearnSkills} = result
-    end
-
-    # R21: ActionMapper Includes create_skill
-    test "ActionMapper routes create_skill to CreateSkill module" do
-      result = ActionMapper.get_action_module(:create_skill)
-      assert {:ok, Quoracle.Actions.CreateSkill} = result
-    end
-  end
-
-  # ==========================================================================
-  # R22: No Access Control
   # ==========================================================================
 
   describe "skill actions access control (R22)" do

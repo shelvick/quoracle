@@ -12,7 +12,7 @@
 - security/: Secret resolution and output scrubbing (added 2025-10-24)
 - audit/: Secret usage tracking (added 2025-10-24)
 - mcp/: Model Context Protocol client and configuration (added 2025-11-26)
-- costs/: Agent cost tracking - AgentCost schema, Recorder, Aggregator (added 2025-12-13)
+- costs/: Agent cost tracking - AgentCost schema, Recorder, Aggregator v3.0 with DRY SQL + per-model detailed queries (added 2025-12-13)
 
 ## Supervision Tree
 ```

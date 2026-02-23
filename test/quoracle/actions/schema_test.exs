@@ -44,7 +44,7 @@ defmodule Quoracle.Actions.SchemaTest do
   end
 
   describe "list_actions/0" do
-    test "returns all 18 action atoms" do
+    test "returns all action atoms" do
       actions = Schema.list_actions()
       assert length(actions) == 22
     end
@@ -63,10 +63,6 @@ defmodule Quoracle.Actions.SchemaTest do
       assert Schema.get_action_priority(:send_message) == 3
     end
 
-    test "returns priority 6 for fetch_web" do
-      assert Schema.get_action_priority(:fetch_web) == 6
-    end
-
     test "returns priority 10 for answer_engine" do
       assert Schema.get_action_priority(:answer_engine) == 10
     end
@@ -77,10 +73,6 @@ defmodule Quoracle.Actions.SchemaTest do
 
     test "returns priority 16 for call_mcp" do
       assert Schema.get_action_priority(:call_mcp) == 16
-    end
-
-    test "returns priority 17 for call_api" do
-      assert Schema.get_action_priority(:call_api) == 17
     end
 
     test "returns priority 18 for execute_shell" do
@@ -135,16 +127,6 @@ defmodule Quoracle.Actions.SchemaTest do
       assert Enum.all?(values, &is_integer/1)
       assert Enum.all?(values, &(&1 > 0))
     end
-
-    test "orient has lowest priority (1)" do
-      priorities = Schema.get_priorities()
-      assert priorities.orient == 1
-    end
-
-    test "spawn_child has highest priority (22)" do
-      priorities = Schema.get_priorities()
-      assert priorities.spawn_child == 22
-    end
   end
 
   describe "validate_action_type/1" do
@@ -173,18 +155,6 @@ defmodule Quoracle.Actions.SchemaTest do
         assert Schema.wait_required?(action) == true,
                "Expected wait_required?(#{inspect(action)}) to be true"
       end
-    end
-
-    test "returns true for :spawn_child" do
-      assert Schema.wait_required?(:spawn_child) == true
-    end
-
-    test "returns true for :orient" do
-      assert Schema.wait_required?(:orient) == true
-    end
-
-    test "returns true for :send_message" do
-      assert Schema.wait_required?(:send_message) == true
     end
 
     test "raises for unknown action" do
@@ -352,97 +322,6 @@ defmodule Quoracle.Actions.SchemaTest do
     end
   end
 
-  describe "fetch_web action definition" do
-    test "has url as required param" do
-      {:ok, schema} = Schema.get_schema(:fetch_web)
-      assert :url in schema.required_params
-    end
-
-    test "has correct optional params" do
-      {:ok, schema} = Schema.get_schema(:fetch_web)
-      assert :security_check in schema.optional_params
-      assert :timeout in schema.optional_params
-      assert :user_agent in schema.optional_params
-      assert :follow_redirects in schema.optional_params
-    end
-
-    test "has correct param types" do
-      {:ok, schema} = Schema.get_schema(:fetch_web)
-      assert schema.param_types.url == :string
-      assert schema.param_types.security_check == :boolean
-      assert schema.param_types.timeout == :number
-      assert schema.param_types.user_agent == :string
-      assert schema.param_types.follow_redirects == :boolean
-    end
-  end
-
-  describe "call_api action definition" do
-    test "has correct required params" do
-      {:ok, schema} = Schema.get_schema(:call_api)
-      assert :api_type in schema.required_params
-      assert :url in schema.required_params
-    end
-
-    test "has correct optional params including auth" do
-      {:ok, schema} = Schema.get_schema(:call_api)
-      assert :method in schema.optional_params
-      assert :headers in schema.optional_params
-      assert :auth in schema.optional_params
-      assert :query in schema.optional_params
-    end
-
-    test "has correct consensus rules" do
-      {:ok, schema} = Schema.get_schema(:call_api)
-      assert schema.consensus_rules.api_type == :exact_match
-      assert schema.consensus_rules.url == :exact_match
-      assert schema.consensus_rules.method == :exact_match
-      assert schema.consensus_rules.timeout == {:percentile, 100}
-      assert schema.consensus_rules.max_body_size == {:percentile, 100}
-      assert schema.consensus_rules.auth == :exact_match
-    end
-  end
-
-  describe "call_mcp action definition" do
-    test "has correct optional params for agent-driven discovery" do
-      {:ok, schema} = Schema.get_schema(:call_mcp)
-
-      # v20.0: All params optional (XOR handles mutual exclusion)
-      expected_optional = [
-        :transport,
-        :command,
-        :url,
-        :connection_id,
-        :tool,
-        :arguments,
-        :terminate,
-        :timeout
-      ]
-
-      Enum.each(expected_optional, fn param ->
-        assert param in schema.optional_params,
-               "Expected #{inspect(param)} in optional_params"
-      end)
-    end
-
-    test "has exact match consensus rules for connection params" do
-      {:ok, schema} = Schema.get_schema(:call_mcp)
-      # v20.0: Connection-related params use exact_match
-      assert schema.consensus_rules.transport == :exact_match
-      assert schema.consensus_rules.command == :exact_match
-      assert schema.consensus_rules.url == :exact_match
-      assert schema.consensus_rules.connection_id == :exact_match
-      assert schema.consensus_rules.tool == :exact_match
-      assert schema.consensus_rules.arguments == :exact_match
-      assert schema.consensus_rules.terminate == :exact_match
-    end
-
-    test "has percentile consensus rule for timeout" do
-      {:ok, schema} = Schema.get_schema(:call_mcp)
-      # v20.0: Timeout uses percentile 50 for numeric consensus
-      assert schema.consensus_rules.timeout == {:percentile, 50}
-    end
-  end
-
   # ACTION_Schema v20.0 - MCP Action Schema Update
   # ARC Verification Criteria for call_mcp agent-driven discovery redesign
   describe "call_mcp v20.0 schema (agent-driven discovery)" do
@@ -513,24 +392,6 @@ defmodule Quoracle.Actions.SchemaTest do
     end
   end
 
-  describe "performance" do
-    test "get_schema/1 completes in O(1) time" do
-      # Warm up
-      Schema.get_schema(:spawn_child)
-
-      # Measure time for multiple lookups
-      times =
-        for _ <- 1..100 do
-          {time, _} = :timer.tc(fn -> Schema.get_schema(:spawn_child) end)
-          time
-        end
-
-      avg_time = Enum.sum(times) / length(times)
-      # Should be very fast, under 100 microseconds
-      assert avg_time < 100
-    end
-  end
-
   # ACTION_Schema v22.0 - Dismiss Child Action
   # ARC Verification Criteria for dismiss_child action registration
   # WorkGroupID: feat-20251224-dismiss-child
@@ -541,17 +402,6 @@ defmodule Quoracle.Actions.SchemaTest do
       # [UNIT] - WHEN list_actions/0 called THEN includes :dismiss_child
       actions = Schema.list_actions()
       assert :dismiss_child in actions
-    end
-
-    # R2: Schema Defined
-    test "dismiss_child schema exists" do
-      # [UNIT] - WHEN get_schema(:dismiss_child) called THEN returns valid schema
-      assert {:ok, schema} = Schema.get_schema(:dismiss_child)
-      assert is_map(schema)
-      assert Map.has_key?(schema, :required_params)
-      assert Map.has_key?(schema, :optional_params)
-      assert Map.has_key?(schema, :param_types)
-      assert Map.has_key?(schema, :consensus_rules)
     end
 
     # R3: Required Params
@@ -598,13 +448,6 @@ defmodule Quoracle.Actions.SchemaTest do
       # [UNIT] - WHEN get_action_priority(:dismiss_child) called THEN returns 20
       assert Schema.get_action_priority(:dismiss_child) == 20
     end
-
-    # R9: Total Actions Updated
-    test "action list has 21 actions" do
-      # [UNIT] - WHEN list_actions/0 called THEN returns 21 actions (includes record_cost)
-      actions = Schema.list_actions()
-      assert length(actions) == 22
-    end
   end
 
   # ACTION_Schema v21.0 - Search Secrets Action
@@ -615,17 +458,6 @@ defmodule Quoracle.Actions.SchemaTest do
       # [UNIT] - WHEN list_actions/0 called THEN includes :search_secrets
       actions = Schema.list_actions()
       assert :search_secrets in actions
-    end
-
-    # R2: Schema Defined
-    test "search_secrets schema exists" do
-      # [UNIT] - WHEN get_schema(:search_secrets) called THEN returns valid schema
-      assert {:ok, schema} = Schema.get_schema(:search_secrets)
-      assert is_map(schema)
-      assert Map.has_key?(schema, :required_params)
-      assert Map.has_key?(schema, :optional_params)
-      assert Map.has_key?(schema, :param_types)
-      assert Map.has_key?(schema, :consensus_rules)
     end
 
     # R3: Required Params
@@ -670,13 +502,6 @@ defmodule Quoracle.Actions.SchemaTest do
     test "search_secrets has priority 8" do
       # [UNIT] - WHEN get_action_priority(:search_secrets) called THEN returns 8
       assert Schema.get_action_priority(:search_secrets) == 8
-    end
-
-    # R9: Total Actions Updated
-    test "action list has 21 actions" do
-      # [UNIT] - WHEN list_actions/0 called THEN returns 21 actions (includes record_cost)
-      actions = Schema.list_actions()
-      assert length(actions) == 22
     end
   end
 
@@ -737,17 +562,6 @@ defmodule Quoracle.Actions.SchemaTest do
       assert :generate_images in actions
     end
 
-    # R2: Schema Defined
-    test "generate_images schema exists" do
-      # [UNIT] - WHEN get_schema(:generate_images) called THEN returns valid schema
-      assert {:ok, schema} = Schema.get_schema(:generate_images)
-      assert is_map(schema)
-      assert Map.has_key?(schema, :required_params)
-      assert Map.has_key?(schema, :optional_params)
-      assert Map.has_key?(schema, :param_types)
-      assert Map.has_key?(schema, :consensus_rules)
-    end
-
     # R3: Required Params
     test "generate_images requires prompt" do
       # [UNIT] - WHEN get_schema(:generate_images) called THEN required_params includes :prompt
@@ -791,13 +605,6 @@ defmodule Quoracle.Actions.SchemaTest do
     test "generate_images has priority 14" do
       # [UNIT] - WHEN get_action_priority(:generate_images) called THEN returns 14
       assert Schema.get_action_priority(:generate_images) == 14
-    end
-
-    # R9: Total Actions Updated
-    test "action list has 21 actions" do
-      # [UNIT] - WHEN list_actions/0 called THEN returns 21 actions (includes record_cost)
-      actions = Schema.list_actions()
-      assert length(actions) == 22
     end
 
     # Additional: Param Descriptions

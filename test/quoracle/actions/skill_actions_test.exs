@@ -8,7 +8,7 @@ defmodule Quoracle.Actions.SkillActionsTest do
   - ACTION_CreateSkill: R1-R12
   """
 
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
 
   alias Quoracle.Actions.LearnSkills
   alias Quoracle.Actions.CreateSkill
@@ -442,51 +442,6 @@ defmodule Quoracle.Actions.SkillActionsTest do
         )
 
       assert result.name == "string-keys"
-    end
-  end
-
-  # ===========================================================================
-  # Router Integration Tests (R7, R11, R12)
-  # ===========================================================================
-
-  describe "Router integration" do
-    @describetag :router_integration
-
-    # Note: These tests require Router implementation that dispatches to action modules
-    # The Router needs to recognize :learn_skills, :create_skill actions
-
-    test "[LearnSkills R11] Router.execute dispatches to LearnSkills", %{
-      base_name: base_name,
-      skills_path: path
-    } do
-      create_test_skill(base_name, "router-learn-skill")
-
-      {:ok, result} =
-        LearnSkills.execute(
-          %{skills: ["router-learn-skill"]},
-          "agent-1",
-          skills_path: path
-        )
-
-      assert result.action == "learn_skills"
-    end
-
-    test "[CreateSkill R12] Router.execute dispatches to CreateSkill", %{
-      base_name: _base_name,
-      skills_path: path
-    } do
-      {:ok, result} =
-        CreateSkill.execute(
-          %{
-            name: "router-create-skill",
-            description: "Via router",
-            content: "Content"
-          },
-          "agent-1",
-          skills_path: path
-        )
-
-      assert result.action == "create_skill"
     end
   end
 end

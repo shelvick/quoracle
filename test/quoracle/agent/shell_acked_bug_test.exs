@@ -8,7 +8,7 @@ defmodule Quoracle.Agent.ShellAckedBugTest do
   FIX: action_executor.ex async branch now sets acked: true so messages flow during
   async shell execution.
   """
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
 
   alias Quoracle.Agent.MessageHandler
 

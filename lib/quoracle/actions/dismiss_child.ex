@@ -142,17 +142,19 @@ defmodule Quoracle.Actions.DismissChild do
 
       # Snapshot budget state BEFORE termination (TreeTerminator v2.0 deletes cost records)
       child_budget_data = get_child_budget_data(child_id, deps.registry)
-      tree_spent = query_child_tree_spent(child_id)
+      {tree_spent, per_model} = query_child_tree_by_model(child_id)
 
       TreeTerminator.terminate_tree(child_id, parent_id, reason, deps)
 
-      # Reconcile budget: create absorption record, release escrow (v4.0)
+      # Reconcile budget: create per-model absorption records, release escrow (v5.0)
       reconcile_child_budget(
+        parent_id,
         parent_pid,
         child_budget_data,
         child_id,
         task_id,
         tree_spent,
+        per_model,
         deps.pubsub
       )
 
@@ -189,41 +191,47 @@ defmodule Quoracle.Actions.DismissChild do
     end
   end
 
-  # Query total tree spent before termination deletes records (v4.0)
-  @spec query_child_tree_spent(String.t()) :: Decimal.t()
-  defp query_child_tree_spent(child_id) do
-    own_costs = Aggregator.by_agent(child_id)
-    children_costs = Aggregator.by_agent_children(child_id)
+  # Query per-model tree costs before termination deletes records (v5.0)
+  # Returns {total_tree_spent, per_model_breakdown} for absorption record creation.
+  @spec query_child_tree_by_model(String.t()) :: {Decimal.t(), [map()]}
+  defp query_child_tree_by_model(child_id) do
+    per_model = Aggregator.by_agent_tree_and_model_detailed(child_id)
 
-    own_spent = own_costs.total_cost || Decimal.new("0")
-    children_spent = children_costs.total_cost || Decimal.new("0")
-    Decimal.add(own_spent, children_spent)
+    tree_spent =
+      Enum.reduce(per_model, Decimal.new("0"), fn row, acc ->
+        if row.total_cost, do: Decimal.add(acc, row.total_cost), else: acc
+      end)
+
+    {tree_spent, per_model}
   end
 
-  # Reconcile budget with pre-queried spent (after tree termination) (v4.0)
-  # v4.1: Always create absorption record for non-zero costs to preserve task-level totals.
-  # Previously, N/A children had their cost records deleted by TreeTerminator with no
-  # replacement, causing task costs to drop.
+  # Reconcile budget with per-model breakdown (after tree termination) (v5.0)
+  # Creates per-model absorption records to preserve model attribution in Cost Details UI.
+  # Uses parent_id string directly (no Core.get_state call needed).
   @spec reconcile_child_budget(
+          String.t(),
           pid() | nil,
           map() | nil,
           String.t(),
           binary() | nil,
           Decimal.t(),
+          [map()],
           atom() | nil
         ) :: :ok
   defp reconcile_child_budget(
+         parent_id,
          parent_pid,
          child_budget_data,
          child_id,
          task_id,
          tree_spent,
+         per_model,
          pubsub
        ) do
-    # Step 1: Create absorption record for any non-zero costs (all budget modes)
-    create_absorption_record(parent_pid, child_budget_data, child_id, task_id, tree_spent, pubsub)
-
-    # Step 2: Release escrow only for allocated children
+    # Step 1: Release escrow FIRST for allocated children (requires live parent).
+    # This is the volatile operation — if parent crashes between escrow release and
+    # absorption, the committed budget is already freed (no leak). Absorption records
+    # are durable DB inserts that can be retried or created even with a dead parent.
     case child_budget_data do
       %{mode: :allocated, allocated: allocated} when not is_nil(allocated) ->
         if parent_pid && Process.alive?(parent_pid) do
@@ -238,44 +246,66 @@ defmodule Quoracle.Actions.DismissChild do
         :ok
     end
 
+    # Step 2: Create per-model absorption records (no process liveness needed)
+    create_absorption_records(
+      parent_id,
+      child_budget_data,
+      child_id,
+      task_id,
+      tree_spent,
+      per_model,
+      pubsub
+    )
+
     :ok
   end
 
-  # Create absorption cost record under parent to preserve task-level totals.
-  # TreeTerminator deletes the child's original cost records, so this record
-  # ensures those costs remain visible in task-level aggregation queries.
-  @spec create_absorption_record(
-          pid() | nil,
+  # Create per-model absorption cost records under parent to preserve task-level totals
+  # and model attribution. TreeTerminator deletes the child's original cost records,
+  # so these records ensure costs remain visible in both task-level and per-model queries.
+  # Uses parent_id string directly — no process liveness check or Core.get_state needed.
+  @spec create_absorption_records(
+          String.t(),
           map() | nil,
           String.t(),
           binary() | nil,
           Decimal.t(),
+          [map()],
           atom() | nil
         ) :: :ok
-  defp create_absorption_record(nil, _budget_data, _child_id, _task_id, _tree_spent, _pubsub) do
+  defp create_absorption_records(
+         _parent_id,
+         _budget_data,
+         _child_id,
+         _task_id,
+         _tree_spent,
+         [],
+         _pubsub
+       ) do
     :ok
   end
 
-  defp create_absorption_record(parent_pid, budget_data, child_id, task_id, tree_spent, pubsub) do
-    if !Decimal.equal?(tree_spent, 0) && Process.alive?(parent_pid) do
-      try do
-        {:ok, parent_state} = Core.get_state(parent_pid)
-        parent_agent_id = parent_state.agent_id
+  defp create_absorption_records(
+         parent_id,
+         budget_data,
+         child_id,
+         task_id,
+         tree_spent,
+         per_model,
+         pubsub
+       ) do
+    allocated = if budget_data, do: budget_data[:allocated], else: nil
 
-        allocated = if budget_data, do: budget_data[:allocated], else: nil
+    Enum.each(per_model, fn model_row ->
+      cost_usd = model_row.total_cost
 
+      if cost_usd && !Decimal.equal?(cost_usd, 0) do
         cost_data = %{
-          agent_id: parent_agent_id,
+          agent_id: parent_id,
           task_id: task_id,
           cost_type: "child_budget_absorbed",
-          cost_usd: tree_spent,
-          metadata: %{
-            child_agent_id: child_id,
-            child_allocated: format_allocated(allocated),
-            child_tree_spent: decimal_to_string(tree_spent),
-            unspent_returned: format_unspent(allocated, tree_spent),
-            dismissed_at: DateTime.to_iso8601(DateTime.utc_now())
-          }
+          cost_usd: cost_usd,
+          metadata: build_absorption_metadata(model_row, child_id, allocated, tree_spent)
         }
 
         if pubsub do
@@ -283,12 +313,40 @@ defmodule Quoracle.Actions.DismissChild do
         else
           Recorder.record_silent(cost_data)
         end
-      catch
-        :exit, _ -> :ok
       end
-    end
+    end)
 
     :ok
+  end
+
+  # Build absorption metadata for a per-model record.
+  # Includes model_spec and token data when present (LLM costs),
+  # omits model_spec for external/non-model costs.
+  # Preserves child_tree_spent and unspent_returned for backward compatibility.
+  @spec build_absorption_metadata(map(), String.t(), Decimal.t() | nil, Decimal.t()) :: map()
+  defp build_absorption_metadata(model_row, child_id, allocated, tree_spent) do
+    base = %{
+      "child_agent_id" => child_id,
+      "child_allocated" => format_allocated(allocated),
+      "child_tree_spent" => decimal_to_string(tree_spent),
+      "unspent_returned" => format_unspent(allocated, tree_spent),
+      "dismissed_at" => DateTime.to_iso8601(DateTime.utc_now())
+    }
+
+    if model_row.model_spec do
+      Map.merge(base, %{
+        "model_spec" => model_row.model_spec,
+        "input_tokens" => to_string(model_row.input_tokens || 0),
+        "output_tokens" => to_string(model_row.output_tokens || 0),
+        "reasoning_tokens" => to_string(model_row.reasoning_tokens || 0),
+        "cached_tokens" => to_string(model_row.cached_tokens || 0),
+        "cache_creation_tokens" => to_string(model_row.cache_creation_tokens || 0),
+        "input_cost" => decimal_to_string(model_row.input_cost || Decimal.new("0")),
+        "output_cost" => decimal_to_string(model_row.output_cost || Decimal.new("0"))
+      })
+    else
+      base
+    end
   end
 
   # Format allocated for absorption metadata

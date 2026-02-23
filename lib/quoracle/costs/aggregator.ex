@@ -27,7 +27,7 @@ defmodule Quoracle.Costs.Aggregator do
         }
 
   @type model_cost_detailed :: %{
-          model_spec: String.t(),
+          model_spec: String.t() | nil,
           request_count: non_neg_integer(),
           # Token counts (5 types)
           input_tokens: non_neg_integer(),
@@ -269,6 +269,27 @@ defmodule Quoracle.Costs.Aggregator do
   # Detailed Per-Model Queries (v2.0 - Token Breakdown)
   # ============================================================
 
+  # Shared SELECT clause for detailed model queries (DRY across single-ID and multi-ID variants)
+  @detailed_select """
+  SELECT
+    metadata->>'model_spec' as model_spec,
+    COUNT(*) as request_count,
+    SUM(COALESCE((metadata->>'input_tokens')::integer, 0)) as input_tokens,
+    SUM(COALESCE((metadata->>'output_tokens')::integer, 0)) as output_tokens,
+    SUM(COALESCE((metadata->>'reasoning_tokens')::integer, 0)) as reasoning_tokens,
+    SUM(COALESCE((metadata->>'cached_tokens')::integer, 0)) as cached_tokens,
+    SUM(COALESCE((metadata->>'cache_creation_tokens')::integer, 0)) as cache_creation_tokens,
+    SUM(COALESCE((metadata->>'input_cost')::numeric, 0)) as input_cost,
+    SUM(COALESCE((metadata->>'output_cost')::numeric, 0)) as output_cost,
+    SUM(cost_usd) as total_cost
+  FROM agent_costs
+  """
+
+  @detailed_group_order """
+  GROUP BY metadata->>'model_spec'
+  ORDER BY total_cost DESC NULLS LAST
+  """
+
   @doc """
   Returns detailed costs grouped by model_spec for a task.
   Includes all 5 token types and aggregate costs.
@@ -288,29 +309,21 @@ defmodule Quoracle.Costs.Aggregator do
     execute_detailed_model_query("agent_id", agent_id)
   end
 
-  # Shared SQL execution for detailed model queries
+  # Single-ID detailed query (filters out NULL model_spec for UI display)
   @spec execute_detailed_model_query(String.t(), binary() | String.t()) :: [model_cost_detailed()]
   defp execute_detailed_model_query(id_column, id_value) do
-    sql = """
-    SELECT
-      metadata->>'model_spec' as model_spec,
-      COUNT(*) as request_count,
-      SUM(COALESCE((metadata->>'input_tokens')::integer, 0)) as input_tokens,
-      SUM(COALESCE((metadata->>'output_tokens')::integer, 0)) as output_tokens,
-      SUM(COALESCE((metadata->>'reasoning_tokens')::integer, 0)) as reasoning_tokens,
-      SUM(COALESCE((metadata->>'cached_tokens')::integer, 0)) as cached_tokens,
-      SUM(COALESCE((metadata->>'cache_creation_tokens')::integer, 0)) as cache_creation_tokens,
-      SUM(COALESCE((metadata->>'input_cost')::numeric, 0)) as input_cost,
-      SUM(COALESCE((metadata->>'output_cost')::numeric, 0)) as output_cost,
-      SUM(cost_usd) as total_cost
-    FROM agent_costs
-    WHERE #{id_column} = $1
-      AND metadata->>'model_spec' IS NOT NULL
-    GROUP BY metadata->>'model_spec'
-    ORDER BY total_cost DESC NULLS LAST
-    """
+    sql =
+      @detailed_select <>
+        "WHERE #{id_column} = $1\n  AND metadata->>'model_spec' IS NOT NULL\n" <>
+        @detailed_group_order
 
-    case Repo.query(sql, [id_value]) do
+    execute_detailed_sql(sql, [id_value])
+  end
+
+  # Shared SQL execution for detailed model queries
+  @spec execute_detailed_sql(String.t(), [term()]) :: [model_cost_detailed()]
+  defp execute_detailed_sql(sql, params) do
+    case Repo.query(sql, params) do
       {:ok, %{rows: rows}} ->
         Enum.map(rows, &row_to_detailed_model_cost/1)
 
@@ -359,6 +372,43 @@ defmodule Quoracle.Costs.Aggregator do
   end
 
   defp to_decimal_or_nil(_), do: nil
+
+  # ============================================================
+  # Per-Model Subtree Queries (v3.0)
+  # ============================================================
+
+  @doc """
+  Returns detailed costs grouped by model_spec for an agent's entire subtree
+  (the agent itself plus all descendants). Includes costs with NULL model_spec
+  as a separate group (model_spec: nil in the returned map).
+
+  Used by DismissChild to snapshot per-model costs before TreeTerminator
+  deletes cost records, enabling per-model absorption record creation.
+  """
+  @spec by_agent_tree_and_model_detailed(String.t()) :: [model_cost_detailed()]
+  def by_agent_tree_and_model_detailed(agent_id) do
+    descendant_ids = get_descendant_agent_ids(agent_id)
+    all_ids = [agent_id | descendant_ids]
+    by_agent_ids_and_model_detailed(all_ids)
+  end
+
+  @doc """
+  Returns detailed costs grouped by model_spec for a list of agent_ids.
+  Includes records with NULL model_spec (returned with model_spec: nil).
+  """
+  @spec by_agent_ids_and_model_detailed([String.t()]) :: [model_cost_detailed()]
+  def by_agent_ids_and_model_detailed([]), do: []
+
+  def by_agent_ids_and_model_detailed(agent_ids) when is_list(agent_ids) do
+    # Unlike execute_detailed_model_query, this includes NULL model_spec groups
+    # (needed by DismissChild to capture all costs including non-model ones)
+    sql =
+      @detailed_select <>
+        "WHERE agent_id = ANY($1)\n" <>
+        @detailed_group_order
+
+    execute_detailed_sql(sql, [agent_ids])
+  end
 
   # ============================================================
   # Individual Request Queries (for LogView)

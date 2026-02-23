@@ -183,10 +183,6 @@ defmodule Quoracle.Actions.SchemaWebTest do
   end
 
   describe "fetch_web priority" do
-    test "maintains priority 6 (read-only external)" do
-      assert Schema.get_action_priority(:fetch_web) == 6
-    end
-
     test "is less risky than call_api" do
       fetch_priority = Schema.get_action_priority(:fetch_web)
       api_priority = Schema.get_action_priority(:call_api)

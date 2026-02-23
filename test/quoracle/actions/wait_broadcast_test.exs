@@ -146,33 +146,6 @@ defmodule Quoracle.Actions.WaitBroadcastTest do
       end
     end
 
-    test "includes correct action metadata in broadcasts", %{agent_id: agent_id, pubsub: pubsub} do
-      router = spawn_wait_router(agent_id, pubsub)
-
-      on_exit(fn ->
-        if Process.alive?(router), do: GenServer.stop(router, :normal, :infinity)
-      end)
-
-      # Execute wait through router
-      params = %{wait: 0.1}
-
-      capture_log(fn ->
-        Router.execute(router, :wait, params, agent_id)
-      end)
-
-      assert_receive {:action_started, payload}, 30_000
-
-      # Verify metadata structure
-      assert Map.has_key?(payload, :agent_id)
-      assert Map.has_key?(payload, :action_type)
-      assert Map.has_key?(payload, :action_id)
-      assert Map.has_key?(payload, :params)
-      assert Map.has_key?(payload, :timestamp)
-
-      assert payload.action_type == :wait
-      assert payload.params == params
-    end
-
     test "broadcasts preserve execution context for concurrent waits", %{
       agent_id: agent_id,
       pubsub: pubsub
@@ -199,37 +172,6 @@ defmodule Quoracle.Actions.WaitBroadcastTest do
       # Action IDs should be unique
       assert payload1.action_id != payload2.action_id
       assert payload1.agent_id == payload2.agent_id
-    end
-
-    test "broadcasts include duration in completed event", %{agent_id: agent_id, pubsub: pubsub} do
-      router = spawn_wait_router(agent_id, pubsub)
-
-      on_exit(fn ->
-        if Process.alive?(router), do: GenServer.stop(router, :normal, :infinity)
-      end)
-
-      # Execute wait with known duration through router
-      # Keep under smart_threshold for sync execution
-      params = %{wait: 0.05}
-
-      capture_log(fn ->
-        send(self(), {:result, Router.execute(router, :wait, params, agent_id)})
-      end)
-
-      assert_received {:result, {:ok, _result}}
-
-      # Should receive completed event with correct structure
-      assert_receive {:action_started, start_payload}, 30_000
-      assert_receive {:action_completed, complete_payload}, 30_000
-
-      # Verify broadcast payloads have correct structure
-      assert start_payload.agent_id == agent_id
-      assert start_payload.params.wait == 0.05
-      assert complete_payload.agent_id == agent_id
-      assert match?({:ok, _}, complete_payload.result)
-
-      # The actual timing is tested in wait_test.exs with mock delay_fn
-      # Here we only care about broadcast behavior, not wall-clock time
     end
   end
 

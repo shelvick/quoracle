@@ -131,39 +131,18 @@ defmodule Quoracle.Actions.RouterGenerateImagesTest do
         action_id: action_id,
         sandbox_owner: sandbox_owner,
         plug: plug,
-        agent_pid: self()
+        agent_pid: self(),
+        # Force synchronous execution to prevent sandbox ownership loss in nested
+        # Task.async_stream workers under load (generate_images spawns parallel tasks)
+        timeout: 15_000
       ]
 
       params = %{"prompt" => "A beautiful landscape"}
 
-      # Subscribe to action events for async result notification
-      Phoenix.PubSub.subscribe(pubsub, "actions:all")
-
       # Should succeed for generalist (no permission check)
       result = Router.execute(router, :generate_images, params, agent_id, opts)
 
-      # Per-action Router (v28.0): await_result not supported, use PubSub for async results
-      response =
-        case result do
-          {:ok, resp} ->
-            resp
-
-          {:async, _ref} ->
-            receive do
-              {:action_completed, %{result: {:ok, resp}}} -> resp
-              {:action_completed, %{result: resp}} -> resp
-            after
-              5000 -> flunk("No action completion message received")
-            end
-
-          {:async, _ref, _ack} ->
-            receive do
-              {:action_completed, %{result: {:ok, resp}}} -> resp
-              {:action_completed, %{result: resp}} -> resp
-            after
-              5000 -> flunk("No action completion message received")
-            end
-        end
+      assert {:ok, response} = result
 
       # Must return generate_images result - proves no access control blocks generalists
       assert response.action == "generate_images"
@@ -226,42 +205,17 @@ defmodule Quoracle.Actions.RouterGenerateImagesTest do
         action_id: action_id,
         sandbox_owner: sandbox_owner,
         plug: plug,
-        agent_pid: self()
+        agent_pid: self(),
+        # Force synchronous execution to prevent sandbox ownership loss in nested
+        # Task.async_stream workers under load (generate_images spawns parallel tasks)
+        timeout: 15_000
       ]
 
       params = %{"prompt" => "Test prompt for routing"}
 
-      # Subscribe to action events for async result notification
-      Phoenix.PubSub.subscribe(pubsub, "actions:all")
-
-      # Execute and verify it routes to GenerateImages module
+      # Should return synchronously with timeout opt
       result = Router.execute(router, :generate_images, params, agent_id, opts)
-
-      # Per-action Router (v28.0): await_result not supported, use PubSub for async results
-      # Handle both success (action_completed) and error (action_error) broadcasts
-      response =
-        case result do
-          {:ok, resp} ->
-            resp
-
-          {:async, _ref} ->
-            receive do
-              {:action_completed, %{result: {:ok, resp}}} -> resp
-              {:action_completed, %{result: resp}} -> resp
-              {:action_error, %{error: error}} -> flunk("Action failed: #{inspect(error)}")
-            after
-              10_000 -> flunk("No action completion message received within 10s")
-            end
-
-          {:async, _ref, _ack} ->
-            receive do
-              {:action_completed, %{result: {:ok, resp}}} -> resp
-              {:action_completed, %{result: resp}} -> resp
-              {:action_error, %{error: error}} -> flunk("Action failed: #{inspect(error)}")
-            after
-              10_000 -> flunk("No action completion message received within 10s")
-            end
-        end
+      assert {:ok, response} = result
 
       # Should return image generation result with correct format
       assert %{action: "generate_images", images: images} = response
@@ -320,40 +274,16 @@ defmodule Quoracle.Actions.RouterGenerateImagesTest do
         action_id: action_id,
         sandbox_owner: sandbox_owner,
         plug: plug,
-        agent_pid: self()
+        agent_pid: self(),
+        # Force synchronous execution to prevent sandbox ownership loss in nested
+        # Task.async_stream workers under load (generate_images spawns parallel tasks)
+        timeout: 15_000
       ]
 
       params = %{"prompt" => "Generate a happy image"}
 
-      # Subscribe to action events for async result notification
-      Phoenix.PubSub.subscribe(pubsub, "actions:all")
-
       result = Router.execute(router, :generate_images, params, agent_id, opts)
-
-      # Per-action Router (v28.0): await_result not supported, use PubSub for async results
-      response =
-        case result do
-          {:ok, resp} ->
-            resp
-
-          {:async, _ref} ->
-            receive do
-              {:action_completed, %{result: {:ok, resp}}} -> resp
-              {:action_completed, %{result: resp}} -> resp
-              {:action_error, %{error: error}} -> {:error, error}
-            after
-              5000 -> flunk("No action completion message received")
-            end
-
-          {:async, _ref, _ack} ->
-            receive do
-              {:action_completed, %{result: {:ok, resp}}} -> resp
-              {:action_completed, %{result: resp}} -> resp
-              {:action_error, %{error: error}} -> {:error, error}
-            after
-              5000 -> flunk("No action completion message received")
-            end
-        end
+      assert {:ok, response} = result
 
       assert response.action == "generate_images"
       assert is_list(response.images)
@@ -401,45 +331,20 @@ defmodule Quoracle.Actions.RouterGenerateImagesTest do
         end
       end)
 
-      # Subscribe to action events for async result notification
-      Phoenix.PubSub.subscribe(pubsub, "actions:all")
+      opts = [
+        registry: registry,
+        action_id: action_id,
+        agent_pid: self(),
+        # Force synchronous execution for deterministic test behavior
+        timeout: 5000
+      ]
 
-      opts = [registry: registry, action_id: action_id, agent_pid: self()]
       params = %{"prompt" => "This should fail"}
 
       result = Router.execute(router, :generate_images, params, agent_id, opts)
 
-      # Per-action Router (v28.0): await_result not supported, use PubSub for async results
-      # Handle both sync and async result paths consistently
-      final_result =
-        case result do
-          {:error, _} = err ->
-            err
-
-          {:async, _ref} ->
-            receive do
-              {:action_completed, %{result: async_result}} -> async_result
-              {:action_error, %{error: {:error, _} = err}} -> err
-              {:action_error, %{error: reason}} -> {:error, reason}
-            after
-              5000 -> flunk("No action completion message received")
-            end
-
-          {:async, _ref, _metadata} ->
-            receive do
-              {:action_completed, %{result: async_result}} -> async_result
-              {:action_error, %{error: {:error, _} = err}} -> err
-              {:action_error, %{error: reason}} -> {:error, reason}
-            after
-              5000 -> flunk("No action completion message received")
-            end
-
-          {:ok, resp} ->
-            {:ok, resp}
-        end
-
       # Should return meaningful error about no models
-      assert final_result == {:error, :no_models_configured}
+      assert result == {:error, :no_models_configured}
     end
 
     # Parameter validation through Router
@@ -476,33 +381,19 @@ defmodule Quoracle.Actions.RouterGenerateImagesTest do
         end
       end)
 
-      # Subscribe to action events for async result notification
-      Phoenix.PubSub.subscribe(pubsub, "actions:all")
+      opts = [
+        registry: registry,
+        action_id: action_id,
+        agent_pid: self(),
+        # Force synchronous execution for deterministic test behavior
+        timeout: 5000
+      ]
 
-      opts = [registry: registry, action_id: action_id, agent_pid: self()]
       params = %{}
 
       result = Router.execute(router, :generate_images, params, agent_id, opts)
 
-      # Per-action Router (v28.0): await_result not supported, use PubSub for async results
-      error =
-        case result do
-          {:error, reason} ->
-            reason
-
-          {:async, _ref} ->
-            receive do
-              {:action_completed, %{result: {:error, reason}}} -> reason
-              {:action_error, %{error: reason}} -> reason
-            after
-              5000 -> flunk("No action completion message received")
-            end
-
-          {:ok, _} ->
-            :unexpected_success
-        end
-
-      assert error == :missing_required_param
+      assert {:error, :missing_required_param} = result
     end
   end
 end

@@ -2,7 +2,7 @@
 
 ## Modules
 
-- **Client**: Per-agent MCP connection manager (427 lines)
+- **Client**: Per-agent MCP connection manager (434 lines)
   - GenServer managing connections to MCP servers (stdio/HTTP)
   - Connection deduplication by command/url
   - Agent lifecycle monitoring with automatic cleanup
@@ -10,6 +10,7 @@
   - **v2.0**: Error context capture on initialization timeout
   - **v3.0**: Crash reason propagation via DOWN message capture
   - **v4.0**: Reconnect API, connection dead status, timeout 120s, crash protection in call_tool
+  - **v5.0**: Reason-aware logging in terminate/2 (info for normal/shutdown, warning for abnormal)
 
 - **ConnectionManager**: Connection lifecycle extracted from Client (~316 lines)
   - start_and_list_tools/4: Spawn anubis client, poll capabilities, list tools

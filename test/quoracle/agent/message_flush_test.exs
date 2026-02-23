@@ -17,7 +17,7 @@ defmodule Quoracle.Agent.MessageFlushTest do
   - A7: user follow-up message reaches agent promptly [SYSTEM/ACCEPTANCE]
   - A8: parent message to child not delayed [SYSTEM/ACCEPTANCE]
   """
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
 
   import ExUnit.CaptureLog
 

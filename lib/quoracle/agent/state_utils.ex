@@ -168,9 +168,10 @@ defmodule Quoracle.Agent.StateUtils do
   """
   @spec merge_consensus_state(map(), map()) :: map()
   def merge_consensus_state(genserver_state, consensus_state) do
-    ace_keys = [:model_histories, :context_lessons, :model_states]
+    # v38.0: Include cached_system_prompt so it persists after consensus
+    merge_keys = [:model_histories, :context_lessons, :model_states, :cached_system_prompt]
 
-    Enum.reduce(ace_keys, genserver_state, fn key, acc ->
+    Enum.reduce(merge_keys, genserver_state, fn key, acc ->
       if Map.has_key?(acc, key) and Map.has_key?(consensus_state, key) do
         Map.put(acc, key, Map.get(consensus_state, key))
       else

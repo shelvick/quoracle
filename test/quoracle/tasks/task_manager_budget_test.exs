@@ -98,7 +98,7 @@ defmodule Quoracle.Tasks.TaskManagerBudgetTest do
       {:ok, state} = Core.get_state(agent_pid)
       assert state.budget_data.mode == :na
       assert state.budget_data.allocated == nil
-      assert state.budget_data.committed == nil
+      assert Decimal.equal?(state.budget_data.committed, Decimal.new(0))
 
       register_agent_cleanup(agent_pid, cleanup_tree: true, registry: deps.registry)
     end

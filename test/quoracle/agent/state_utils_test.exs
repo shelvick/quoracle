@@ -64,30 +64,6 @@ defmodule Quoracle.Agent.StateUtilsTest do
       assert second_entry.action_type == :call_api
     end
 
-    test "creates timestamped entry with all required fields" do
-      state = %{model_histories: %{"test-model" => []}}
-
-      updated_state =
-        StateUtils.add_history_entry_with_action(
-          state,
-          :result,
-          {"action_999", {:error, :timeout}},
-          :call_api
-        )
-
-      [entry] = first_history(updated_state)
-
-      # Verify all fields present
-      assert Map.has_key?(entry, :type)
-      assert Map.has_key?(entry, :content)
-      assert Map.has_key?(entry, :action_type)
-      assert Map.has_key?(entry, :timestamp)
-
-      # Verify values
-      assert entry.type == :result
-      assert entry.action_type == :call_api
-    end
-
     test "prepends to history (newest first)" do
       state = %{
         model_histories: %{

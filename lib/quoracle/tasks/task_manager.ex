@@ -189,6 +189,7 @@ defmodule Quoracle.Tasks.TaskManager do
         |> maybe_put(:pubsub, pubsub)
         |> maybe_put(:force_init_error, Keyword.get(opts, :force_init_error))
         |> maybe_put(:test_opts, Keyword.get(opts, :test_opts))
+        |> maybe_put(:force_persist, Keyword.get(opts, :force_persist))
 
       case AgentDynSup.start_agent(dynsup_pid, agent_config) do
         {:ok, root_pid} ->
@@ -212,7 +213,7 @@ defmodule Quoracle.Tasks.TaskManager do
 
   # Build budget_data for root agent from task.budget_limit
   defp build_budget_data(nil) do
-    %{mode: :na, allocated: nil, committed: nil}
+    Quoracle.Budget.Schema.new_na()
   end
 
   defp build_budget_data(%Decimal{} = budget_limit) do

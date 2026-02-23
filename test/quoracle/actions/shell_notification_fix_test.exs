@@ -382,31 +382,6 @@ defmodule Quoracle.Actions.ShellNotificationFixTest do
 
   describe "Updated test assertions from old protocol" do
     @tag :integration
-    test "async command notifies via action_result instead of shell_completed", %{
-      opts: opts,
-      action_id: action_id
-    } do
-      # Force async mode with smart_threshold: 0 (don't rely on timing)
-      opts_async = Keyword.put(opts, :smart_threshold, 0)
-
-      # OLD assertion (should fail):
-      # assert_receive {:shell_completed, cmd_id, result}, 30_000
-      # NEW assertion:
-      {:ok, %{command_id: _cmd_id}} =
-        Shell.execute(
-          %{command: "sleep 0.2 && echo async"},
-          "agent-001",
-          opts_async
-        )
-
-      assert_receive {:"$gen_cast", {:action_result, ^action_id, {:ok, result}, _opts}}, 30_000
-      assert result.stdout =~ "async"
-      assert result.exit_code == 0
-      assert result.status == :completed
-      assert result.sync == false
-    end
-
-    @tag :integration
     test "multiple async commands use correct action_ids", %{
       pubsub: pubsub,
       sandbox_owner: sandbox_owner

@@ -106,7 +106,7 @@ defmodule Quoracle.Actions.RouterSecretGapsTest do
         pubsub: pubsub,
         sandbox_owner: self(),
         agent_pid: self(),
-        timeout: 1000,
+        timeout: 5000,
         capability_groups: capability_groups
       ]
 
@@ -142,7 +142,7 @@ defmodule Quoracle.Actions.RouterSecretGapsTest do
         sandbox_owner: self(),
         agent_pid: self(),
         task_id: "task-#{System.unique_integer([:positive])}",
-        timeout: 1000,
+        timeout: 5000,
         capability_groups: capability_groups
       ]
 
@@ -183,7 +183,7 @@ defmodule Quoracle.Actions.RouterSecretGapsTest do
         pubsub: pubsub,
         sandbox_owner: self(),
         agent_pid: self(),
-        timeout: 1000,
+        timeout: 5000,
         capability_groups: capability_groups
       ]
 

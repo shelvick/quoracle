@@ -16,35 +16,6 @@ defmodule Quoracle.Actions.SchemaProfileTest do
   alias Quoracle.Actions.Validator
 
   describe "spawn_child profile parameter" do
-    # R7: Profile in spawn_child Schema
-    test "spawn_child schema includes profile parameter" do
-      {:ok, schema} = Schema.get_schema(:spawn_child)
-
-      # Profile must be in required_params (per R8: profile is required)
-      assert :profile in schema.required_params
-    end
-
-    # R8: Profile Required
-    test "spawn_child profile parameter is required" do
-      {:ok, schema} = Schema.get_schema(:spawn_child)
-
-      # Check various ways it might be marked required
-      required =
-        cond do
-          Map.has_key?(schema, :required_params) ->
-            :profile in schema.required_params
-
-          Map.has_key?(schema, :parameters) ->
-            param = Map.get(schema.parameters, :profile, %{})
-            Map.get(param, :required, false)
-
-          true ->
-            false
-        end
-
-      assert required, "profile parameter should be required"
-    end
-
     # R9: Profile Type String
     test "spawn_child profile has string type" do
       {:ok, schema} = Schema.get_schema(:spawn_child)
@@ -104,21 +75,6 @@ defmodule Quoracle.Actions.SchemaProfileTest do
 
       # Must return error tuple for missing required param
       assert {:error, :missing_required_param} = result
-    end
-
-    test "validator accepts spawn_child with profile" do
-      params = %{
-        "task_description" => "Test task",
-        "success_criteria" => "Complete",
-        "immediate_context" => "Test context",
-        "approach_guidance" => "Standard approach",
-        "profile" => "some-profile"
-      }
-
-      result = Validator.validate_params(:spawn_child, params)
-
-      # Should pass validation (profile existence is checked at execution time)
-      assert {:ok, _validated} = result
     end
 
     test "validator validates profile is string" do

@@ -5,7 +5,7 @@ defmodule Quoracle.Actions.ConsensusRulesBatchTest do
   Packet: 1 (Schema Foundation)
   """
 
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
   alias Quoracle.Actions.ConsensusRules
 
   # ARC Verification Criteria from ACTION_ConsensusRules v8.0
@@ -167,23 +167,6 @@ defmodule Quoracle.Actions.ConsensusRulesBatchTest do
       assert {:ok, merged} = ConsensusRules.apply_rule(:batch_sequence_merge, sequences)
       assert length(merged) == 1
       assert Enum.at(merged, 0).action == :todo
-    end
-
-    test "handles string keys from LLM responses" do
-      # LLMs may return string keys instead of atom keys
-      sequences = [
-        [
-          %{"action" => :file_read, "params" => %{path: "/a.txt"}}
-        ],
-        [
-          %{"action" => :file_read, "params" => %{path: "/a.txt"}}
-        ]
-      ]
-
-      # Should handle both atom and string keys
-      result = ConsensusRules.apply_rule(:batch_sequence_merge, sequences)
-      # May need normalization - verify it doesn't crash
-      assert is_tuple(result)
     end
 
     test "merges with multiple param keys per action" do

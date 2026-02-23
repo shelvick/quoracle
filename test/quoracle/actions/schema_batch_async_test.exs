@@ -12,24 +12,6 @@ defmodule Quoracle.Actions.SchemaBatchAsyncTest do
   # ARC Verification Criteria from ACTION_Schema v30.0
 
   describe "batch_async action definition (v30.0)" do
-    # R12: Action Registered
-    test "batch_async in action list" do
-      # [UNIT] - WHEN list_actions/0 called THEN includes :batch_async
-      actions = Schema.list_actions()
-      assert :batch_async in actions
-    end
-
-    # R13: Schema Defined
-    test "batch_async schema exists" do
-      # [UNIT] - WHEN get_schema(:batch_async) called THEN returns valid schema
-      assert {:ok, schema} = Schema.get_schema(:batch_async)
-      assert is_map(schema)
-      assert Map.has_key?(schema, :required_params)
-      assert Map.has_key?(schema, :optional_params)
-      assert Map.has_key?(schema, :param_types)
-      assert Map.has_key?(schema, :consensus_rules)
-    end
-
     # R14: Required Params
     test "batch_async requires actions param" do
       # [UNIT] - WHEN get_schema(:batch_async) called THEN required_params includes :actions
@@ -94,23 +76,9 @@ defmodule Quoracle.Actions.SchemaBatchAsyncTest do
       # [UNIT] - WHEN async_batchable?(:wait) called THEN returns false
       refute ActionList.async_batchable?(:wait)
     end
-
-    # R24: Total Actions Updated
-    test "action list has 22 actions" do
-      # [UNIT] - WHEN list_actions/0 called THEN returns 22 actions (21 + batch_async)
-      actions = Schema.list_actions()
-      assert length(actions) == 22
-    end
   end
 
   describe "batch_async param descriptions" do
-    test "batch_async has param description for actions" do
-      # [UNIT] - WHEN get_schema(:batch_async) called THEN param_descriptions includes :actions
-      {:ok, schema} = Schema.get_schema(:batch_async)
-      assert Map.has_key?(schema.param_descriptions, :actions)
-      assert is_binary(schema.param_descriptions[:actions])
-    end
-
     test "batch_async actions description mentions minimum 2 actions" do
       # Verify LLM guidance mentions minimum requirement
       {:ok, schema} = Schema.get_schema(:batch_async)

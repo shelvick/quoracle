@@ -18,7 +18,7 @@
 - Spawn: Child agent spawning with downstream_constraints (475 lines, ConfigBuilder 273 lines, Helpers 82 lines, BudgetValidation 113 lines), dismissing flag check (v11.0), child_spawned notification (v12.0), profile parameter (v14.0), budget enforcement for budgeted parents (v17.0: :budget_required error), v19.0 removes Core.update_budget_committed callback (deadlock fix)
 - Wait: Unified wait parameter (142 lines, true/false/number support, interruptible)
 - SendMessage: Parent/child messaging (3-arity)
-- DismissChild: Recursive child termination (249 lines, v4.0), async background dispatch to TreeTerminator, child_dismissed notification, budget reconciliation with absorption records and escrow release
+- DismissChild: Recursive child termination (374 lines, v5.0), async background dispatch to TreeTerminator, child_dismissed notification, budget reconciliation with per-model absorption records and escrow-first release ordering
 - Answer (263 lines): Gemini grounding search
   - Model from ConfigModelSettings.get_answer_engine_model!() (config-driven)
   - Raises RuntimeError if answer engine model not configured
@@ -132,6 +132,16 @@ Actions → Schema for parameter definitions
 - **Schema v27.0**: Added file_read, file_write actions (21 actions total)
 - **Router**: Added file_read, file_write routing via ActionMapper
 - **CapabilityGroups**: file_read, file_write groups (allowed for all except restricted)
+
+**Feb 23, 2026 - Cost Display & Budget Timeout Fix (WorkGroupID: fix-20260223-cost-display-budget-timeout)**:
+- **DismissChild v5.0 (374 lines)**: Per-model absorption records + escrow-first ordering
+  - `create_absorption_records/7`: Creates one `child_budget_absorbed` record per model_spec (preserves model attribution)
+  - `reconcile_child_budget/8`: Escrow release BEFORE absorption records (prevents budget leak on parent crash)
+  - `build_absorption_metadata/4`: Includes model_spec, token counts, costs for LLM models; omits for external costs
+  - `query_child_tree_by_model/1`: Snapshots per-model tree costs before TreeTerminator deletes records
+  - `decimal_to_string/1`: Metadata formatting helper
+- **ActionExecutor**: `case action_atom` timeout override — `:adjust_budget` → `:infinity` (prevents 5s Task.yield killing slow budget ops)
+- **Router v32.0**: @always_sync_actions canonical 13-action list + timeout override mechanism
 
 **Feb 17, 2026 - Adjust Budget Timeout Fix (WorkGroupID: fix-20260217-adjust-budget-timeout)**:
 - **AdjustBudget v3.0 (75 lines)**: Cast-based budget update, unified code path

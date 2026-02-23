@@ -250,7 +250,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, view, _html} =
@@ -296,7 +297,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, view, _html} =
@@ -561,7 +563,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, view, _html} =
@@ -626,7 +629,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, view, _html} =
@@ -665,7 +669,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, view, _html} =
@@ -805,7 +810,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, view, _html} =
@@ -850,7 +856,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, view, _html} =
@@ -933,7 +940,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, {task2, _pid2}} =
@@ -941,7 +949,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Mount Dashboard
@@ -1019,7 +1028,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       Quoracle.Tasks.TaskManager.update_task_status(task.id, "paused")
@@ -1068,7 +1078,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       Quoracle.Tasks.TaskManager.update_task_status(task.id, "paused")
@@ -1234,7 +1245,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, view, _html} =
@@ -1306,7 +1318,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       Quoracle.Tasks.TaskManager.update_task_status(task.id, "paused")
@@ -1375,7 +1388,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       Quoracle.Tasks.TaskManager.update_task_status(task.id, "paused")
@@ -1434,7 +1448,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Use same pattern as working tests - capture_log + send/receive
@@ -1496,7 +1511,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       Quoracle.Tasks.TaskManager.update_task_status(task.id, "paused")
@@ -1579,7 +1595,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, _view, html} =
@@ -1615,7 +1632,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, {paused_task, _pid2}} =
@@ -1623,7 +1641,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       Quoracle.Tasks.TaskManager.update_task_status(paused_task.id, "paused")
@@ -1633,7 +1652,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       Quoracle.Tasks.TaskManager.update_task_status(completed_task.id, "completed")
@@ -1643,7 +1663,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       Quoracle.Tasks.TaskManager.update_task_status(failed_task.id, "failed")
@@ -1679,7 +1700,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, _view, html} =
@@ -1724,7 +1746,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Get agent_id from the spawned agent
@@ -1769,7 +1792,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, agent_state} = GenServer.call(agent_pid, :get_state)
@@ -1969,7 +1993,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, view, _html} =
@@ -2021,7 +2046,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, agent_state} = GenServer.call(agent_pid, :get_state)
@@ -2107,7 +2133,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, view, _html} =
@@ -2191,7 +2218,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, view, _html} =
@@ -2283,7 +2311,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, view, _html} =
@@ -2386,7 +2415,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, root_state} = GenServer.call(root_pid, :get_state)
@@ -2405,6 +2435,7 @@ defmodule QuoracleWeb.DashboardLiveTest do
             # parent_pid needed for persistence to look up parent agent_id via Registry
             parent_pid: root_pid,
             test_mode: true,
+            force_persist: true,
             # sandbox_owner must be in config map (not opts) for DB persistence
             sandbox_owner: sandbox_owner
           },
@@ -2972,7 +3003,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
             agent_id: agent_id,
             task_id: task.id,
             task_description: "Test",
-            test_mode: true
+            test_mode: true,
+            force_persist: true
           },
           registry: registry,
           pubsub: pubsub,

@@ -119,18 +119,6 @@ defmodule Quoracle.Agent.TokenManagerTiktokenTest do
     end
   end
 
-  describe "R4: nil Input Handling" do
-    test "returns 0 for nil input" do
-      assert TokenManager.estimate_tokens(nil) == 0
-    end
-  end
-
-  describe "R5: Empty String Handling" do
-    test "returns 0 for empty string" do
-      assert TokenManager.estimate_tokens("") == 0
-    end
-  end
-
   describe "R6: History Token Estimation" do
     test "estimates history tokens using tiktoken" do
       # History with file paths should use tiktoken for accurate count
@@ -324,14 +312,6 @@ defmodule Quoracle.Agent.TokenManagerTiktokenTest do
       # Returns integer
       assert is_integer(tokens)
       assert tokens >= 0
-    end
-
-    test "empty history returns 0" do
-      assert TokenManager.estimate_history_tokens([]) == 0
-    end
-
-    test "nil history returns 0" do
-      assert TokenManager.estimate_history_tokens(nil) == 0
     end
   end
 

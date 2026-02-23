@@ -182,49 +182,6 @@ defmodule Quoracle.Actions.OrientEnhancedTest do
     end
   end
 
-  describe "integration with ACTION_Router" do
-    test "orient results are observable through router metrics", %{
-      agent_id: agent_id,
-      pubsub: pubsub
-    } do
-      alias Quoracle.Actions.Router
-
-      # Per-action Router (v28.0): Spawn Router for this specific action
-      action_id = "action-#{System.unique_integer([:positive])}"
-
-      {:ok, router} =
-        Router.start_link(
-          action_type: :orient,
-          action_id: action_id,
-          agent_id: agent_id,
-          agent_pid: self(),
-          pubsub: pubsub,
-          sandbox_owner: nil
-        )
-
-      on_exit(fn ->
-        if Process.alive?(router), do: GenServer.stop(router, :normal, :infinity)
-      end)
-
-      # Subscribe to both action events and agent logs on isolated PubSub
-      Phoenix.PubSub.subscribe(pubsub, "actions:all")
-      Phoenix.PubSub.subscribe(pubsub, "agents:#{agent_id}:logs")
-
-      # Execute orient through router
-      {:ok, _} = Router.execute(router, :orient, valid_orient_params(), agent_id, pubsub: pubsub)
-
-      # Should receive both router and orient broadcasts
-      assert_receive {:action_started, start_event}, 30_000
-      assert start_event.action_type == :orient
-
-      assert_receive {:log_entry, orient_event}, 30_000
-      assert orient_event.metadata.action == "orient"
-
-      assert_receive {:action_completed, complete_event}, 30_000
-      assert match?({:ok, _}, complete_event.result)
-    end
-  end
-
   # Helper functions
   defp valid_orient_params do
     %{

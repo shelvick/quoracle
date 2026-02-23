@@ -31,6 +31,7 @@ defmodule Quoracle.Agent.CoreACEPersistenceTest do
         task_id: task.id,
         initial_prompt: "Test agent for ACE persistence",
         test_mode: true,
+        force_persist: true,
         sandbox_owner: sandbox_owner
       }
 
@@ -118,6 +119,7 @@ defmodule Quoracle.Agent.CoreACEPersistenceTest do
         task_id: task_id,
         restoration_mode: true,
         test_mode: true,
+        force_persist: true,
         sandbox_owner: sandbox_owner
       }
 
@@ -156,6 +158,7 @@ defmodule Quoracle.Agent.CoreACEPersistenceTest do
         agent_id: agent_id,
         task_id: nil,
         test_mode: true,
+        force_persist: true,
         sandbox_owner: sandbox_owner
       }
 
@@ -194,6 +197,7 @@ defmodule Quoracle.Agent.CoreACEPersistenceTest do
         agent_id: agent_id,
         task_id: fake_task_id,
         test_mode: true,
+        force_persist: true,
         sandbox_owner: sandbox_owner
       }
 
@@ -241,6 +245,7 @@ defmodule Quoracle.Agent.CoreACEPersistenceTest do
         task_id: task.id,
         initial_prompt: "ACE survival test",
         test_mode: true,
+        force_persist: true,
         sandbox_owner: sandbox_owner
       }
 

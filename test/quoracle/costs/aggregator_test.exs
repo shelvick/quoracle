@@ -36,6 +36,18 @@ defmodule Quoracle.Costs.AggregatorTest do
   - R26: Request Count Accurate [INTEGRATION]
   - R27: Nil Cost Records Handled [INTEGRATION]
   - R28: UUID Binary Conversion [UNIT]
+
+  Requirements (v3.0 - fix-20260223-cost-display-budget-timeout):
+  - R29: Subtree Per-Model Query [INTEGRATION]
+  - R30: Multi-Agent Per-Model Query [INTEGRATION]
+  - R31: Includes NULL Model Spec Group [INTEGRATION]
+  - R32: Empty Agent List [UNIT]
+  - R33: Leaf Agent Matches Single Agent [INTEGRATION]
+  - R34: Token Counts Summed Across Subtree [INTEGRATION]
+  - R35: Property — Subtree Total Equals Agent + Children [UNIT]
+
+  Type Contract Fix (fix-20260223-cost-display-budget-timeout):
+  - R36: model_cost_detailed type allows nil model_spec [UNIT]
   """
 
   use Quoracle.DataCase, async: true
@@ -1325,6 +1337,442 @@ defmodule Quoracle.Costs.AggregatorTest do
       result = Aggregator.by_task_and_model_detailed(task.id)
 
       assert length(result) == 1
+    end
+  end
+
+  # ============================================================
+  # COST_Aggregator v3.0: R29 - Subtree Per-Model Query [INTEGRATION]
+  # ============================================================
+
+  describe "agent_tree_detailed - subtree" do
+    test "R29: returns per-model costs for entire subtree (self + descendants)" do
+      task = create_task()
+      tree = create_agent_tree(task)
+
+      # Root uses model A
+      create_detailed_cost(task, tree.root.agent_id,
+        model_spec: "anthropic/claude-sonnet-4",
+        cost_usd: Decimal.new("0.10"),
+        input_tokens: 500,
+        output_tokens: 200
+      )
+
+      # Child1 uses model A and model B
+      create_detailed_cost(task, tree.child1.agent_id,
+        model_spec: "anthropic/claude-sonnet-4",
+        cost_usd: Decimal.new("0.15"),
+        input_tokens: 800,
+        output_tokens: 300
+      )
+
+      create_detailed_cost(task, tree.child1.agent_id,
+        model_spec: "openai/gpt-4o",
+        cost_usd: Decimal.new("0.08"),
+        input_tokens: 400,
+        output_tokens: 150
+      )
+
+      # Grandchild uses model B
+      create_detailed_cost(task, tree.grandchild.agent_id,
+        model_spec: "openai/gpt-4o",
+        cost_usd: Decimal.new("0.12"),
+        input_tokens: 600,
+        output_tokens: 250
+      )
+
+      result = Aggregator.by_agent_tree_and_model_detailed(tree.root.agent_id)
+
+      # Should return 2 model groups: claude-sonnet-4 and gpt-4o
+      assert length(result) == 2
+
+      claude = Enum.find(result, &(&1.model_spec == "anthropic/claude-sonnet-4"))
+      gpt = Enum.find(result, &(&1.model_spec == "openai/gpt-4o"))
+
+      # Claude: root (0.10) + child1 (0.15) = 0.25
+      assert claude != nil
+      assert Decimal.equal?(claude.total_cost, Decimal.new("0.25"))
+      assert claude.request_count == 2
+
+      # GPT: child1 (0.08) + grandchild (0.12) = 0.20
+      assert gpt != nil
+      assert Decimal.equal?(gpt.total_cost, Decimal.new("0.20"))
+      assert gpt.request_count == 2
+    end
+  end
+
+  # ============================================================
+  # COST_Aggregator v3.0: R30 - Multi-Agent Per-Model Query [INTEGRATION]
+  # ============================================================
+
+  describe "agent_ids_detailed - multi-agent" do
+    test "R30: groups costs across multiple agents by model" do
+      task = create_task()
+      agent1 = create_agent(task)
+      agent2 = create_agent(task)
+
+      # Both agents use the same model
+      create_detailed_cost(task, agent1.agent_id,
+        model_spec: "anthropic/claude-sonnet-4",
+        cost_usd: Decimal.new("0.10"),
+        input_tokens: 500,
+        output_tokens: 200
+      )
+
+      create_detailed_cost(task, agent2.agent_id,
+        model_spec: "anthropic/claude-sonnet-4",
+        cost_usd: Decimal.new("0.20"),
+        input_tokens: 1000,
+        output_tokens: 400
+      )
+
+      # Agent2 also uses a different model
+      create_detailed_cost(task, agent2.agent_id,
+        model_spec: "openai/gpt-4o",
+        cost_usd: Decimal.new("0.05"),
+        input_tokens: 300,
+        output_tokens: 100
+      )
+
+      result =
+        Aggregator.by_agent_ids_and_model_detailed([
+          agent1.agent_id,
+          agent2.agent_id
+        ])
+
+      assert length(result) == 2
+
+      claude = Enum.find(result, &(&1.model_spec == "anthropic/claude-sonnet-4"))
+      gpt = Enum.find(result, &(&1.model_spec == "openai/gpt-4o"))
+
+      # Claude: agent1 (0.10) + agent2 (0.20) = 0.30, combined tokens
+      assert claude != nil
+      assert Decimal.equal?(claude.total_cost, Decimal.new("0.30"))
+      assert claude.request_count == 2
+      assert claude.input_tokens == 1500
+      assert claude.output_tokens == 600
+
+      # GPT: only agent2
+      assert gpt != nil
+      assert Decimal.equal?(gpt.total_cost, Decimal.new("0.05"))
+      assert gpt.request_count == 1
+    end
+  end
+
+  # ============================================================
+  # COST_Aggregator v3.0: R31 - Includes NULL Model Spec Group [INTEGRATION]
+  # ============================================================
+
+  describe "agent_ids_detailed - null model_spec" do
+    test "R31: includes costs without model_spec as nil group" do
+      task = create_task()
+      agent = create_agent(task)
+
+      # Create cost WITH model_spec
+      create_detailed_cost(task, agent.agent_id,
+        model_spec: "anthropic/claude-sonnet-4",
+        cost_usd: Decimal.new("0.10")
+      )
+
+      # Create cost WITHOUT model_spec (external cost)
+      {:ok, _cost} =
+        %AgentCost{}
+        |> AgentCost.changeset(%{
+          agent_id: agent.agent_id,
+          task_id: task.id,
+          cost_type: "external",
+          cost_usd: Decimal.new("0.03"),
+          metadata: %{"source" => "web_fetch"}
+        })
+        |> Repo.insert()
+
+      result = Aggregator.by_agent_ids_and_model_detailed([agent.agent_id])
+
+      # Should return 2 groups: one with model_spec, one with nil
+      assert length(result) == 2
+
+      claude = Enum.find(result, &(&1.model_spec == "anthropic/claude-sonnet-4"))
+      nil_group = Enum.find(result, &is_nil(&1.model_spec))
+
+      assert claude != nil
+      assert Decimal.equal?(claude.total_cost, Decimal.new("0.10"))
+
+      assert nil_group != nil
+      assert Decimal.equal?(nil_group.total_cost, Decimal.new("0.03"))
+      assert nil_group.request_count == 1
+    end
+  end
+
+  # ============================================================
+  # COST_Aggregator v3.0: R32 - Empty Agent List [UNIT]
+  # ============================================================
+
+  describe "agent_ids_detailed - empty list" do
+    test "R32: empty agent list returns empty results" do
+      result = Aggregator.by_agent_ids_and_model_detailed([])
+
+      assert result == []
+    end
+  end
+
+  # ============================================================
+  # COST_Aggregator v3.0: R33 - Single Agent Matches by_agent_and_model_detailed [INTEGRATION]
+  # ============================================================
+
+  describe "agent_tree_detailed - leaf agent" do
+    test "R33: leaf agent subtree matches single agent detailed query" do
+      task = create_task()
+      tree = create_agent_tree(task)
+
+      # Only add costs to grandchild (a leaf)
+      create_detailed_cost(task, tree.grandchild.agent_id,
+        model_spec: "anthropic/claude-sonnet-4",
+        cost_usd: Decimal.new("0.15"),
+        input_tokens: 700,
+        output_tokens: 300,
+        reasoning_tokens: 100,
+        cached_tokens: 50,
+        cache_creation_tokens: 25,
+        input_cost: "0.01",
+        output_cost: "0.02"
+      )
+
+      # Query via subtree (should just be the leaf's own costs)
+      subtree_result = Aggregator.by_agent_tree_and_model_detailed(tree.grandchild.agent_id)
+
+      # Query via single agent detailed
+      single_result = Aggregator.by_agent_and_model_detailed(tree.grandchild.agent_id)
+
+      # Both should return 1 model row
+      assert length(subtree_result) == 1
+      assert length(single_result) == 1
+
+      subtree_model = hd(subtree_result)
+      single_model = hd(single_result)
+
+      # Model-spec rows should match
+      assert subtree_model.model_spec == single_model.model_spec
+      assert Decimal.equal?(subtree_model.total_cost, single_model.total_cost)
+      assert subtree_model.request_count == single_model.request_count
+      assert subtree_model.input_tokens == single_model.input_tokens
+      assert subtree_model.output_tokens == single_model.output_tokens
+      assert subtree_model.reasoning_tokens == single_model.reasoning_tokens
+      assert subtree_model.cached_tokens == single_model.cached_tokens
+      assert subtree_model.cache_creation_tokens == single_model.cache_creation_tokens
+    end
+  end
+
+  # ============================================================
+  # COST_Aggregator v3.0: R34 - Token Counts Summed Across Subtree [INTEGRATION]
+  # ============================================================
+
+  describe "agent_tree_detailed - tokens" do
+    test "R34: token counts summed across subtree for same model" do
+      task = create_task()
+      tree = create_agent_tree(task)
+
+      # Root: 500 input, 200 output, 100 reasoning
+      create_detailed_cost(task, tree.root.agent_id,
+        model_spec: "anthropic/claude-sonnet-4",
+        cost_usd: Decimal.new("0.10"),
+        input_tokens: 500,
+        output_tokens: 200,
+        reasoning_tokens: 100,
+        cached_tokens: 50,
+        cache_creation_tokens: 25
+      )
+
+      # Child1: 800 input, 300 output, 150 reasoning
+      create_detailed_cost(task, tree.child1.agent_id,
+        model_spec: "anthropic/claude-sonnet-4",
+        cost_usd: Decimal.new("0.15"),
+        input_tokens: 800,
+        output_tokens: 300,
+        reasoning_tokens: 150,
+        cached_tokens: 60,
+        cache_creation_tokens: 30
+      )
+
+      # Grandchild: 600 input, 250 output, 80 reasoning
+      create_detailed_cost(task, tree.grandchild.agent_id,
+        model_spec: "anthropic/claude-sonnet-4",
+        cost_usd: Decimal.new("0.12"),
+        input_tokens: 600,
+        output_tokens: 250,
+        reasoning_tokens: 80,
+        cached_tokens: 40,
+        cache_creation_tokens: 20
+      )
+
+      result = Aggregator.by_agent_tree_and_model_detailed(tree.root.agent_id)
+
+      assert length(result) == 1
+      model = hd(result)
+
+      # Token counts should be summed: root + child1 + grandchild
+      assert model.input_tokens == 500 + 800 + 600
+      assert model.output_tokens == 200 + 300 + 250
+      assert model.reasoning_tokens == 100 + 150 + 80
+      assert model.cached_tokens == 50 + 60 + 40
+      assert model.cache_creation_tokens == 25 + 30 + 20
+      assert model.request_count == 3
+    end
+  end
+
+  # ============================================================
+  # COST_Aggregator v3.0: R35 - Property: Subtree Total Equals Agent + Children [UNIT]
+  # ============================================================
+
+  describe "subtree total consistency" do
+    property "R35: subtree model total equals agent + children total" do
+      check all(
+              root_cost_cents <- integer(1..1000),
+              child_cost_cents <- integer(1..1000),
+              grandchild_cost_cents <- integer(1..1000)
+            ) do
+        task = create_task()
+        tree = create_agent_tree(task)
+
+        root_cost = Decimal.div(Decimal.new(root_cost_cents), 100)
+        child_cost = Decimal.div(Decimal.new(child_cost_cents), 100)
+        grandchild_cost = Decimal.div(Decimal.new(grandchild_cost_cents), 100)
+
+        create_detailed_cost(task, tree.root.agent_id,
+          model_spec: "test/model",
+          cost_usd: root_cost
+        )
+
+        create_detailed_cost(task, tree.child1.agent_id,
+          model_spec: "test/model",
+          cost_usd: child_cost
+        )
+
+        create_detailed_cost(task, tree.grandchild.agent_id,
+          model_spec: "test/model",
+          cost_usd: grandchild_cost
+        )
+
+        # Get subtree per-model total
+        subtree_result = Aggregator.by_agent_tree_and_model_detailed(tree.root.agent_id)
+
+        subtree_total =
+          Enum.reduce(subtree_result, Decimal.new("0"), fn row, acc ->
+            if row.total_cost, do: Decimal.add(acc, row.total_cost), else: acc
+          end)
+
+        # Get scalar totals via existing functions
+        own_result = Aggregator.by_agent(tree.root.agent_id)
+        children_result = Aggregator.by_agent_children(tree.root.agent_id)
+
+        own_total = own_result.total_cost || Decimal.new("0")
+        children_total = children_result.total_cost || Decimal.new("0")
+        expected_total = Decimal.add(own_total, children_total)
+
+        assert Decimal.equal?(subtree_total, expected_total),
+               "Subtree per-model sum (#{subtree_total}) should equal " <>
+                 "by_agent (#{own_total}) + by_agent_children (#{children_total}) = #{expected_total}"
+      end
+    end
+  end
+
+  # ============================================================
+  # Type Contract Fix: model_cost_detailed allows nil model_spec
+  # WorkGroupID: fix-20260223-cost-display-budget-timeout
+  # Spec: COST_Aggregator v3.0 type definition (line 511: model_spec: String.t() | nil)
+  # ============================================================
+
+  describe "v3.0: model_cost_detailed type contract" do
+    test "model_cost_detailed @type includes nil for model_spec" do
+      # [UNIT] - The model_cost_detailed @type must allow model_spec: String.t() | nil
+      # because by_agent_ids_and_model_detailed (v3.0) includes costs with NULL model_spec
+      # (e.g., external costs) as a nil group.
+      #
+      # This test introspects the compiled type to verify the annotation is correct.
+      # Currently the type says model_spec: String.t() — this FAILS because nil
+      # is not in the union.
+
+      {:ok, types} = Code.Typespec.fetch_types(Quoracle.Costs.Aggregator)
+
+      # Find the model_cost_detailed type definition
+      detailed_type =
+        Enum.find(types, fn
+          {:type, {:model_cost_detailed, _def, _args}} -> true
+          _ -> false
+        end)
+
+      assert detailed_type != nil, "model_cost_detailed type not found in module"
+
+      {:type, {:model_cost_detailed, type_def, _args}} = detailed_type
+
+      # Extract the model_spec field from the map type
+      {:type, _line, :map, fields} = type_def
+
+      model_spec_field =
+        Enum.find(fields, fn
+          {:type, _, :map_field_exact, [{:atom, _, :model_spec} | _]} -> true
+          _ -> false
+        end)
+
+      assert model_spec_field != nil, "model_spec field not found in type"
+
+      {:type, _, :map_field_exact, [_key, value_type]} = model_spec_field
+
+      # The value type must be a union that includes nil
+      # Currently it's {:remote_type, _, [{:atom, 0, String}, {:atom, 0, :t}, []]}
+      # After fix it should be {:type, _, :union, [String.t(), nil]}
+      assert match?({:type, _, :union, _}, value_type),
+             "model_spec type must be a union (String.t() | nil), " <>
+               "got: #{inspect(value_type)}"
+
+      {:type, _, :union, union_members} = value_type
+
+      has_nil =
+        Enum.any?(union_members, fn
+          {:atom, _, nil} -> true
+          _ -> false
+        end)
+
+      assert has_nil,
+             "model_spec union type must include nil, " <>
+               "got members: #{inspect(union_members)}"
+    end
+
+    # TEST-FIX: Runtime regression guard — deferred from TEST phase because it passes
+    # against current code (the function already works, only the @type was wrong).
+    test "by_agent_ids_and_model_detailed returns nil model_spec for null group" do
+      # [INTEGRATION] - Costs without model_spec in metadata appear as nil group
+      task = create_task()
+      agent = create_agent(task)
+
+      # Cost WITH model_spec
+      create_cost(task, agent.agent_id,
+        model_spec: "anthropic/claude-sonnet-4-20250514",
+        cost_usd: Decimal.new("0.10")
+      )
+
+      # Cost WITHOUT model_spec (e.g., external cost)
+      {:ok, _} =
+        %AgentCost{}
+        |> AgentCost.changeset(%{
+          agent_id: agent.agent_id,
+          task_id: task.id,
+          cost_type: "external",
+          cost_usd: Decimal.new("0.03"),
+          metadata: %{"description" => "no model_spec here"}
+        })
+        |> Repo.insert()
+
+      results = Aggregator.by_agent_ids_and_model_detailed([agent.agent_id])
+
+      assert length(results) == 2
+
+      nil_group = Enum.find(results, &is_nil(&1.model_spec))
+      assert nil_group != nil, "Expected a nil model_spec group for costs without model_spec"
+      assert nil_group.request_count == 1
+      assert Decimal.equal?(nil_group.total_cost, Decimal.new("0.03"))
+
+      named_group = Enum.find(results, &(&1.model_spec == "anthropic/claude-sonnet-4-20250514"))
+      assert named_group != nil
+      assert named_group.request_count == 1
     end
   end
 end

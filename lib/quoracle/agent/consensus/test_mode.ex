@@ -76,9 +76,63 @@ defmodule Quoracle.Agent.Consensus.TestMode do
     end
   end
 
+  @doc """
+  Checks if the consensus fast-path should be used.
+
+  Returns true when test_mode is active and no flags require the real pipeline
+  (simulate_*, model_query_fn, seed_action, track_temperatures, force_condense).
+  """
+  @spec fast_test_path?(map(), keyword()) :: boolean()
+  def fast_test_path?(state, opts) do
+    Map.get(state, :test_mode, false) &&
+      !Keyword.has_key?(opts, :model_query_fn) &&
+      !Keyword.get(opts, :simulate_failure, false) &&
+      !Keyword.has_key?(opts, :seed_action) &&
+      !Keyword.get(opts, :track_temperatures, false) &&
+      !Keyword.get(opts, :force_condense, false) &&
+      !Keyword.get(opts, :force_persist, false) &&
+      !any_simulate_flags?(opts)
+  end
+
+  @doc """
+  Returns the pre-built mock consensus action for the fast test path.
+  Matches the orient action that MockResponseGenerator returns by default.
+  """
+  @spec mock_consensus_action() :: map()
+  def mock_consensus_action do
+    %{
+      action: :orient,
+      params: %{
+        "current_situation" => "Processing task",
+        "goal_clarity" => "Clear objectives",
+        "available_resources" => "Full capabilities",
+        "key_challenges" => "None identified",
+        "delegation_consideration" => "none"
+      },
+      reasoning: "Mock consensus (fast path)",
+      confidence: 1.0,
+      wait: true,
+      _fast_path: true
+    }
+  end
+
   # Private helpers
 
   defp has_test_flags?(opts) do
     Enum.any?(@test_flags, &Keyword.has_key?(opts, &1))
+  end
+
+  defp any_simulate_flags?(opts) do
+    Enum.any?(
+      [
+        :simulate_tie,
+        :simulate_no_majority,
+        :force_no_consensus,
+        :force_max_rounds,
+        :simulate_refinement_failure,
+        :simulate_partial_failure
+      ],
+      &Keyword.get(opts, &1, false)
+    )
   end
 end

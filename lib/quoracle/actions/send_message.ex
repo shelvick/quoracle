@@ -181,13 +181,12 @@ defmodule Quoracle.Actions.SendMessage do
     # Look up agent's composite value to get parent info
     case Registry.lookup(registry, {:agent, agent_id}) do
       [{_pid, composite}] when is_map(composite) ->
-        parent_pid = Map.get(composite, :parent_pid)
         parent_id = Map.get(composite, :parent_id)
 
         # Has parent - look up parent to verify it exists
         if parent_id do
           case Registry.lookup(registry, {:agent, parent_id}) do
-            [{^parent_pid, _}] -> {:ok, [{:agent, parent_pid, parent_id}]}
+            [{pid, _}] -> {:ok, [{:agent, pid, parent_id}]}
             _ -> {:error, :parent_not_found}
           end
         else

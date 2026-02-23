@@ -503,29 +503,6 @@ defmodule Quoracle.Actions.SpawnTest do
       assert payload.task == "Test broadcast"
     end
 
-    test "includes timestamp in spawn broadcast", %{deps: deps, profile: profile} do
-      params = %{
-        "task_description" => "Test",
-        "success_criteria" => "Complete",
-        "immediate_context" => "Test",
-        "approach_guidance" => "Standard",
-        "profile" => profile.name
-      }
-
-      deps_with_mock =
-        Map.put(deps, :dynsup_fn, fn _pid, _config, _opts ->
-          {:ok, spawn_link(fn -> :timer.sleep(:infinity) end)}
-        end)
-
-      opts = Map.to_list(deps_with_mock) ++ [agent_pid: self()]
-      {:ok, result} = Spawn.execute(params, "parent-1", opts)
-      child_pid = wait_for_spawn_complete(result.agent_id)
-      if child_pid, do: Process.exit(child_pid, :kill)
-
-      assert_receive {:agent_spawned, payload}, 30_000
-      assert %DateTime{} = payload.timestamp
-    end
-
     test "no broadcast on spawn failure", %{deps: deps, profile: profile} do
       mock_dynsup = fn _pid, _config, _opts ->
         {:error, :spawn_error}
@@ -555,29 +532,6 @@ defmodule Quoracle.Actions.SpawnTest do
 
       # No agent_spawned broadcast on failure
       refute_receive {:agent_spawned, _}, 100
-    end
-
-    test "broadcasts to correct pubsub topic", %{deps: deps, profile: profile} do
-      params = %{
-        "task_description" => "Topic test",
-        "success_criteria" => "Complete",
-        "immediate_context" => "Test",
-        "approach_guidance" => "Standard",
-        "profile" => profile.name
-      }
-
-      deps_with_mock =
-        Map.put(deps, :dynsup_fn, fn _pid, _config, _opts ->
-          {:ok, spawn_link(fn -> :timer.sleep(:infinity) end)}
-        end)
-
-      opts = Map.to_list(deps_with_mock) ++ [agent_pid: self()]
-      {:ok, result} = Spawn.execute(params, "parent-1", opts)
-      child_pid = wait_for_spawn_complete(result.agent_id)
-      if child_pid, do: Process.exit(child_pid, :kill)
-
-      # Should receive on agents:lifecycle topic
-      assert_receive {:agent_spawned, _payload}, 30_000
     end
   end
 

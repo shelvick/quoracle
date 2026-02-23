@@ -16,12 +16,16 @@ defmodule Quoracle.Agent.Consensus.SystemPromptInjector do
   @doc "Ensures messages have combined system prompt with field-based configuration."
   @spec ensure_system_prompts(list(map()), map(), keyword()) :: list(map())
   def ensure_system_prompts(messages, field_prompts, opts) do
-    # Pass field_prompts through opts to build_system_prompt_with_context
-    opts_with_fields = Keyword.put(opts, :field_prompts, field_prompts)
-
-    # Build single integrated system prompt
+    # v38.0: Use cached system prompt if available, otherwise build fresh
     integrated_system_prompt =
-      PromptBuilder.build_system_prompt_with_context(opts_with_fields)
+      case Keyword.get(opts, :cached_system_prompt) do
+        nil ->
+          opts_with_fields = Keyword.put(opts, :field_prompts, field_prompts)
+          PromptBuilder.build_system_prompt_with_context(opts_with_fields)
+
+        cached ->
+          cached
+      end
 
     # Separate action schema prompts (to be replaced) from additional context (to be preserved)
     {_action_schema_msgs, other_system_msgs} =

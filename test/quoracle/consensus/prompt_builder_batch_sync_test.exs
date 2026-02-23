@@ -9,7 +9,7 @@ defmodule Quoracle.Consensus.PromptBuilderBatchSyncTest do
   - R80-R82: Usage guidance in guidelines section
   """
 
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
 
   alias Quoracle.Consensus.PromptBuilder
   alias Quoracle.Actions.Schema.Metadata

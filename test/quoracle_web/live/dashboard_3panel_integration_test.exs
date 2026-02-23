@@ -37,6 +37,7 @@ defmodule QuoracleWeb.Dashboard3PanelIntegrationTest do
       registry: registry_name,
       dynsup: dynsup_name,
       sandbox_owner: sandbox_owner,
+      force_persist: true,
       profile: profile
     }
   end

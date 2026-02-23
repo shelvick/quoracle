@@ -127,7 +127,18 @@ defmodule Quoracle.Consensus.ActionParser do
 
   # Parse a single response into action format
   defp parse_single_response(%ReqLLM.Response{} = response, opts) do
-    content = ReqLLM.Response.text(response)
+    content =
+      case ReqLLM.Response.text(response) do
+        text when is_binary(text) and text != "" ->
+          text
+
+        _ ->
+          # Fallback: ReqLLM's build_content_parts detects pure JSON responses
+          # and stores them as %{type: :object} instead of %{type: :text}.
+          # Response.text() is blind to :object parts, so re-serialize.
+          if response.object, do: Jason.encode!(response.object), else: nil
+      end
+
     model = response.model
     parse_content(content, model, opts)
   end

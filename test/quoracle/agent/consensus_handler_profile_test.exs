@@ -15,7 +15,7 @@ defmodule Quoracle.Agent.ConsensusHandlerProfileTest do
   SystemPromptInjector.ensure_system_prompts.
   """
 
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
 
   alias Quoracle.Agent.Consensus.SystemPromptInjector
 

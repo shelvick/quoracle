@@ -34,7 +34,7 @@ defmodule Quoracle.Agent.StaleContinueConsensusTest do
   - A11: Pause Stops Agent After Single Consensus [SYSTEM/ACCEPTANCE]
   - A12: Rapid External Messages Don't Cause Extra Consensus [SYSTEM/ACCEPTANCE]
   """
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
 
   alias Quoracle.Agent.Core.MessageInfoHandler
   alias Quoracle.Agent.MessageHandler

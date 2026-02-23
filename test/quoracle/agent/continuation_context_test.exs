@@ -3,7 +3,7 @@ defmodule Quoracle.Agent.ContinuationContextTest do
   Tests for multi-turn conversation context and state utilities.
   Verifies agents maintain proper conversation history across turns.
   """
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
 
   alias Quoracle.Agent.{StateUtils, Consensus}
 

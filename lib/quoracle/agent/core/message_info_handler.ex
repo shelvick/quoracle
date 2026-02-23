@@ -292,6 +292,10 @@ defmodule Quoracle.Agent.Core.MessageInfoHandler do
         new_state = %{state | children: List.delete(state.children, pid)}
         {:noreply, new_state}
 
+      pid == state.mcp_client ->
+        Logger.info("Agent #{state.agent_id} MCP client terminated: #{inspect(reason)}")
+        {:noreply, %{state | mcp_client: nil}}
+
       true ->
         {:noreply, state}
     end

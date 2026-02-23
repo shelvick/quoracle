@@ -10,8 +10,9 @@
 - LogEntry.Helpers: Formatting helpers (279 lines, 23 @spec), timestamp/level/metadata/role styling, LLM response formatting (2025-12)
 - Message: Accordion display, collapsed 80-char preview, reply forms with agent_alive control
 - CostDisplay: Cost display component (385 lines), 4 modes (:badge, :summary, :detail, :request)
-  - v2.0: Token breakdown table with 10 columns (Model, Req, Input, Output, Reason, Cache R, Cache W, In$, Out$, Total$)
+  - v3.0: Token breakdown table with 10 columns (Model, Req, Input, Output, Reason, Cache R, Cache W, In$, Out$, Total$)
   - Expandable detail view, lazy-loads from Aggregator
+  - Correctly renders absorption records (child_budget_absorbed with model_spec) after child dismissal
   - Helper functions: format_tokens/1, format_token_or_dash/1, format_cost_compact/1, truncate_model/1
 
 ## Stateful Components
@@ -70,5 +71,5 @@
 - AgentNode: 28 tests + 6 direct message tests = 34 total (then refactored to 44 tests)
 - LogEntry: 25 tests, Message: 34 tests
 - Dashboard integration: 18 tests + 4 direct message tests = 22 total (then 35 tests)
-- CostDisplay: 69 tests (v2.0 token breakdown table)
+- CostDisplay: 72 tests (v3.0: R40-R42 absorption record acceptance tests)
 - BudgetUI Acceptance: 19 tests (R1-R19) - full E2E from /dashboard route (2025-12)

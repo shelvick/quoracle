@@ -43,6 +43,14 @@ defmodule Quoracle.Agent.ConfigManager do
         test_opts
       end
 
+    # Add force_persist to test_opts if it's at the top level
+    test_opts =
+      if Map.has_key?(config, :force_persist) do
+        Keyword.put(test_opts, :force_persist, config.force_persist)
+      else
+        test_opts
+      end
+
     # Extract sandbox_owner from config or test_opts
     sandbox_owner =
       Map.get(config, :sandbox_owner) ||

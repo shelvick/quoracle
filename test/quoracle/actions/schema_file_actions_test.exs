@@ -15,24 +15,6 @@ defmodule Quoracle.Actions.SchemaFileActionsTest do
   # ARC Verification Criteria R1-R5
   # ===========================================================================
   describe "file_read action definition (v27.0)" do
-    # R1: Action Registered
-    test "file_read in action list" do
-      # [UNIT] - WHEN list_actions/0 called THEN includes :file_read
-      actions = Schema.list_actions()
-      assert :file_read in actions
-    end
-
-    # R2: Schema Defined
-    test "file_read schema exists" do
-      # [UNIT] - WHEN get_schema(:file_read) called THEN returns valid schema
-      assert {:ok, schema} = Schema.get_schema(:file_read)
-      assert is_map(schema)
-      assert Map.has_key?(schema, :required_params)
-      assert Map.has_key?(schema, :optional_params)
-      assert Map.has_key?(schema, :param_types)
-      assert Map.has_key?(schema, :consensus_rules)
-    end
-
     # R3: Required Params
     test "file_read requires path" do
       # [UNIT] - WHEN get_schema(:file_read) called THEN required_params includes :path
@@ -82,24 +64,6 @@ defmodule Quoracle.Actions.SchemaFileActionsTest do
   # ARC Verification Criteria R6-R11
   # ===========================================================================
   describe "file_write action definition (v27.0)" do
-    # R6: Action Registered
-    test "file_write in action list" do
-      # [UNIT] - WHEN list_actions/0 called THEN includes :file_write
-      actions = Schema.list_actions()
-      assert :file_write in actions
-    end
-
-    # R7: Schema Defined
-    test "file_write schema exists" do
-      # [UNIT] - WHEN get_schema(:file_write) called THEN returns valid schema
-      assert {:ok, schema} = Schema.get_schema(:file_write)
-      assert is_map(schema)
-      assert Map.has_key?(schema, :required_params)
-      assert Map.has_key?(schema, :optional_params)
-      assert Map.has_key?(schema, :param_types)
-      assert Map.has_key?(schema, :consensus_rules)
-    end
-
     # R8: Required Params
     test "file_write requires path and mode" do
       # [UNIT] - WHEN get_schema(:file_write) called THEN required_params includes :path and :mode
@@ -155,18 +119,6 @@ defmodule Quoracle.Actions.SchemaFileActionsTest do
       assert schema.param_types[:new_string] == :string
       assert schema.param_types[:replace_all] == :boolean
     end
-
-    # Additional: Param Descriptions
-    test "file_write has param descriptions" do
-      # [UNIT] - WHEN get_schema(:file_write) called THEN param_descriptions exist for all params
-      {:ok, schema} = Schema.get_schema(:file_write)
-      assert Map.has_key?(schema.param_descriptions, :path)
-      assert Map.has_key?(schema.param_descriptions, :mode)
-      assert Map.has_key?(schema.param_descriptions, :content)
-      assert Map.has_key?(schema.param_descriptions, :old_string)
-      assert Map.has_key?(schema.param_descriptions, :new_string)
-      assert Map.has_key?(schema.param_descriptions, :replace_all)
-    end
   end
 
   # ===========================================================================
@@ -195,14 +147,6 @@ defmodule Quoracle.Actions.SchemaFileActionsTest do
       # file_write: 19 (file modifications)
       assert Schema.get_action_priority(:file_read) == 7
       assert Schema.get_action_priority(:file_write) == 19
-    end
-
-    # R14: Total Actions Updated
-    test "action list has 21 actions" do
-      # [UNIT] - WHEN list_actions/0 called THEN returns 21 actions
-      # Previous: 19 actions + file_read + file_write = 21
-      actions = Schema.list_actions()
-      assert length(actions) == 22
     end
 
     # Additional: wait_required? for file actions

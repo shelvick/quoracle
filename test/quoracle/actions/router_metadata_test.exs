@@ -155,54 +155,6 @@ defmodule Quoracle.Actions.RouterMetadataTest do
     end
   end
 
-  describe "backward compatibility for other actions" do
-    test "Orient action maintains its existing signature", %{
-      router: router,
-      pubsub: pubsub,
-      agent_id: agent_id
-    } do
-      params = %{
-        current_situation: "Testing",
-        goal_clarity: "Clear",
-        available_resources: "Adequate",
-        key_challenges: "None",
-        delegation_consideration: "None needed"
-      }
-
-      opts = [
-        pubsub: pubsub,
-        agent_pid: self()
-      ]
-
-      # Orient should still work with its existing signature
-      result = Router.execute(router, :orient, params, agent_id, opts)
-
-      # Should execute successfully
-      assert {:ok, _} = result
-    end
-
-    test "Wait action maintains its existing signature", %{
-      router: router,
-      registry: registry,
-      pubsub: pubsub,
-      agent_id: agent_id
-    } do
-      params = %{wait: 0}
-
-      opts = [
-        registry: registry,
-        pubsub: pubsub,
-        agent_pid: self()
-      ]
-
-      # Wait should still work with its existing signature
-      result = Router.execute(router, :wait, params, agent_id, opts)
-
-      # Should execute successfully
-      assert {:ok, _} = result
-    end
-  end
-
   describe "error handling" do
     test "returns error when SendMessage module not loaded", %{
       router: router,

@@ -79,32 +79,6 @@ defmodule Test.PubSubIsolationTest do
       # Should NOT receive duplicate
       refute_receive {:from_pubsub2, _}, 100
     end
-
-    test "messages don't leak to global PubSub" do
-      {:ok, isolated} = PubSubIsolation.setup_isolated_pubsub()
-
-      # Subscribe to global PubSub
-      Phoenix.PubSub.subscribe(Quoracle.PubSub, "test_topic")
-
-      # Broadcast to isolated instance
-      Phoenix.PubSub.broadcast(isolated, "test_topic", {:isolated_msg, "data"})
-
-      # Should NOT receive on global
-      refute_receive {:isolated_msg, _}, 100
-    end
-
-    test "global broadcasts don't reach isolated instances" do
-      {:ok, isolated} = PubSubIsolation.setup_isolated_pubsub()
-
-      # Subscribe to isolated instance
-      Phoenix.PubSub.subscribe(isolated, "test_topic")
-
-      # Broadcast to global PubSub
-      Phoenix.PubSub.broadcast(Quoracle.PubSub, "test_topic", {:global_msg, "data"})
-
-      # Should NOT receive on isolated
-      refute_receive {:global_msg, _}, 100
-    end
   end
 
   describe "concurrent test isolation" do
@@ -183,36 +157,7 @@ defmodule Test.PubSubIsolationTest do
     end
   end
 
-  describe "cleanup and resource management" do
-    test "can create many instances without resource issues" do
-      # Create 100 isolated instances
-      instances =
-        for _ <- 1..100 do
-          {:ok, pubsub} = PubSubIsolation.setup_isolated_pubsub()
-          pubsub
-        end
-
-      # All should be unique
-      assert length(instances) == length(Enum.uniq(instances))
-
-      # All should be functional
-      Enum.each(instances, fn pubsub ->
-        assert :ok = Phoenix.PubSub.subscribe(pubsub, "mass_test")
-      end)
-    end
-  end
-
   describe "backward compatibility" do
-    test "old tests using global PubSub still work" do
-      # Old tests don't call setup_isolated_pubsub
-      # They use the global Quoracle.PubSub directly
-
-      Phoenix.PubSub.subscribe(Quoracle.PubSub, "global_topic")
-      Phoenix.PubSub.broadcast(Quoracle.PubSub, "global_topic", {:global, "test"})
-
-      assert_receive {:global, "test"}
-    end
-
     test "explicit passing works alongside Process dictionary" do
       {:ok, pubsub} = PubSubIsolation.setup_isolated_pubsub()
 

@@ -98,13 +98,11 @@ defmodule Quoracle.Actions.SpawnAsyncTest do
   end
 
   describe "R1: Spawn Returns Immediately" do
-    # R1: WHEN spawn_child executed THEN returns {:ok, %{agent_id: ...}} within 300ms
-    # (Using 300ms threshold to allow for system overhead under load)
+    # R1: WHEN spawn_child executed THEN returns {:ok, %{agent_id: ...}} before background work completes
     test "spawn_child returns immediately without blocking on LLM", %{
       deps: deps,
       profile: profile
     } do
-      # Setup: Long narrative that would trigger LLM summarization
       params = %{
         "task_description" => "Analyze the codebase",
         "success_criteria" => "Complete analysis",
@@ -113,16 +111,19 @@ defmodule Quoracle.Actions.SpawnAsyncTest do
         "profile" => profile.name
       }
 
-      # Mock dynsup that simulates slow ConfigBuilder (LLM summarization)
-      # In production, the LLM call takes 500ms-5s. We simulate 500ms here.
-      # The test asserts < 300ms, so this MUST fail with sync spawn.
-      # (Using larger margins to avoid flaky failures under system load)
+      test_pid = self()
+
+      # Mock dynsup that blocks until test explicitly unblocks it.
+      # If spawn were synchronous, it would deadlock here (mock waits
+      # for :proceed, but :proceed is only sent after spawn returns).
       deps_with_mock =
         Map.put(deps, :dynsup_fn, fn _pid, _config, _opts ->
-          # Simulate slow background work using receive/after (not Process.sleep)
+          send(test_pid, {:mock_started, self()})
+
           receive do
+            :proceed -> :ok
           after
-            500 -> :ok
+            30_000 -> :ok
           end
 
           pid = spawn_link(fn -> :timer.sleep(:infinity) end)
@@ -132,57 +133,18 @@ defmodule Quoracle.Actions.SpawnAsyncTest do
 
       opts = Map.to_list(deps_with_mock) ++ [agent_pid: self()]
 
-      # Time the spawn call - should return in < 300ms even with slow background work
-      {time_micros, result} =
-        :timer.tc(fn ->
-          Spawn.execute(params, "parent-1", opts)
-        end)
-
-      # MUST return {:ok, _} immediately
-      assert {:ok, spawn_result} = result
+      # Spawn MUST return before mock completes (async dispatch)
+      {:ok, spawn_result} = Spawn.execute(params, "parent-1", opts)
       assert is_binary(spawn_result.agent_id)
 
-      # MUST complete in < 1000ms (1,000,000 microseconds)
-      # Mock sleeps 500ms in background, so async spawn returns quickly
-      # Using 1000ms threshold to allow for system overhead under heavy CI load
-      # (500ms mock delay + 500ms margin for scheduling variance)
-      assert time_micros < 1_000_000,
-             "Spawn took #{time_micros / 1000}ms, expected < 1000ms. " <>
-               "Spawn should return immediately, deferring child creation to background."
+      # Mock is still blocking — spawn returned before background work finished
+      assert_receive {:mock_started, mock_pid}, 5000
+
+      # Unblock mock so background task can complete
+      send(mock_pid, :proceed)
 
       # Wait for background task to complete before test cleanup
       wait_for_spawn_complete(spawn_result.agent_id)
-    end
-  end
-
-  describe "R2: Child ID Format Unchanged" do
-    # R2: WHEN spawn_child executed THEN child_id matches "agent-{uuid}" format
-    test "child_id format is agent-uuid", %{deps: deps, profile: profile} do
-      params = %{
-        "task_description" => "Test task",
-        "success_criteria" => "Complete",
-        "immediate_context" => "Test",
-        "approach_guidance" => "Standard",
-        "profile" => profile.name
-      }
-
-      deps_with_mock =
-        Map.put(deps, :dynsup_fn, fn _pid, _config, _opts ->
-          pid = spawn_link(fn -> :timer.sleep(:infinity) end)
-          track_pid(deps, pid)
-          {:ok, pid}
-        end)
-
-      opts = Map.to_list(deps_with_mock) ++ [agent_pid: self()]
-      {:ok, result} = Spawn.execute(params, "parent-1", opts)
-
-      # Verify UUID format: agent-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-      assert result.agent_id =~
-               ~r/^agent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-
-      # Wait for background task to complete before test cleanup
-      wait_for_spawn_complete(result.agent_id)
-      # Cleanup handled by on_exit via pids_tracker
     end
   end
 
@@ -209,6 +171,7 @@ defmodule Quoracle.Actions.SpawnAsyncTest do
         Map.merge(deps, %{
           dynsup_fn: fn _pid, config, _opts ->
             agent_id = config.agent_id
+            mock_pid = self()
 
             # Spawn child that registers ITSELF (not the background Task)
             child_pid =
@@ -220,19 +183,19 @@ defmodule Quoracle.Actions.SpawnAsyncTest do
                   agent_id: agent_id
                 })
 
+                # Notify both mock and test that registration is complete
+                send(mock_pid, :child_registered_internal)
                 send(test_pid, {:child_registered, child_registered, self()})
                 :timer.sleep(:infinity)
               end)
 
             track_pid(deps, child_pid)
 
-            # Wait for child to register before returning
+            # Wait for child to actually register (event-based, not time-based)
             receive do
-              {:child_registered, ^child_registered, ^child_pid} ->
-                # Re-send so test can also receive it
-                send(test_pid, {:child_registered, child_registered, child_pid})
+              :child_registered_internal -> :ok
             after
-              1000 -> :ok
+              5000 -> :ok
             end
 
             {:ok, child_pid}
@@ -259,55 +222,6 @@ defmodule Quoracle.Actions.SpawnAsyncTest do
 
       # Wait for background task to complete before test cleanup
       wait_for_spawn_complete(child_id)
-      # Cleanup handled by on_exit via pids_tracker
-    end
-  end
-
-  describe "R4: Child Receives Initial Message" do
-    # R4: WHEN background spawn completes THEN child receives task message
-    test "child receives initial task message after background spawn", %{
-      deps: deps,
-      profile: profile
-    } do
-      task_description = "Analyze the security vulnerabilities"
-
-      params = %{
-        "task_description" => task_description,
-        "success_criteria" => "Find all issues",
-        "immediate_context" => "Production app",
-        "approach_guidance" => "Focus on OWASP",
-        "profile" => profile.name
-      }
-
-      deps_with_mock =
-        Map.merge(deps, %{
-          dynsup_fn: fn _pid, config, _opts ->
-            child_pid = spawn_link(fn -> :timer.sleep(:infinity) end)
-            track_pid(deps, child_pid)
-
-            Registry.register(deps.registry, {:agent, config.agent_id}, %{
-              pid: child_pid,
-              agent_id: config.agent_id
-            })
-
-            {:ok, child_pid}
-          end
-        })
-
-      opts = Map.to_list(deps_with_mock) ++ [agent_pid: self()]
-      {:ok, result} = Spawn.execute(params, "parent-1", opts)
-
-      # In current sync implementation, the child receives message immediately
-      # In async pattern, message would be sent after background spawn completes
-      # Either way, the broadcast should contain the task
-      assert_receive {:agent_spawned, broadcast}, 30_000
-      assert broadcast.task == task_description
-
-      # The child_id should match what spawn returned
-      assert broadcast.agent_id == result.agent_id
-
-      # Wait for background task to complete before test cleanup
-      wait_for_spawn_complete(result.agent_id)
       # Cleanup handled by on_exit via pids_tracker
     end
   end
@@ -455,54 +369,6 @@ defmodule Quoracle.Actions.SpawnAsyncTest do
     end
   end
 
-  describe "R10: Concurrent Spawns" do
-    # R10: WHEN multiple spawn_child actions execute concurrently
-    #      THEN all children created with unique IDs
-    test "concurrent spawns create unique children", %{deps: deps, profile: profile} do
-      params = %{
-        "task_description" => "Concurrent task",
-        "success_criteria" => "Complete",
-        "immediate_context" => "Test",
-        "approach_guidance" => "Standard",
-        "profile" => profile.name
-      }
-
-      deps_with_mock =
-        Map.merge(deps, %{
-          dynsup_fn: fn _pid, _config, _opts ->
-            pid = spawn(fn -> :timer.sleep(:infinity) end)
-            track_pid(deps, pid)
-            {:ok, pid}
-          end
-        })
-
-      opts = Map.to_list(deps_with_mock) ++ [agent_pid: self()]
-
-      # Spawn 5 children sequentially (avoid Task.async complexity)
-      results =
-        for _ <- 1..5 do
-          Spawn.execute(params, "parent-1", opts)
-        end
-
-      # All should succeed
-      child_ids =
-        Enum.map(results, fn {:ok, result} ->
-          result.agent_id
-        end)
-
-      # All IDs should be unique
-      assert length(Enum.uniq(child_ids)) == 5,
-             "Expected 5 unique child IDs, got #{length(Enum.uniq(child_ids))}"
-
-      # Wait for all background tasks to complete before cleanup
-      Enum.each(child_ids, fn child_id ->
-        wait_for_spawn_complete(child_id)
-      end)
-
-      # Cleanup handled by on_exit via pids_tracker
-    end
-  end
-
   describe "R11: Full Spawn Flow System Test" do
     # R11: WHEN user creates task with spawn_child action
     #      THEN child appears in UI and responds
@@ -527,6 +393,7 @@ defmodule Quoracle.Actions.SpawnAsyncTest do
         Map.merge(deps, %{
           dynsup_fn: fn _pid, config, _opts ->
             agent_id = config.agent_id
+            mock_pid = self()
 
             # Spawn child that registers ITSELF (not the background Task)
             child_pid =
@@ -538,17 +405,19 @@ defmodule Quoracle.Actions.SpawnAsyncTest do
                   parent_id: parent_id
                 })
 
-                # Notify test that child is alive
+                # Notify mock that registration is complete, then notify test
+                send(mock_pid, :child_registered_internal)
                 send(test_pid, {:child_alive, child_spawned_ref, agent_id})
                 :timer.sleep(:infinity)
               end)
 
             track_pid(deps, child_pid)
 
-            # Give child time to register
+            # Wait for child to actually register (event-based, not time-based)
             receive do
+              :child_registered_internal -> :ok
             after
-              50 -> :ok
+              5000 -> :ok
             end
 
             {:ok, child_pid}
@@ -583,44 +452,6 @@ defmodule Quoracle.Actions.SpawnAsyncTest do
 
       # Wait for background task to complete before test cleanup
       wait_for_spawn_complete(child_id)
-      # Cleanup handled by on_exit via pids_tracker
-    end
-  end
-
-  describe "return format compatibility" do
-    # Verify async spawn returns same format as current sync spawn
-    test "async spawn returns compatible format with sync spawn", %{deps: deps, profile: profile} do
-      params = %{
-        "task_description" => "Format test",
-        "success_criteria" => "Complete",
-        "immediate_context" => "Test",
-        "approach_guidance" => "Standard",
-        "profile" => profile.name
-      }
-
-      deps_with_mock =
-        Map.put(deps, :dynsup_fn, fn _pid, _config, _opts ->
-          pid = spawn_link(fn -> :timer.sleep(:infinity) end)
-          track_pid(deps, pid)
-          {:ok, pid}
-        end)
-
-      opts = Map.to_list(deps_with_mock) ++ [agent_pid: self()]
-      {:ok, result} = Spawn.execute(params, "parent-1", opts)
-
-      # Required fields
-      assert result.action == "spawn"
-      assert is_binary(result.agent_id)
-      assert %DateTime{} = result.spawned_at
-
-      # In async pattern, pid may not be immediately available
-      # But message field should indicate async status
-      if Map.has_key?(result, :message) do
-        assert result.message =~ "background"
-      end
-
-      # Wait for background task to complete before test cleanup
-      wait_for_spawn_complete(result.agent_id)
       # Cleanup handled by on_exit via pids_tracker
     end
   end

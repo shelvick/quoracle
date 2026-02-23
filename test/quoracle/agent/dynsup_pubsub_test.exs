@@ -23,40 +23,6 @@ defmodule Quoracle.Agent.DynSupPubSubTest do
   end
 
   describe "start_agent/3 with PubSub injection" do
-    test "accepts pubsub option and passes to child agent", %{
-      dynsup: dynsup,
-      pubsub: pubsub,
-      registry: registry,
-      sandbox_owner: sandbox_owner
-    } do
-      agent_id = "test-agent-#{System.unique_integer([:positive])}"
-
-      config = %{
-        agent_id: agent_id,
-        parent_pid: nil,
-        restart: :temporary,
-        test_mode: true
-      }
-
-      # Start agent with explicit pubsub and registry
-      opts = [pubsub: pubsub, registry: registry, sandbox_owner: sandbox_owner]
-      {:ok, agent_pid} = DynSup.start_agent(dynsup, config, opts)
-
-      # Wait for initialization and ensure tree cleanup
-      {:ok, _state} = GenServer.call(agent_pid, :get_state)
-
-      on_exit(fn ->
-        stop_agent_tree(agent_pid, registry)
-      end)
-
-      # Agent should have received pubsub in its config
-      assert Process.alive?(agent_pid)
-
-      # Check that agent registered with pubsub in its state
-      {:ok, state} = GenServer.call(agent_pid, :get_state)
-      assert state.pubsub == pubsub
-    end
-
     test "accepts both registry and pubsub options", %{
       dynsup: dynsup,
       pubsub: pubsub,

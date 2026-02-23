@@ -13,6 +13,7 @@ defmodule Quoracle.Agent.Consensus do
 
   alias Quoracle.Agent.Consensus.{
     MockResponseGenerator,
+    ResponseLogger,
     TestMode,
     PerModelQuery,
     SystemPromptInjector
@@ -61,6 +62,22 @@ defmodule Quoracle.Agent.Consensus do
   @spec get_consensus_with_state(map(), keyword()) ::
           {:ok, consensus_result(), map()} | {:error, atom()}
   def get_consensus_with_state(state, opts) do
+    # Fast path: In test mode without simulate flags, return mock result directly
+    # Skips the entire query → parse → validate → cluster pipeline
+    # Still validates model_histories exists (preserves error contract)
+    cond do
+      Map.get(state, :model_histories) == nil ->
+        {:error, :missing_model_histories}
+
+      TestMode.fast_test_path?(state, opts) ->
+        {:ok, {:consensus, TestMode.mock_consensus_action(), [per_model_queries: true]}, state}
+
+      true ->
+        get_consensus_with_state_impl(state, opts)
+    end
+  end
+
+  defp get_consensus_with_state_impl(state, opts) do
     # Validate model_histories field exists
     case Map.get(state, :model_histories) do
       nil ->
@@ -73,6 +90,11 @@ defmodule Quoracle.Agent.Consensus do
         max_rounds = Map.get(state, :max_refinement_rounds, 4)
         opts = Keyword.put_new(opts, :max_refinement_rounds, max_rounds)
 
+        # Build system prompt ONCE and cache in opts for all downstream calls.
+        # Without this, PromptBuilder.build_system_prompt_with_context is called
+        # per model per round (N*R times), each doing 2 DB queries + schema generation.
+        opts = ensure_cached_system_prompt(state, opts)
+
         # Query each model with its own history
         case query_models_with_per_model_histories(state, model_pool, opts) do
           {:ok, responses, updated_state} ->
@@ -82,7 +104,7 @@ defmodule Quoracle.Agent.Consensus do
                 opts[:agent_id],
                 :debug,
                 "Received #{length(responses)} LLM responses (initial round)",
-                %{raw_responses: slim_responses_for_logging(responses)},
+                %{raw_responses: ResponseLogger.slim_responses_for_logging(responses)},
                 opts[:pubsub]
               )
             end
@@ -310,7 +332,7 @@ defmodule Quoracle.Agent.Consensus do
                 opts[:agent_id],
                 :debug,
                 "Received #{length(refined_responses)} LLM responses (refinement round #{round + 1})",
-                %{raw_responses: slim_responses_for_logging(refined_responses)},
+                %{raw_responses: ResponseLogger.slim_responses_for_logging(refined_responses)},
                 opts[:pubsub]
               )
             end
@@ -354,6 +376,28 @@ defmodule Quoracle.Agent.Consensus do
   defp user_entry?(%{role: "user"}), do: true
   defp user_entry?(_), do: false
 
+  # Build system prompt once for the entire consensus process.
+  # If already in opts (from ConsensusHandler), keep it.
+  # If in state (from Core's lazy cache), use it.
+  # Otherwise build fresh and cache in opts.
+  defp ensure_cached_system_prompt(state, opts) do
+    if Keyword.has_key?(opts, :cached_system_prompt) do
+      opts
+    else
+      prompt =
+        Map.get(state, :cached_system_prompt) ||
+          build_system_prompt_for_consensus(state, opts)
+
+      Keyword.put(opts, :cached_system_prompt, prompt)
+    end
+  end
+
+  defp build_system_prompt_for_consensus(state, opts) do
+    field_prompts = %{system_prompt: Map.get(state, :system_prompt)}
+    prompt_opts = Keyword.put(opts, :field_prompts, field_prompts)
+    Quoracle.Consensus.PromptBuilder.build_system_prompt_with_context(prompt_opts)
+  end
+
   # v24.0: Added :cost_accumulator for embedding cost batching (feat-20260203-194408)
   defp extract_cost_opts(context) do
     opts = Map.get(context, :original_opts, [])
@@ -395,7 +439,7 @@ defmodule Quoracle.Agent.Consensus do
         :debug,
         "Received #{length(result.successful_responses)} LLM responses",
         %{
-          raw_responses: slim_responses_for_logging(result.successful_responses),
+          raw_responses: ResponseLogger.slim_responses_for_logging(result.successful_responses),
           failed_models: result.failed_models,
           total_latency_ms: result.total_latency_ms,
           aggregate_usage: result.aggregate_usage
@@ -419,37 +463,6 @@ defmodule Quoracle.Agent.Consensus do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
-  # Extracts only the fields needed for UI display from ReqLLM.Response objects.
-  # Drops the `context` field which contains the full conversation history and
-  # causes O(n²) memory growth when stored in log metadata.
-  defp slim_responses_for_logging(responses) when is_list(responses) do
-    Enum.map(responses, &slim_single_response/1)
-  end
-
-  defp slim_single_response(%ReqLLM.Response{} = response) do
-    # Keep all UI-needed fields, drop only the massive context field
-    %{
-      model: response.model,
-      usage: response.usage,
-      text: ReqLLM.Response.text(response),
-      finish_reason: response.finish_reason,
-      latency_ms: Map.get(response, :latency_ms)
-    }
-  end
-
-  defp slim_single_response(response) when is_map(response) do
-    # Fallback for non-struct responses (tests, legacy)
-    # Preserve all fields except context to maintain UI compatibility
-    response
-    |> Map.drop([:context, "context"])
-    |> Map.put_new(:text, response[:content] || response["content"])
-  end
-
-  defp slim_single_response(other) do
-    # Catch-all for nil, error tuples, or unexpected types
-    %{model: nil, usage: nil, text: inspect(other), finish_reason: nil, latency_ms: nil}
-  end
 
   @doc "Parse JSON response from LLM into action map. Delegates to ActionParser."
   @spec parse_json_response(String.t()) :: {:ok, action_response()} | {:error, atom()}

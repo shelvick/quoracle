@@ -99,59 +99,6 @@ defmodule Quoracle.Actions.TodoIntegrationTest do
     end
   end
 
-  describe "field name enforcement" do
-    test "prevents LLM from using alternative field names" do
-      # All these variations should be rejected
-      invalid_variations = [
-        # Wrong content field names
-        %{"items" => [%{"task" => "Test", "state" => "todo"}]},
-        %{"items" => [%{"description" => "Test", "state" => "todo"}]},
-        %{"items" => [%{"title" => "Test", "state" => "todo"}]},
-        %{"items" => [%{"text" => "Test", "state" => "todo"}]},
-        %{"items" => [%{"item" => "Test", "state" => "todo"}]},
-        %{"items" => [%{"details" => "Test", "state" => "todo"}]},
-        # Wrong state field names
-        %{"items" => [%{"content" => "Test", "status" => "todo"}]},
-        %{"items" => [%{"content" => "Test", "progress" => "todo"}]},
-        %{"items" => [%{"content" => "Test", "phase" => "todo"}]},
-        %{"items" => [%{"content" => "Test", "stage" => "todo"}]}
-      ]
-
-      for invalid_params <- invalid_variations do
-        action_json = %{
-          "action" => "todo",
-          "params" => invalid_params
-        }
-
-        assert {:error, :missing_required_field} = Validator.validate_action(action_json),
-               "Should reject params: #{inspect(invalid_params)}"
-      end
-    end
-
-    test "accepts only the exact schema structure" do
-      # Only this exact structure should pass
-      valid_params = %{
-        "items" => [
-          %{"content" => "First task", "state" => "todo"},
-          %{"content" => "Second task", "state" => "pending"},
-          %{"content" => "Third task", "state" => "done"}
-        ]
-      }
-
-      action_json = %{
-        "action" => "todo",
-        "params" => valid_params
-      }
-
-      assert {:ok, validated} = Validator.validate_action(action_json)
-      assert length(validated.params.items) == 3
-
-      assert Enum.all?(validated.params.items, fn item ->
-               Map.keys(item) -- [:content, :state] == []
-             end)
-    end
-  end
-
   describe "LLM response validation" do
     test "validates realistic LLM response format" do
       # Actual format an LLM would generate

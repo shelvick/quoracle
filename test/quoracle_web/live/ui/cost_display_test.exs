@@ -21,6 +21,11 @@ defmodule QuoracleWeb.UI.CostDisplayTest do
   - R13: Cost Update Handling [INTEGRATION]
   - R14: Agent Cost Display Flow [SYSTEM]
   - R15: Task Total Display Flow [SYSTEM]
+  - R16-R19: ID Attribute & costs_updated_at Trigger [UNIT/INTEGRATION]
+  - R20-R39: v2.0 Token Breakdown Table [UNIT/INTEGRATION]
+  - R40: Absorption Records in Model Breakdown Table [ACCEPTANCE]
+  - R41: Header Total Stable After Child Dismissal [ACCEPTANCE]
+  - R42: Model Table Row Sum Equals Header Total [ACCEPTANCE]
   """
 
   use QuoracleWeb.ConnCase, async: true
@@ -2152,6 +2157,235 @@ defmodule QuoracleWeb.UI.CostDisplayTest do
       assert html =~ "$0.07"
       # 0.05432 -> $0.05
       assert html =~ "$0.05"
+    end
+  end
+
+  # ============================================================
+  # WorkGroupID: fix-20260223-cost-display-budget-timeout
+  # v3.0: Absorption Records from DismissChild (R40-R42)
+  # ============================================================
+
+  # Helper to create an absorption cost record (simulates DismissChild v5.0 per-model absorption)
+  defp create_absorption_record(task, parent_agent_id, opts) do
+    child_id = Keyword.get(opts, :child_id, "child_#{System.unique_integer([:positive])}")
+    cost_usd = Keyword.get(opts, :cost_usd, Decimal.new("0.05"))
+    model_spec = Keyword.get(opts, :model_spec, "anthropic/claude-sonnet-4-20250514")
+    input_tokens = Keyword.get(opts, :input_tokens, 1000)
+    output_tokens = Keyword.get(opts, :output_tokens, 500)
+    input_cost = Keyword.get(opts, :input_cost, "0.02")
+    output_cost = Keyword.get(opts, :output_cost, "0.03")
+
+    metadata =
+      %{
+        "child_agent_id" => child_id,
+        "child_allocated" => "50",
+        "child_tree_spent" => Decimal.to_string(cost_usd),
+        "unspent_returned" => "0",
+        "dismissed_at" => DateTime.to_iso8601(DateTime.utc_now()),
+        "model_spec" => model_spec,
+        "input_tokens" => to_string(input_tokens),
+        "output_tokens" => to_string(output_tokens),
+        "reasoning_tokens" => "0",
+        "cached_tokens" => "0",
+        "cache_creation_tokens" => "0",
+        "input_cost" => input_cost,
+        "output_cost" => output_cost
+      }
+
+    {:ok, cost} =
+      %AgentCost{}
+      |> AgentCost.changeset(%{
+        agent_id: parent_agent_id,
+        task_id: task.id,
+        cost_type: "child_budget_absorbed",
+        cost_usd: cost_usd,
+        metadata: metadata
+      })
+      |> Repo.insert()
+
+    cost
+  end
+
+  describe "R40: absorption records appear in model breakdown table" do
+    test "dismissed child costs appear in model breakdown table", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      task = create_task()
+      parent = create_agent(task)
+
+      # Parent's own cost (direct LLM usage)
+      create_detailed_cost(task, parent.agent_id,
+        model_spec: "anthropic/claude-sonnet-4-20250514",
+        cost_usd: Decimal.new("0.10"),
+        input_tokens: 2000,
+        output_tokens: 500
+      )
+
+      # Absorption record from dismissed child (simulates DismissChild v5.0)
+      # This record is attributed to the parent but represents absorbed child costs
+      create_absorption_record(task, parent.agent_id,
+        model_spec: "openai/gpt-4o",
+        cost_usd: Decimal.new("0.20"),
+        input_tokens: 3000,
+        output_tokens: 1000,
+        input_cost: "0.08",
+        output_cost: "0.12"
+      )
+
+      {:ok, view, _html} =
+        render_isolated(
+          conn,
+          %{
+            id: "cost-absorption-r40-#{task.id}",
+            mode: :detail,
+            task_id: task.id,
+            expanded: true
+          },
+          sandbox_owner
+        )
+
+      html = render(view)
+
+      # The model breakdown table should show BOTH models:
+      # - claude-sonnet from parent's own LLM usage
+      # - gpt-4o from the absorbed child costs
+      assert html =~ "claude-sonnet"
+      assert html =~ "gpt-4o"
+
+      # Absorbed child cost should appear with its cost value
+      assert html =~ "$0.20"
+    end
+  end
+
+  describe "R41: header total stable after dismissal" do
+    test "Cost Details header total unchanged after child dismissal", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      task = create_task()
+      parent = create_agent(task)
+
+      # Parent's own cost
+      create_detailed_cost(task, parent.agent_id,
+        model_spec: "anthropic/claude-sonnet-4-20250514",
+        cost_usd: Decimal.new("0.15"),
+        input_tokens: 2000,
+        output_tokens: 500
+      )
+
+      # Absorption records simulate the scenario AFTER child dismissal:
+      # - Child's original cost records have been deleted by TreeTerminator
+      # - These absorption records under the parent preserve the costs
+      create_absorption_record(task, parent.agent_id,
+        model_spec: "anthropic/claude-sonnet-4-20250514",
+        cost_usd: Decimal.new("0.25"),
+        input_tokens: 5000,
+        output_tokens: 1500,
+        input_cost: "0.10",
+        output_cost: "0.15"
+      )
+
+      # Expected total: parent own ($0.15) + absorbed child ($0.25) = $0.40
+      {:ok, view, _html} =
+        render_isolated(
+          conn,
+          %{
+            id: "cost-absorption-r41-#{task.id}",
+            mode: :detail,
+            task_id: task.id,
+            expanded: true
+          },
+          sandbox_owner
+        )
+
+      html = render(view)
+
+      # The header total should include both own and absorbed costs
+      # by_task total = $0.15 + $0.25 = $0.40
+      assert html =~ "$0.40"
+    end
+  end
+
+  describe "R42: model table row sum equals header total" do
+    test "model table row sum equals header total", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      task = create_task()
+      parent = create_agent(task)
+
+      # Parent's own costs across 2 models
+      create_detailed_cost(task, parent.agent_id,
+        model_spec: "anthropic/claude-sonnet-4-20250514",
+        cost_usd: Decimal.new("0.10"),
+        input_tokens: 2000,
+        output_tokens: 500,
+        input_cost: "0.04",
+        output_cost: "0.06"
+      )
+
+      create_detailed_cost(task, parent.agent_id,
+        model_spec: "openai/gpt-4o",
+        cost_usd: Decimal.new("0.05"),
+        input_tokens: 1000,
+        output_tokens: 300,
+        input_cost: "0.02",
+        output_cost: "0.03"
+      )
+
+      # Absorption records from dismissed child (2 different models)
+      create_absorption_record(task, parent.agent_id,
+        model_spec: "anthropic/claude-sonnet-4-20250514",
+        cost_usd: Decimal.new("0.15"),
+        input_tokens: 3000,
+        output_tokens: 800,
+        input_cost: "0.06",
+        output_cost: "0.09"
+      )
+
+      create_absorption_record(task, parent.agent_id,
+        model_spec: "openai/gpt-4o",
+        cost_usd: Decimal.new("0.20"),
+        input_tokens: 4000,
+        output_tokens: 1200,
+        input_cost: "0.08",
+        output_cost: "0.12"
+      )
+
+      {:ok, view, _html} =
+        render_isolated(
+          conn,
+          %{
+            id: "cost-absorption-r42-#{task.id}",
+            mode: :detail,
+            task_id: task.id,
+            expanded: true
+          },
+          sandbox_owner
+        )
+
+      html = render(view)
+
+      # Header total comes from by_task which sums ALL cost records:
+      # $0.10 + $0.05 + $0.15 + $0.20 = $0.50
+      assert html =~ "$0.50"
+
+      # Model table rows (aggregated per model_spec from by_task_and_model_detailed):
+      # claude-sonnet: $0.10 + $0.15 = $0.25
+      assert html =~ "$0.25"
+      # gpt-4o: $0.05 + $0.20 = $0.25
+      # (both models sum to $0.25, which equals $0.50 total)
+
+      # Both models should be visible in the table
+      assert html =~ "claude-sonnet"
+      assert html =~ "gpt-4o"
+
+      # Verify that both models appear and the header total ($0.50) equals
+      # the sum of model rows ($0.25 + $0.25 = $0.50).
+      # The header uses by_task (unfiltered) and model rows use
+      # by_task_and_model_detailed (filtered on model_spec IS NOT NULL).
+      # With absorption records preserving model_spec, these should match.
     end
   end
 end

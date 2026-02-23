@@ -4,7 +4,7 @@ defmodule Quoracle.Consensus.PromptBuilderEnhancementTest do
   Verifies nested map structures, enum types, and recursive type handling
   for proper JSON schema generation that guides LLMs.
   """
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
 
   alias Quoracle.Consensus.PromptBuilder
   alias Quoracle.Actions.Schema

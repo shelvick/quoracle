@@ -13,7 +13,7 @@ defmodule Quoracle.Agent.ReflectorMultimodalTest do
   stringified content within the reflection messages.
   """
 
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
 
   alias Quoracle.Agent.Reflector
   alias Quoracle.Utils.ContentStringifier

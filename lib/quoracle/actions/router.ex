@@ -64,8 +64,14 @@ defmodule Quoracle.Actions.Router do
       )
 
     # For :call_mcp, fetch existing mcp_client from agent state (if any) before lazy-init
+    # Defense layer 3: liveness guard catches stale PID if Core hasn't processed DOWN yet
     existing_mcp_client =
-      if action_type == :call_mcp, do: GenServer.call(agent_pid, :get_mcp_client), else: nil
+      if action_type == :call_mcp do
+        pid = GenServer.call(agent_pid, :get_mcp_client)
+        if pid && Process.alive?(pid), do: pid, else: nil
+      else
+        nil
+      end
 
     # Build opts with agent metadata, then lazy-init MCP client only for :call_mcp
     base_opts =

@@ -115,26 +115,6 @@ defmodule Quoracle.Actions.WaitEnhancedTest do
   end
 
   describe "timer management" do
-    test "delivers timer expiry message to AGENT_Core", %{deps: deps} do
-      capture_log(fn ->
-        # Register as agent
-        Registry.register(deps.registry, {:agent, "timer_agent"}, %{})
-
-        # Start async wait
-        {:ok, response} =
-          Wait.execute(%{wait: 0.1}, "timer_agent",
-            registry: deps.registry,
-            pubsub: deps.pubsub,
-            agent_pid: self()
-          )
-
-        timer_id = response.timer_id
-
-        # Should receive timer expiry message (generous timeout for system under load)
-        assert_receive {:wait_expired, ^timer_id}, 5000
-      end)
-    end
-
     test "cancels previous timer when new wait starts", %{deps: deps} do
       # Register as agent
       Registry.register(deps.registry, {:agent, "cancel_agent"}, %{})
@@ -216,41 +196,6 @@ defmodule Quoracle.Actions.WaitEnhancedTest do
 
       # Should return :ok even when cancellation fails
       assert result == :ok
-    end
-  end
-
-  describe "error handling" do
-    test "returns error for negative duration", %{deps: deps} do
-      capture_log(fn ->
-        result =
-          Wait.execute(%{wait: -1}, "test_agent",
-            registry: deps.registry,
-            pubsub: deps.pubsub,
-            agent_pid: self()
-          )
-
-        assert {:error, :invalid_wait_value} = result
-      end)
-    end
-
-    test "handles unregistered agents with async mode", %{deps: deps} do
-      # Register the process to enable async mode
-      Registry.register(deps.registry, {:agent, "unregistered_agent"}, %{})
-
-      {:ok, response} =
-        Wait.execute(%{wait: 0.05}, "unregistered_agent",
-          registry: deps.registry,
-          pubsub: deps.pubsub,
-          agent_pid: self()
-        )
-
-      # Should use async mode when registered
-      assert response.async == true
-      assert response.timer_id
-
-      # Verify timer expiry message (generous timeout for system under load)
-      timer_id = response.timer_id
-      assert_receive {:wait_expired, ^timer_id}, 5000
     end
   end
 

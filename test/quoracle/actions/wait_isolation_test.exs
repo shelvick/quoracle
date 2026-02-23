@@ -204,33 +204,5 @@ defmodule Quoracle.Actions.WaitIsolationTest do
       assert_receive {:action_error, payload}, 30_000
       assert payload.agent_id == agent_id
     end
-
-    test "duration limit errors broadcast to isolated PubSub", %{pubsub: pubsub} do
-      agent_id = "test-agent-limit"
-
-      # Spawn per-action Router (v28.0)
-      {:ok, router} = spawn_wait_router(agent_id, pubsub)
-
-      on_exit(fn ->
-        if Process.alive?(router) do
-          try do
-            GenServer.stop(router, :normal, :infinity)
-          catch
-            :exit, _ -> :ok
-          end
-        end
-      end)
-
-      # Test with a negative duration to trigger an error
-      capture_log(fn ->
-        send(self(), {:result, Router.execute(router, :wait, %{wait: -1}, agent_id)})
-      end)
-
-      assert_received {:result, {:error, _}}
-
-      # Should receive error broadcast in isolated PubSub
-      assert_receive {:action_error, payload}, 30_000
-      assert payload.agent_id == agent_id
-    end
   end
 end

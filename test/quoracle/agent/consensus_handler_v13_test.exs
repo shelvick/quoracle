@@ -7,7 +7,7 @@ defmodule Quoracle.Agent.ConsensusHandlerV13Test do
   WorkGroupID: fix-20251211-051748
   """
 
-  use Quoracle.DataCase, async: true
+  use ExUnit.Case, async: true
 
   alias Quoracle.Agent.ConsensusHandler
 

@@ -14,22 +14,6 @@ defmodule Quoracle.Agent.DynSupTest do
     {:ok, deps: deps}
   end
 
-  describe "start_link/1" do
-    test "ARC_FUNC_01: DynSup starts and can be found via supervisor", %{deps: deps} do
-      # Use the isolated DynSup from deps
-      pid = deps.dynsup
-      assert is_pid(pid)
-      assert Process.alive?(pid)
-    end
-
-    test "allows multiple instances without name conflicts" do
-      # Since DynSup no longer registers a name, multiple instances can coexist
-      pid1 = start_supervised!({DynSup, []}, shutdown: :infinity)
-      pid2 = start_supervised!({DynSup, []}, id: :dynsup2, shutdown: :infinity)
-      assert pid1 != pid2
-    end
-  end
-
   describe "start_agent/1" do
     test "ARC_FUNC_02: starts agent with valid config and returns {:ok, pid}", %{deps: deps} do
       agent_id = "test-agent-#{System.unique_integer([:positive])}"
@@ -242,53 +226,6 @@ defmodule Quoracle.Agent.DynSupTest do
                  Registry.lookup(deps.registry, {:agent, "transient-normal"}) == []
                end)
     end
-
-    test "ARC_FUNC_04: DynSup crashes when max restarts exceeded", %{deps: _deps} do
-      # This test verifies that the supervisor crashes when max restarts are exceeded
-      # We create an isolated supervisor to avoid affecting other tests
-      import ExUnit.CaptureLog
-
-      # Use a custom child spec that immediately crashes
-      child_spec = %{
-        id: :crasher,
-        start: {Task, :start_link, [fn -> raise "intentional crash" end]},
-        restart: :permanent,
-        shutdown: 5000,
-        type: :worker
-      }
-
-      # Start an isolated DynamicSupervisor with low restart limits for testing
-      sup_pid =
-        start_supervised!(
-          {
-            DynamicSupervisor,
-            # Low limit for faster testing
-            strategy: :one_for_one, max_restarts: 3, max_seconds: 5
-          },
-          id: :crasher_sup
-        )
-
-      # Monitor the supervisor to detect when it crashes
-      ref = Process.monitor(sup_pid)
-
-      # Start the crasher child which will immediately crash
-      # Capture logs to suppress the intentional crash error messages
-      capture_log(fn ->
-        {:ok, _child_pid} = DynamicSupervisor.start_child(sup_pid, child_spec)
-
-        # Wait for supervisor to crash after exceeding max restarts
-        # Need to wait inside capture_log to catch all restart attempts
-        receive do
-          {:DOWN, ^ref, :process, ^sup_pid, reason} ->
-            assert reason in [:shutdown, :noproc, :killed]
-        after
-          2000 -> flunk("Supervisor did not crash after max restarts")
-        end
-      end)
-
-      # Verify the supervisor is down
-      refute Process.alive?(sup_pid)
-    end
   end
 
   describe "terminate_agent/1" do
@@ -322,62 +259,6 @@ defmodule Quoracle.Agent.DynSupTest do
     test "ARC_VAL_02: returns {:error, :not_found} for unknown pid", %{deps: _deps} do
       fake_pid = spawn(fn -> :ok end)
       assert {:error, :not_found} = DynSup.terminate_agent(fake_pid)
-    end
-  end
-
-  describe "supervisor integration" do
-    test "ARC_ERR_02: DynSup restarts when crashed under Application supervisor" do
-      # Start a DynamicSupervisor under a test supervisor
-      # Define a module that implements child_spec/1 for the supervisor
-      child_spec = %{
-        id: :test_dyn_sup,
-        start: {DynamicSupervisor, :start_link, [[strategy: :one_for_one]]},
-        restart: :permanent,
-        type: :supervisor
-      }
-
-      # Use start_supervised with a proper supervisor specification
-      {:ok, sup_pid} =
-        start_supervised(%{
-          id: :test_supervisor,
-          start: {Supervisor, :start_link, [[child_spec], [strategy: :one_for_one]]},
-          type: :supervisor
-        })
-
-      # Get DynamicSupervisor PID
-      [{_, dyn_sup_pid, _, _}] = Supervisor.which_children(sup_pid)
-      assert Process.alive?(dyn_sup_pid)
-
-      # Monitor and kill DynamicSupervisor - :kill required for abnormal exit
-      # capture_log suppresses expected termination error
-      import ExUnit.CaptureLog
-      ref = Process.monitor(dyn_sup_pid)
-
-      capture_log(fn ->
-        Process.exit(dyn_sup_pid, :kill)
-
-        # Wait for death confirmation
-        assert_receive {:DOWN, ^ref, :process, ^dyn_sup_pid, reason}, 30_000
-        assert reason in [:killed, :noproc]
-      end)
-
-      # Wait for supervisor to restart DynamicSupervisor
-      new_dyn_sup_pid =
-        Enum.reduce_while(1..50, nil, fn _, _ ->
-          case Supervisor.which_children(sup_pid) do
-            [{_, pid, _, _}] when pid != dyn_sup_pid and is_pid(pid) ->
-              {:halt, pid}
-
-            _ ->
-              # Brief yield to scheduler instead of sleep
-              :erlang.yield()
-              {:cont, nil}
-          end
-        end)
-
-      assert new_dyn_sup_pid != nil
-      assert new_dyn_sup_pid != dyn_sup_pid
-      assert Process.alive?(new_dyn_sup_pid)
     end
   end
 

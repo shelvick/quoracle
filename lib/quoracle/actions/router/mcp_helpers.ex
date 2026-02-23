@@ -17,11 +17,13 @@ defmodule Quoracle.Actions.Router.MCPHelpers do
 
     require Logger
 
+    needs_init = (is_nil(mcp_client) or not Process.alive?(mcp_client)) and is_pid(agent_pid)
+
     Logger.debug(
-      "MCPHelpers: mcp_client=#{inspect(mcp_client)}, agent_pid=#{inspect(agent_pid)}, creating_new=#{is_nil(mcp_client) and is_pid(agent_pid)}"
+      "MCPHelpers: mcp_client=#{inspect(mcp_client)}, agent_pid=#{inspect(agent_pid)}, creating_new=#{needs_init}"
     )
 
-    if is_nil(mcp_client) and is_pid(agent_pid) do
+    if needs_init do
       agent_id = Keyword.get(opts, :agent_id) || GenServer.call(agent_pid, :get_agent_id)
 
       mcp_opts =

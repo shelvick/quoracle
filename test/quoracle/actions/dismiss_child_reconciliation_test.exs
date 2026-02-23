@@ -1,9 +1,9 @@
 defmodule Quoracle.Actions.DismissChildReconciliationTest do
   @moduledoc """
-  Tests for ACTION_DismissChild v4.0 - Budget Reconciliation on Dismissal.
+  Tests for ACTION_DismissChild v4.0/v5.0 - Budget Reconciliation on Dismissal.
 
-  WorkGroupID: fix-20260211-budget-enforcement
-  Packet: Packet 2 (Dismissal Reconciliation)
+  WorkGroupID: fix-20260211-budget-enforcement, fix-20260223-cost-display-budget-timeout
+  Packet: Packet 2 (Dismissal Reconciliation), Packet 1 (Per-Model Cost Absorption)
 
   Tests the corrected budget reconciliation flow when parent dismisses child:
   - R22: Tree spent queried before termination
@@ -16,15 +16,29 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
   - R28b: N/A child with costs creates absorption record
   - R29: Over budget re-evaluated after absorption
   - R30: Acceptance - full dismissal budget flow
+
+  v5.0 Requirements (fix-20260223-cost-display-budget-timeout):
+  - R31: Per-model absorption records created
+  - R32: Model spec preserved in absorption metadata
+  - R33: Token counts preserved in absorption metadata
+  - R34: Non-model costs absorbed without model_spec
+  - R35: Cost Detail model table preserves totals (SYSTEM)
+  - R36: Absorption succeeds when parent dead
+  - R37: No Core.get_state call (uses parent_id directly)
+  - R38: Escrow still released when parent alive
+  - R39: Escrow skipped when parent dead, costs still absorbed
+  - R40: Property - absorption records sum equals tree spent
+  - R41: Property - task total unchanged after dismissal
+  - R42: Escrow release before absorption record creation (audit gap)
   """
 
   use Quoracle.DataCase, async: true
+  use ExUnitProperties
 
   alias Quoracle.Actions.DismissChild
   alias Quoracle.Agent.Core
   alias Quoracle.Costs.AgentCost
-  # Aggregator used for understanding query patterns in test assertions
-  # (not directly called in tests, but documented for context)
+  alias Quoracle.Costs.Aggregator
   alias Quoracle.Tasks.Task, as: TaskSchema
   alias Test.IsolationHelpers
 
@@ -105,6 +119,40 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
           task_id: task_id,
           cost_type: cost_type,
           cost_usd: cost_usd
+        })
+      )
+
+    cost
+  end
+
+  # Helper to insert a cost record with model_spec and token metadata (v5.0)
+  defp insert_model_cost(agent_id, task_id, opts) do
+    cost_usd = Keyword.fetch!(opts, :cost_usd)
+    model_spec = Keyword.get(opts, :model_spec)
+    cost_type = Keyword.get(opts, :cost_type, "llm_consensus")
+
+    metadata =
+      %{
+        "input_tokens" => Keyword.get(opts, :input_tokens, 500),
+        "output_tokens" => Keyword.get(opts, :output_tokens, 200),
+        "reasoning_tokens" => Keyword.get(opts, :reasoning_tokens, 0),
+        "cached_tokens" => Keyword.get(opts, :cached_tokens, 0),
+        "cache_creation_tokens" => Keyword.get(opts, :cache_creation_tokens, 0),
+        "input_cost" => Keyword.get(opts, :input_cost, "0.01"),
+        "output_cost" => Keyword.get(opts, :output_cost, "0.02")
+      }
+      |> then(fn m ->
+        if model_spec, do: Map.put(m, "model_spec", model_spec), else: m
+      end)
+
+    {:ok, cost} =
+      Repo.insert(
+        AgentCost.changeset(%AgentCost{}, %{
+          agent_id: agent_id,
+          task_id: task_id,
+          cost_type: cost_type,
+          cost_usd: cost_usd,
+          metadata: metadata
         })
       )
 
@@ -487,7 +535,7 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
       }
 
       # Child with N/A budget (no allocation)
-      child_budget = %{mode: :na, allocated: nil, committed: nil}
+      child_budget = Quoracle.Budget.Schema.new_na()
 
       {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
 
@@ -532,7 +580,7 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
         committed: Decimal.new("0")
       }
 
-      child_budget = %{mode: :na, allocated: nil, committed: nil}
+      child_budget = Quoracle.Budget.Schema.new_na()
 
       {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
 
@@ -774,6 +822,898 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
       assert absorption.metadata["child_allocated"] == "50.00"
       assert absorption.metadata["child_tree_spent"] == "30.00"
       assert absorption.metadata["unspent_returned"] == "20.00"
+    end
+  end
+
+  # ==========================================================================
+  # v5.0: R31 - Per-Model Records Created [INTEGRATION]
+  # ==========================================================================
+
+  describe "per-model absorption (R31)" do
+    @tag :r31
+    @tag :integration
+    test "R31: creates per-model absorption records on dismissal",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R31-#{System.unique_integer([:positive])}"
+      child_id = "child-R31-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      # Child has costs across 2 different models
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("15.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("10.00"),
+        model_spec: "openai/gpt-4o"
+      )
+
+      # Act: Dismiss child
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+      :ok = wait_for_dismiss_complete(child_id)
+
+      # Assert: 2 absorption records created, one per model
+      absorption_records =
+        Repo.all(
+          from(c in AgentCost,
+            where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed",
+            order_by: [desc: c.cost_usd]
+          )
+        )
+
+      assert length(absorption_records) == 2,
+             "Should create 2 absorption records (one per model), " <>
+               "got #{length(absorption_records)}"
+
+      # Verify each record has correct cost
+      costs = Enum.map(absorption_records, & &1.cost_usd)
+      assert Enum.any?(costs, &Decimal.equal?(&1, Decimal.new("15.00")))
+      assert Enum.any?(costs, &Decimal.equal?(&1, Decimal.new("10.00")))
+    end
+  end
+
+  # ==========================================================================
+  # v5.0: R32 - Model Spec Preserved in Metadata [INTEGRATION]
+  # ==========================================================================
+
+  describe "model_spec metadata (R32)" do
+    @tag :r32
+    @tag :integration
+    test "R32: absorption record metadata preserves model_spec",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R32-#{System.unique_integer([:positive])}"
+      child_id = "child-R32-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("20.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      # Act
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+      :ok = wait_for_dismiss_complete(child_id)
+
+      # Assert: Absorption metadata includes model_spec as string key
+      [absorption] =
+        Repo.all(
+          from(c in AgentCost,
+            where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
+          )
+        )
+
+      assert absorption.metadata["model_spec"] == "anthropic/claude-sonnet-4",
+             "Absorption metadata must preserve model_spec. " <>
+               "Got: #{inspect(absorption.metadata)}"
+    end
+  end
+
+  # ==========================================================================
+  # v5.0: R33 - Token Counts Preserved [INTEGRATION]
+  # ==========================================================================
+
+  describe "token preservation (R33)" do
+    @tag :r33
+    @tag :integration
+    test "R33: absorption records preserve token counts and costs",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R33-#{System.unique_integer([:positive])}"
+      child_id = "child-R33-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("20.00"),
+        model_spec: "anthropic/claude-sonnet-4",
+        input_tokens: 1000,
+        output_tokens: 500,
+        reasoning_tokens: 200,
+        cached_tokens: 100,
+        cache_creation_tokens: 50,
+        input_cost: "0.05",
+        output_cost: "0.10"
+      )
+
+      # Act
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+      :ok = wait_for_dismiss_complete(child_id)
+
+      # Assert: Absorption metadata includes all 5 token types and costs
+      [absorption] =
+        Repo.all(
+          from(c in AgentCost,
+            where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
+          )
+        )
+
+      meta = absorption.metadata
+
+      assert meta["input_tokens"] == "1000"
+      assert meta["output_tokens"] == "500"
+      assert meta["reasoning_tokens"] == "200"
+      assert meta["cached_tokens"] == "100"
+      assert meta["cache_creation_tokens"] == "50"
+      assert meta["input_cost"] != nil
+      assert meta["output_cost"] != nil
+    end
+  end
+
+  # ==========================================================================
+  # v5.0: R34 - Non-Model Costs Absorbed [INTEGRATION]
+  # ==========================================================================
+
+  describe "non-model cost absorption (R34)" do
+    @tag :r34
+    @tag :integration
+    test "R34: external costs absorbed without model_spec",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R34-#{System.unique_integer([:positive])}"
+      child_id = "child-R34-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      # Child has external cost (no model_spec)
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("5.00"),
+        cost_type: "external"
+      )
+
+      # Act
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+      :ok = wait_for_dismiss_complete(child_id)
+
+      # Assert: Absorption record created without model_spec
+      absorption_records =
+        Repo.all(
+          from(c in AgentCost,
+            where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
+          )
+        )
+
+      assert length(absorption_records) == 1
+
+      absorption = hd(absorption_records)
+      assert Decimal.equal?(absorption.cost_usd, Decimal.new("5.00"))
+
+      # External costs should NOT have model_spec in metadata
+      refute Map.has_key?(absorption.metadata, "model_spec"),
+             "External cost absorption should not have model_spec"
+    end
+  end
+
+  # ==========================================================================
+  # v5.0: R35 - Model Table Total Preserved [SYSTEM]
+  # ==========================================================================
+
+  describe "model table total (R35)" do
+    @tag :r35
+    @tag :acceptance
+    @tag :system
+    test "R35: model table total unchanged after child dismissal",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R35-#{System.unique_integer([:positive])}"
+      child_id = "child-R35-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("200.00"),
+        committed: Decimal.new("100.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      # Parent has own costs on model A
+      insert_model_cost(parent_id, task.id,
+        cost_usd: Decimal.new("10.00"),
+        model_spec: "anthropic/claude-sonnet-4",
+        input_tokens: 500,
+        output_tokens: 200
+      )
+
+      # Child has costs across 2 models
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("25.00"),
+        model_spec: "anthropic/claude-sonnet-4",
+        input_tokens: 1200,
+        output_tokens: 400
+      )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("15.00"),
+        model_spec: "openai/gpt-4o",
+        input_tokens: 800,
+        output_tokens: 300
+      )
+
+      # BEFORE dismissal: snapshot per-model breakdown and header total
+      before_task_total = Aggregator.by_task(task.id).total_cost
+      before_model_detail = Aggregator.by_task_and_model_detailed(task.id)
+
+      before_model_sum =
+        Enum.reduce(before_model_detail, Decimal.new("0"), fn row, acc ->
+          if row.total_cost, do: Decimal.add(acc, row.total_cost), else: acc
+        end)
+
+      # Sanity: model sum should equal header total before dismissal
+      assert Decimal.equal?(before_model_sum, before_task_total),
+             "Before dismissal: model sum #{before_model_sum} must equal " <>
+               "header total #{before_task_total}"
+
+      # Act: Parent dismisses child
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+      :ok = wait_for_dismiss_complete(child_id)
+
+      # AFTER dismissal: header total unchanged
+      after_task_total = Aggregator.by_task(task.id).total_cost
+
+      assert Decimal.equal?(after_task_total, before_task_total),
+             "Header total must not change after dismissal. " <>
+               "Before: #{before_task_total}, After: #{after_task_total}"
+
+      # AFTER dismissal: per-model sum still equals header total
+      after_model_detail = Aggregator.by_task_and_model_detailed(task.id)
+
+      after_model_sum =
+        Enum.reduce(after_model_detail, Decimal.new("0"), fn row, acc ->
+          if row.total_cost, do: Decimal.add(acc, row.total_cost), else: acc
+        end)
+
+      assert Decimal.equal?(after_model_sum, after_task_total),
+             "After dismissal: model sum #{after_model_sum} must equal " <>
+               "header total #{after_task_total}. " <>
+               "Models: #{inspect(Enum.map(after_model_detail, & &1.model_spec))}"
+
+      # AFTER dismissal: both models still visible with correct attribution
+      claude_after =
+        Enum.find(after_model_detail, &(&1.model_spec == "anthropic/claude-sonnet-4"))
+
+      gpt_after = Enum.find(after_model_detail, &(&1.model_spec == "openai/gpt-4o"))
+
+      assert claude_after != nil,
+             "Claude model must still be visible after dismissal"
+
+      assert gpt_after != nil,
+             "GPT model must still be visible after dismissal"
+    end
+  end
+
+  # ==========================================================================
+  # v5.0: R36 - Absorption When Parent Dead [INTEGRATION]
+  # ==========================================================================
+
+  describe "dead parent absorption (R36)" do
+    @tag :r36
+    @tag :integration
+    test "R36: absorption records created even when parent process dead",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R36-#{System.unique_integer([:positive])}"
+      child_id = "child-R36-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("20.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      # Kill parent before dismissal reconciliation
+      GenServer.stop(parent_pid, :normal, :infinity)
+
+      # Act: Dismiss child (parent is dead)
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+      :ok = wait_for_dismiss_complete(child_id)
+
+      # Assert: Absorption records still created in DB despite parent being dead
+      absorption_records =
+        Repo.all(
+          from(c in AgentCost,
+            where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
+          )
+        )
+
+      assert absorption_records != [],
+             "Absorption records must be created even when parent process is dead"
+
+      total_absorbed =
+        absorption_records
+        |> Enum.map(& &1.cost_usd)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.reduce(Decimal.new("0"), &Decimal.add/2)
+
+      assert Decimal.equal?(total_absorbed, Decimal.new("20.00")),
+             "Total absorbed should be $20.00 regardless of parent liveness"
+    end
+  end
+
+  # ==========================================================================
+  # v5.0: R37 - No Core.get_state Call [UNIT]
+  # ==========================================================================
+
+  describe "parent_id direct usage (R37)" do
+    @tag :r37
+    @tag :unit
+    test "R37: absorption uses parent_id directly, no GenServer call",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R37-#{System.unique_integer([:positive])}"
+      child_id = "child-R37-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("20.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      # Kill parent so Core.get_state would fail if called
+      GenServer.stop(parent_pid, :normal, :infinity)
+
+      # Act: Dismiss child with dead parent
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+      :ok = wait_for_dismiss_complete(child_id)
+
+      # Assert: Absorption record created with correct parent agent_id
+      # This proves parent_id string was used directly, not Core.get_state
+      absorption_records =
+        Repo.all(
+          from(c in AgentCost,
+            where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
+          )
+        )
+
+      assert absorption_records != [],
+             "Absorption must succeed using parent_id string directly, " <>
+               "without calling Core.get_state on dead parent process"
+
+      # Verify the agent_id on the record matches parent_id
+      Enum.each(absorption_records, fn record ->
+        assert record.agent_id == parent_id,
+               "Absorption record agent_id must be parent_id (#{parent_id})"
+      end)
+    end
+  end
+
+  # ==========================================================================
+  # v5.0: R38 - Escrow Still Released [INTEGRATION]
+  # ==========================================================================
+
+  describe "escrow release (R38)" do
+    @tag :r38
+    @tag :integration
+    test "R38: escrow release still works for live parent",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R38-#{System.unique_integer([:positive])}"
+      child_id = "child-R38-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("20.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      # Act
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+      :ok = wait_for_dismiss_complete(child_id)
+
+      # Assert: Parent's committed decreased (escrow released)
+      {:ok, parent_state} = Core.get_state(parent_pid)
+
+      assert Decimal.equal?(parent_state.budget_data.committed, Decimal.new("0")),
+             "Parent committed should decrease from 50 to 0 after escrow release"
+    end
+  end
+
+  # ==========================================================================
+  # v5.0: R39 - Escrow Skipped, Costs Absorbed [INTEGRATION]
+  # ==========================================================================
+
+  describe "dead parent escrow skip (R39)" do
+    @tag :r39
+    @tag :integration
+    test "R39: escrow skipped for dead parent, costs still absorbed",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R39-#{System.unique_integer([:positive])}"
+      child_id = "child-R39-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("20.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      # Kill parent to make escrow release impossible
+      GenServer.stop(parent_pid, :normal, :infinity)
+
+      # Act
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+      :ok = wait_for_dismiss_complete(child_id)
+
+      # Assert: Absorption records created even though escrow couldn't be released
+      absorption_records =
+        Repo.all(
+          from(c in AgentCost,
+            where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
+          )
+        )
+
+      assert absorption_records != [],
+             "Costs must still be absorbed even when escrow release skipped"
+    end
+  end
+
+  # ==========================================================================
+  # v5.0: R42 - Escrow Release Before Absorption Records [INTEGRATION]
+  #
+  # Integration audit found critical race condition: if parent crashes between
+  # absorption record creation and escrow release, budget leaks (committed
+  # amount never returned). Fix: escrow release MUST happen BEFORE absorption
+  # record creation. Escrow is the volatile operation (needs live parent);
+  # absorption is durable (pure DB insert, no process needed).
+  #
+  # Test strategy: Suspend parent GenServer BEFORE dismiss starts. The background
+  # task will block on whichever operation first requires the parent GenServer:
+  # - Current (absorption first): Absorption records created (pure DB), then
+  #   Core.release_child_budget blocks on suspended parent. Records exist in DB.
+  # - Fixed (escrow first): Core.release_child_budget blocks immediately on
+  #   suspended parent. No absorption records created yet.
+  #
+  # Synchronization: poll_until child cost records are deleted (TreeTerminator
+  # completed), then poll_until absorption records appear OR a stabilization
+  # window expires (proving reconciliation's first operation is blocking).
+  #
+  # Assert no absorption records while parent is suspended → proves escrow
+  # was attempted first (blocking), not absorption (non-blocking DB writes).
+  # ==========================================================================
+
+  describe "escrow-first ordering (R42)" do
+    @tag :r42
+    @tag :integration
+    test "R42: escrow release attempted before absorption record creation",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R42-#{System.unique_integer([:positive])}"
+      child_id = "child-R42-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      # Child has costs that will need absorption
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("20.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      # Verify the cost record exists before dismissal
+      child_costs_before =
+        Repo.aggregate(
+          from(c in AgentCost, where: c.agent_id == ^child_id),
+          :count
+        )
+
+      assert child_costs_before == 1
+
+      # Suspend the parent GenServer. This blocks any GenServer.call to it,
+      # including Core.release_child_budget. Pure DB operations (Recorder.record)
+      # are unaffected by the suspension.
+      :sys.suspend(parent_pid)
+
+      # Trigger dismiss — background task starts
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+
+      # EVENT-BASED SYNC: Poll until TreeTerminator has deleted the child's
+      # cost records. This proves TreeTerminator completed and the background
+      # task has moved on to reconcile_child_budget.
+      :ok =
+        IsolationHelpers.poll_until(
+          fn ->
+            Repo.aggregate(
+              from(c in AgentCost, where: c.agent_id == ^child_id),
+              :count
+            ) == 0
+          end,
+          10_000
+        )
+
+      # At this point, TreeTerminator is done and reconcile_child_budget has
+      # started (or is about to start). The first operation in reconcile will
+      # either complete instantly (DB insert) or block (GenServer.call to
+      # suspended parent).
+      #
+      # EVENT-BASED SYNC: Poll briefly for absorption records. If they appear,
+      # absorption happened first (current buggy ordering). If they don't appear
+      # within a reasonable window, the background task is blocked on the
+      # GenServer.call (correct escrow-first ordering).
+      #
+      # We poll for absorption records with a bounded timeout. With absorption-
+      # first ordering, records appear almost instantly after TreeTerminator
+      # finishes (pure DB insert, <50ms). With escrow-first ordering, the task
+      # is blocked on the suspended parent and records never appear.
+      absorption_appeared =
+        case IsolationHelpers.poll_until(
+               fn ->
+                 Repo.aggregate(
+                   from(c in AgentCost,
+                     where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
+                   ),
+                   :count
+                 ) > 0
+               end,
+               500
+             ) do
+          :ok -> true
+          {:error, :timeout} -> false
+        end
+
+      # KEY ASSERTION: With escrow-first ordering, Core.release_child_budget
+      # (GenServer.call to suspended parent) blocks BEFORE absorption records
+      # are created. Absorption records should NOT appear within 500ms.
+      #
+      # With current code (absorption first), absorption records are pure DB
+      # writes that complete instantly (~10ms), so they DO appear.
+      refute absorption_appeared,
+             "With escrow-first ordering, absorption records should NOT exist yet " <>
+               "while parent is suspended (escrow GenServer.call should block first). " <>
+               "Records appeared — this means absorption happened before escrow " <>
+               "release (wrong ordering, budget leak risk)."
+
+      # Resume parent so the blocked GenServer.call completes
+      :sys.resume(parent_pid)
+
+      # Now wait for the full dismiss to complete
+      :ok = wait_for_dismiss_complete(child_id)
+
+      # After resuming, both operations should complete successfully
+      final_absorption_count =
+        Repo.aggregate(
+          from(c in AgentCost,
+            where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
+          ),
+          :count
+        )
+
+      assert final_absorption_count > 0,
+             "After resume, absorption records should be created"
+
+      {:ok, parent_state} = Core.get_state(parent_pid)
+
+      assert Decimal.equal?(parent_state.budget_data.committed, Decimal.new("0")),
+             "After resume, escrow should be released (committed = 0)"
+    end
+  end
+
+  # ==========================================================================
+  # v5.0: R40 - Property: Absorption Sum Equals Tree Spent [UNIT]
+  # ==========================================================================
+
+  describe "absorption sum property (R40)" do
+    @tag :r40
+    @tag :property
+    property "absorption records sum equals tree spent total",
+             %{deps: deps, task: task} do
+      check all(
+              cost1_cents <- integer(1..5000),
+              cost2_cents <- integer(1..5000)
+            ) do
+        parent_id = "parent-R40-#{System.unique_integer([:positive])}"
+        child_id = "child-R40-#{System.unique_integer([:positive])}"
+
+        cost1 = Decimal.div(Decimal.new(cost1_cents), 100)
+        cost2 = Decimal.div(Decimal.new(cost2_cents), 100)
+
+        parent_budget = %{
+          mode: :root,
+          allocated: Decimal.new("10000.00"),
+          committed: Decimal.new("10000.00")
+        }
+
+        child_budget = %{
+          mode: :allocated,
+          allocated: Decimal.new("10000.00"),
+          committed: Decimal.new("0")
+        }
+
+        {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+        {:ok, _child_pid} =
+          spawn_agent_with_budget(child_id, deps, task, child_budget,
+            parent_id: parent_id,
+            parent_pid: parent_pid
+          )
+
+        # Child has costs across 2 models
+        insert_model_cost(child_id, task.id,
+          cost_usd: cost1,
+          model_spec: "model/a"
+        )
+
+        insert_model_cost(child_id, task.id,
+          cost_usd: cost2,
+          model_spec: "model/b"
+        )
+
+        expected_total = Decimal.add(cost1, cost2)
+
+        # Act
+        {:ok, _} =
+          DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+
+        :ok = wait_for_dismiss_complete(child_id)
+
+        # Assert: Sum of absorption records equals tree spent
+        absorption_records =
+          Repo.all(
+            from(c in AgentCost,
+              where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
+            )
+          )
+
+        absorption_sum =
+          absorption_records
+          |> Enum.map(& &1.cost_usd)
+          |> Enum.reject(&is_nil/1)
+          |> Enum.reduce(Decimal.new("0"), &Decimal.add/2)
+
+        assert Decimal.equal?(absorption_sum, expected_total),
+               "Absorption sum #{absorption_sum} must equal tree spent #{expected_total}"
+      end
+    end
+  end
+
+  # ==========================================================================
+  # v5.0: R41 - Property: Task Total Unchanged [INTEGRATION]
+  # ==========================================================================
+
+  describe "task total invariant (R41)" do
+    @tag :r41
+    @tag :property
+    property "task total cost unchanged by dismissal",
+             %{deps: deps, task: task} do
+      check all(child_cost_cents <- integer(1..5000)) do
+        parent_id = "parent-R41-#{System.unique_integer([:positive])}"
+        child_id = "child-R41-#{System.unique_integer([:positive])}"
+
+        child_cost = Decimal.div(Decimal.new(child_cost_cents), 100)
+
+        parent_budget = %{
+          mode: :root,
+          allocated: Decimal.new("10000.00"),
+          committed: Decimal.new("10000.00")
+        }
+
+        child_budget = %{
+          mode: :allocated,
+          allocated: Decimal.new("10000.00"),
+          committed: Decimal.new("0")
+        }
+
+        {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+        {:ok, _child_pid} =
+          spawn_agent_with_budget(child_id, deps, task, child_budget,
+            parent_id: parent_id,
+            parent_pid: parent_pid
+          )
+
+        insert_model_cost(child_id, task.id,
+          cost_usd: child_cost,
+          model_spec: "anthropic/claude-sonnet-4"
+        )
+
+        # Snapshot task total BEFORE dismissal
+        task_total_before = Aggregator.by_task(task.id).total_cost
+
+        # Act
+        {:ok, _} =
+          DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+
+        :ok = wait_for_dismiss_complete(child_id)
+
+        # Assert: Task total unchanged
+        task_total_after = Aggregator.by_task(task.id).total_cost
+
+        assert Decimal.equal?(
+                 task_total_after || Decimal.new("0"),
+                 task_total_before || Decimal.new("0")
+               ),
+               "Task total must not change after dismissal. " <>
+                 "Before: #{task_total_before}, After: #{task_total_after}"
+      end
     end
   end
 end

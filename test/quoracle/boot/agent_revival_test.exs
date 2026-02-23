@@ -64,7 +64,8 @@ defmodule Quoracle.Boot.AgentRevivalTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Stop the agent to simulate application restart
@@ -119,7 +120,8 @@ defmodule Quoracle.Boot.AgentRevivalTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, {task2, task2_pid}} =
@@ -127,7 +129,8 @@ defmodule Quoracle.Boot.AgentRevivalTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Stop both agents to simulate application restart
@@ -192,7 +195,8 @@ defmodule Quoracle.Boot.AgentRevivalTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, {bad_task, bad_task_pid}} =
@@ -200,7 +204,8 @@ defmodule Quoracle.Boot.AgentRevivalTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Stop both agents
@@ -254,7 +259,8 @@ defmodule Quoracle.Boot.AgentRevivalTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Stop the agent
@@ -305,7 +311,8 @@ defmodule Quoracle.Boot.AgentRevivalTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Stop the agent
@@ -356,7 +363,8 @@ defmodule Quoracle.Boot.AgentRevivalTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       GenServer.stop(task_pid, :normal, :infinity)
@@ -389,7 +397,8 @@ defmodule Quoracle.Boot.AgentRevivalTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       root_agent_id = "root-#{task.id}"
@@ -423,7 +432,8 @@ defmodule Quoracle.Boot.AgentRevivalTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       {:ok, {bad_task, bad_task_pid}} =
@@ -431,7 +441,8 @@ defmodule Quoracle.Boot.AgentRevivalTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Stop both agents
@@ -484,7 +495,8 @@ defmodule Quoracle.Boot.AgentRevivalTest do
           sandbox_owner: sandbox_owner,
           dynsup: dynsup,
           registry: registry,
-          pubsub: pubsub
+          pubsub: pubsub,
+          force_persist: true
         )
 
       # Stop the agent

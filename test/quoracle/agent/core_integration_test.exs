@@ -260,9 +260,10 @@ defmodule Quoracle.Agent.CoreIntegrationTest do
       # Try to kill the task (it may have already completed)
       Process.exit(dead_task.pid, :kill)
 
-      # Task exits with :killed if we killed it, or :normal if it completed first
+      # Task exits with :killed if we killed it, :normal if it completed first,
+      # or :noproc if it already exited before Process.monitor was called
       assert_receive {:DOWN, ^ref, :process, _, reason}, 30_000
-      assert reason in [:killed, :normal]
+      assert reason in [:killed, :normal, :noproc]
 
       # Create a live waiter task
       live_task =

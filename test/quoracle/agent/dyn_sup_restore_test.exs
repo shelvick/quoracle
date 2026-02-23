@@ -133,6 +133,7 @@ defmodule Quoracle.Agent.DynSupRestoreTest do
           pubsub: deps.pubsub,
           test_mode: true,
           test_opts: [skip_initial_consultation: true],
+          force_persist: true,
           sandbox_owner: sandbox_owner
         })
 
@@ -336,6 +337,7 @@ defmodule Quoracle.Agent.DynSupRestoreTest do
           pubsub: deps.pubsub,
           test_mode: true,
           test_opts: [skip_initial_consultation: true],
+          force_persist: true,
           sandbox_owner: sandbox_owner
         })
 
@@ -725,7 +727,8 @@ defmodule Quoracle.Agent.DynSupRestoreTest do
                DynSup.restore_agent(deps.dynsup, db_agent,
                  registry: deps.registry,
                  pubsub: deps.pubsub,
-                 sandbox_owner: sandbox_owner
+                 sandbox_owner: sandbox_owner,
+                 force_persist: true
                )
 
       assert {:ok, state} = Quoracle.Agent.Core.get_state(restored_pid)
@@ -914,6 +917,7 @@ defmodule Quoracle.Agent.DynSupRestoreTest do
           pubsub: deps.pubsub,
           test_mode: true,
           test_opts: [skip_initial_consultation: true],
+          force_persist: true,
           sandbox_owner: sandbox_owner
         })
 
@@ -930,6 +934,7 @@ defmodule Quoracle.Agent.DynSupRestoreTest do
           pubsub: deps.pubsub,
           test_mode: true,
           test_opts: [skip_initial_consultation: true],
+          force_persist: true,
           sandbox_owner: sandbox_owner
         })
 
@@ -1050,6 +1055,7 @@ defmodule Quoracle.Agent.DynSupRestoreTest do
           pubsub: deps.pubsub,
           test_mode: true,
           test_opts: [skip_initial_consultation: true],
+          force_persist: true,
           sandbox_owner: sandbox_owner
         })
 
@@ -1194,6 +1200,7 @@ defmodule Quoracle.Agent.DynSupRestoreTest do
           pubsub: deps.pubsub,
           test_mode: true,
           test_opts: [skip_initial_consultation: true],
+          force_persist: true,
           sandbox_owner: sandbox_owner
         })
 

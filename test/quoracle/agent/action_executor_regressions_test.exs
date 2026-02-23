@@ -964,10 +964,10 @@ defmodule Quoracle.Agent.ActionExecutorRegressionsTest do
         {:action_result, action_id, {:error, :invalid_budget_format}, result_opts}
       )
 
-      # Wait for result to be processed (pending_actions cleared)
+      # Wait for result to be processed (pending_actions cleared AND consensus scheduled)
       post_state =
         wait_for_condition(agent_pid, fn state ->
-          map_size(state.pending_actions) == 0
+          map_size(state.pending_actions) == 0 and state.consensus_scheduled
         end)
         |> extract_state()
 

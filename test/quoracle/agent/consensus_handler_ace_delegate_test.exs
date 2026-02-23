@@ -35,45 +35,6 @@ defmodule Quoracle.Agent.ConsensusHandlerAceDelegateTest do
     }
   end
 
-  # ========== R34: ACE DELEGATE DEFINED ==========
-
-  describe "R34: inject_ace_context delegate exists" do
-    test "inject_ace_context/3 callable via ConsensusHandler" do
-      # Test behavior: call the delegate and verify it returns expected type
-      state = make_state([], nil)
-      messages = [make_message("user", "Hello")]
-      result = ConsensusHandler.inject_ace_context(state, messages, "test-model")
-      assert is_list(result)
-    end
-
-    test "format_ace_context/2 callable via ConsensusHandler" do
-      # Test behavior: call the delegate and verify it returns expected type
-      result = ConsensusHandler.format_ace_context([], nil)
-      assert is_binary(result)
-    end
-
-    test "inject_ace_context accepts state, messages, model_id" do
-      state = make_state([make_lesson("Test")], nil)
-      messages = [make_message("user", "Hello")]
-      model_id = "test-model"
-
-      # Should not raise - function exists with correct arity
-      result = ConsensusHandler.inject_ace_context(state, messages, model_id)
-
-      assert is_list(result)
-    end
-
-    test "format_ace_context accepts lessons and model_state" do
-      lessons = [make_lesson("Test")]
-      model_state = make_model_state("State")
-
-      # Should not raise - function exists with correct arity
-      result = ConsensusHandler.format_ace_context(lessons, model_state)
-
-      assert is_binary(result)
-    end
-  end
-
   # ========== R35: DELEGATE FORWARDS CORRECTLY ==========
 
   describe "R35: delegate forwards to AceInjector" do

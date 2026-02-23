@@ -239,7 +239,7 @@ defmodule Quoracle.Actions.DismissChildBudgetTest do
       {:ok, parent_pid} = spawn_agent_with_budget("parent-R20", deps, parent_budget)
 
       # Create child with N/A budget (no allocation)
-      child_budget = %{mode: :na, allocated: nil, committed: nil}
+      child_budget = Quoracle.Budget.Schema.new_na()
 
       {:ok, _child_pid} =
         spawn_agent_with_budget("child-R20", deps, child_budget,
