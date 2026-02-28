@@ -405,6 +405,9 @@ defmodule Quoracle.Agent.Core do
   def handle_info({:message, message}, state),
     do: MessageInfoHandler.handle_message_info(message, state)
 
+  def handle_info({:profile_updated, profile_data}, state),
+    do: MessageInfoHandler.handle_profile_updated(profile_data, state)
+
   def handle_info({:agent_error, pid, reason}, state),
     do: MessageInfoHandler.handle_agent_error(pid, reason, state)
 

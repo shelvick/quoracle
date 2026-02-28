@@ -23,6 +23,11 @@
 - handle_trigger_consensus/1: Unified consensus trigger with staleness check
 - handle_down/4: Cleans up active_routers (by ref) and shell_routers (by PID scan) on Router death, clears mcp_client on MCP Client death (v38.0)
 - handle_spawn_failed/2: Logs warning, records failure in history, removes child, schedules consensus
+- handle_profile_updated/2: Profile hot-reload handler (v39.0) — accumulator pipeline applies max_refinement_rounds, force_reflection (forward-compat), profile_description, model_pool (via HistoryTransfer.switch_model_pool/2), profile_name (resubscribe); invalidates cached_system_prompt on any change; ignores stale events (old_name != current_profile_name); no-op on identical payload
+  - maybe_update_field/4: Core accumulator helper — skips if field absent from state, value invalid, or value unchanged
+  - maybe_switch_model_pool/2: Partial-apply on failure — emits Logger.warning + AgentEvents.broadcast_log(:warning), keeps old pool
+  - maybe_resubscribe_profile/3: Unsubscribes old topic, subscribes new on name change
+  - broadcast_warning/2: Safe broadcast_log wrapper with try/rescue for PubSub cleanup races
 
 ## Patterns
 - Router lifecycle coupling: Core.terminate/2 stops Router via active_routers with :infinity timeout

@@ -122,6 +122,8 @@ defmodule Quoracle.Agent.ConfigManager do
       profile_name: Map.get(config, :profile_name),
       profile_description: Map.get(config, :profile_description),
       max_refinement_rounds: Map.get(config, :max_refinement_rounds, 4),
+      # v12.0: Force reflection for single-model profiles
+      force_reflection: Map.get(config, :force_reflection, false),
       # v8.0: Capability groups for profile-based action filtering
       capability_groups: Map.get(config, :capability_groups, []),
       # v9.0: Skills system - skill names requested for spawn, active skill metadata
@@ -378,6 +380,8 @@ defmodule Quoracle.Agent.ConfigManager do
           nil -> 4
           value -> value
         end,
+      # v39.0: Force reflection for single-model profiles
+      force_reflection: config[:force_reflection] || false,
       capability_groups: config[:capability_groups] || [],
       # Skills system (v9.0)
       active_skills: config[:active_skills] || []
@@ -385,6 +389,11 @@ defmodule Quoracle.Agent.ConfigManager do
 
     # Create State struct from configuration
     state = Quoracle.Agent.Core.State.new(state_config)
+
+    # Subscribe to profile updates during init so first update cannot race ahead.
+    if is_binary(config[:profile_name]) do
+      AgentEvents.subscribe_to_profile(config[:profile_name], pubsub)
+    end
 
     # Broadcast agent spawned event using previously extracted pubsub
     # Skip broadcast if this is a spawned child (parent_id present) - Spawn action will broadcast with full context

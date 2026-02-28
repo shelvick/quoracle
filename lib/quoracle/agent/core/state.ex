@@ -142,6 +142,8 @@ defmodule Quoracle.Agent.Core.State do
     profile_name: nil,
     profile_description: nil,
     max_refinement_rounds: 4,
+    # v39.0: Force reflection for single-model profiles
+    force_reflection: false,
     # v26.0: Capability groups for profile-based action filtering
     capability_groups: [],
     # v27.0: Skills system - active skill metadata (no content)
@@ -228,6 +230,8 @@ defmodule Quoracle.Agent.Core.State do
           profile_name: String.t() | nil,
           profile_description: String.t() | nil,
           max_refinement_rounds: integer(),
+          # v39.0: Force reflection for single-model profiles
+          force_reflection: boolean(),
           # v26.0: Capability groups for profile-based action filtering
           capability_groups: [atom()],
           # v27.0: Skills system
@@ -410,6 +414,8 @@ defmodule Quoracle.Agent.Core.State do
       profile_name: Map.get(config, :profile_name),
       profile_description: Map.get(config, :profile_description),
       max_refinement_rounds: Map.get(config, :max_refinement_rounds, 4),
+      # v39.0: Force reflection for single-model profiles
+      force_reflection: Map.get(config, :force_reflection, false),
       # model_pool from profile - nil allows test_mode fallback in ConsensusHandler
       model_pool: Map.get(config, :model_pool),
       # v26.0: Capability groups for profile-based action filtering

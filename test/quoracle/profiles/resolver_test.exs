@@ -269,6 +269,7 @@ defmodule Quoracle.Profiles.ResolverTest do
       assert Map.keys(data) |> Enum.sort() == [
                :capability_groups,
                :description,
+               :force_reflection,
                :max_refinement_rounds,
                :model_pool,
                :name

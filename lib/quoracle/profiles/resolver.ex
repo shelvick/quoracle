@@ -14,7 +14,8 @@ defmodule Quoracle.Profiles.Resolver do
           description: String.t() | nil,
           model_pool: [String.t()],
           capability_groups: [atom()],
-          max_refinement_rounds: integer()
+          max_refinement_rounds: integer(),
+          force_reflection: boolean()
         }
 
   @doc """
@@ -73,7 +74,8 @@ defmodule Quoracle.Profiles.Resolver do
           name: String.t(),
           description: String.t() | nil,
           capability_groups: [atom()],
-          max_refinement_rounds: integer()
+          max_refinement_rounds: integer(),
+          force_reflection: boolean()
         }
 
   @doc """
@@ -95,7 +97,8 @@ defmodule Quoracle.Profiles.Resolver do
       profile_description: profile_data.description,
       model_pool: profile_data.model_pool,
       capability_groups: profile_data.capability_groups,
-      max_refinement_rounds: profile_data.max_refinement_rounds
+      max_refinement_rounds: profile_data.max_refinement_rounds,
+      force_reflection: profile_data.force_reflection
     }
   end
 
@@ -111,7 +114,8 @@ defmodule Quoracle.Profiles.Resolver do
         name: profile.name,
         description: profile.description,
         capability_groups: TableProfiles.capability_groups_as_atoms(profile),
-        max_refinement_rounds: profile.max_refinement_rounds
+        max_refinement_rounds: profile.max_refinement_rounds,
+        force_reflection: profile.force_reflection
       }
     end)
   end
@@ -125,7 +129,8 @@ defmodule Quoracle.Profiles.Resolver do
       description: profile.description,
       model_pool: profile.model_pool,
       capability_groups: capability_groups,
-      max_refinement_rounds: profile.max_refinement_rounds
+      max_refinement_rounds: profile.max_refinement_rounds,
+      force_reflection: profile.force_reflection
     }
   end
 end

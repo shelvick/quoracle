@@ -177,6 +177,7 @@ defmodule Quoracle.Agent.ConsensusHandler do
       |> Keyword.put(:task_id, Map.get(state, :task_id))
       |> Keyword.put(:pubsub, pubsub)
       |> Keyword.put(:sandbox_owner, sandbox_owner)
+      |> Keyword.put(:force_reflection, Map.get(state, :force_reflection, false))
 
     result =
       Quoracle.Agent.Consensus.get_consensus_with_state(state, consensus_opts_with_context)

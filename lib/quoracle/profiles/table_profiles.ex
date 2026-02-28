@@ -16,6 +16,7 @@ defmodule Quoracle.Profiles.TableProfiles do
           model_pool: [String.t()] | nil,
           capability_groups: [String.t()] | nil,
           max_refinement_rounds: integer() | nil,
+          force_reflection: boolean() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -29,6 +30,7 @@ defmodule Quoracle.Profiles.TableProfiles do
     field(:model_pool, {:array, :string})
     field(:capability_groups, {:array, :string}, default: [])
     field(:max_refinement_rounds, :integer, default: 4)
+    field(:force_reflection, :boolean, default: false)
 
     timestamps(type: :utc_datetime)
   end
@@ -36,7 +38,14 @@ defmodule Quoracle.Profiles.TableProfiles do
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(profile, attrs) do
     profile
-    |> cast(attrs, [:name, :description, :model_pool, :capability_groups, :max_refinement_rounds])
+    |> cast(attrs, [
+      :name,
+      :description,
+      :model_pool,
+      :capability_groups,
+      :max_refinement_rounds,
+      :force_reflection
+    ])
     |> validate_required([:name, :model_pool])
     |> put_default_capability_groups()
     |> validate_format(:name, ~r/^[a-zA-Z0-9_-]+$/,

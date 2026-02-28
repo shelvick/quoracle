@@ -226,7 +226,7 @@ defmodule QuoracleWeb.UI.LogEntry.Helpers do
   def role_border_class("system"), do: "border-purple-200"
   def role_border_class("user"), do: "border-green-200"
   def role_border_class("assistant"), do: "border-blue-200"
-  def role_border_class(_), do: "border-gray-200"
+  def role_border_class(_), do: "border-border-subtle"
 
   @spec role_hover_class(String.t()) :: String.t()
   def role_hover_class("system"), do: "hover:bg-purple-50"
@@ -250,7 +250,7 @@ defmodule QuoracleWeb.UI.LogEntry.Helpers do
   def role_content_bg("system"), do: "bg-purple-50 border-purple-200"
   def role_content_bg("user"), do: "bg-green-50 border-green-200"
   def role_content_bg("assistant"), do: "bg-blue-50 border-blue-200"
-  def role_content_bg(_), do: "bg-gray-50 border-gray-200"
+  def role_content_bg(_), do: "bg-gray-50 border-border-subtle"
 
   @spec format_model_name(map() | term()) :: String.t()
   def format_model_name(%{__struct__: _} = response) do

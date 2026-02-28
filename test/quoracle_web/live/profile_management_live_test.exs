@@ -779,4 +779,172 @@ defmodule QuoracleWeb.ProfileManagementLiveTest do
       assert Repo.get(TableProfiles, profile.id) == nil
     end
   end
+
+  # =============================================================================
+  # Force Reflection UI Tests (R20-R22, R60-R61)
+  # WorkGroupID: feat-20260225-forced-reflection
+  # =============================================================================
+
+  describe "Force Reflection checkbox (R20-R22, R60-R61)" do
+    @tag :acceptance
+    test "user toggles force_reflection with single vs multi model end-to-end", %{conn: conn} do
+      # Insert a second credential for multi-model tests
+      %Quoracle.Models.TableCredentials{}
+      |> Quoracle.Models.TableCredentials.changeset(%{
+        model_id: "azure:gpt-4o",
+        model_spec: "azure:gpt-4o",
+        api_key: "test-key-2",
+        deployment_id: "gpt-4o"
+      })
+      |> Quoracle.Repo.insert(on_conflict: :nothing, conflict_target: :model_id)
+
+      {:ok, view, _html} = live(conn, "/settings")
+
+      view
+      |> element("[phx-click='switch_tab'][phx-value-tab='profiles']")
+      |> render_click()
+
+      view |> element("button", "New Profile") |> render_click()
+
+      view
+      |> form("#profile-form", %{
+        profile: %{
+          name: "acceptance_force_profile",
+          description: "Force reflection test",
+          model_pool: ["azure:o1"],
+          capability_groups: ["file_read"],
+          force_reflection: "true"
+        }
+      })
+      |> render_submit()
+
+      html = render(view)
+      assert html =~ "acceptance_force_profile"
+
+      profile = Repo.get_by!(TableProfiles, name: "acceptance_force_profile")
+      assert Map.get(profile, :force_reflection) == true
+
+      view
+      |> element("[phx-click='edit_profile'][phx-value-id='#{profile.id}']")
+      |> render_click()
+
+      view
+      |> form("#profile-form", %{
+        profile: %{
+          name: "acceptance_force_profile",
+          model_pool: ["azure:o1", "azure:gpt-4o"]
+        }
+      })
+      |> render_change()
+
+      html = render(view)
+      assert html =~ ~r/name="profile\[force_reflection\]"[^>]*disabled/s
+    end
+
+    setup context do
+      # Insert a second credential for multi-model tests
+      %Quoracle.Models.TableCredentials{}
+      |> Quoracle.Models.TableCredentials.changeset(%{
+        model_id: "azure:gpt-4o",
+        model_spec: "azure:gpt-4o",
+        api_key: "test-key-2",
+        deployment_id: "gpt-4o"
+      })
+      |> Quoracle.Repo.insert(on_conflict: :nothing, conflict_target: :model_id)
+
+      Map.put(context, :second_credential, "azure:gpt-4o")
+    end
+
+    @tag :integration
+    test "renders force_reflection checkbox in profile form", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      {:ok, view, _html} = mount_profile_management(conn, sandbox_owner, pubsub)
+      switch_to_profiles_tab(view)
+
+      view |> element("button", "New Profile") |> render_click()
+
+      html = render(view)
+
+      assert has_element?(view, "#profile-modal")
+      assert html =~ "Force Reflection"
+      assert has_element?(view, "input[name='profile[force_reflection]']")
+    end
+
+    @tag :system
+    test "disables force_reflection when multiple models selected", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub,
+      second_credential: second_credential
+    } do
+      {:ok, view, _html} = mount_profile_management(conn, sandbox_owner, pubsub)
+      switch_to_profiles_tab(view)
+
+      view |> element("button", "New Profile") |> render_click()
+
+      view
+      |> form("#profile-form", %{
+        profile: %{
+          name: "multi_model_profile",
+          model_pool: ["azure:o1", second_credential]
+        }
+      })
+      |> render_change()
+
+      html = render(view)
+      assert html =~ ~r/name="profile\[force_reflection\]"[^>]*disabled/s
+    end
+
+    @tag :integration
+    test "enables force_reflection when single model selected", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      {:ok, view, _html} = mount_profile_management(conn, sandbox_owner, pubsub)
+      switch_to_profiles_tab(view)
+
+      view |> element("button", "New Profile") |> render_click()
+
+      view
+      |> form("#profile-form", %{
+        profile: %{
+          name: "single_model_profile",
+          model_pool: ["azure:o1"]
+        }
+      })
+      |> render_change()
+
+      html = render(view)
+      refute html =~ ~r/name="profile\[force_reflection\]"[^>]*disabled/s
+    end
+
+    @tag :system
+    test "tooltip shows when checkbox disabled", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub,
+      second_credential: second_credential
+    } do
+      {:ok, view, _html} = mount_profile_management(conn, sandbox_owner, pubsub)
+      switch_to_profiles_tab(view)
+
+      view |> element("button", "New Profile") |> render_click()
+
+      view
+      |> form("#profile-form", %{
+        profile: %{
+          name: "multi_model_tooltip",
+          model_pool: ["azure:o1", second_credential]
+        }
+      })
+      |> render_change()
+
+      html = render(view)
+      assert html =~ "Only applicable for single-model profiles"
+    end
+  end
 end

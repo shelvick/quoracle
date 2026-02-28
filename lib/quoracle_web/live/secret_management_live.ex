@@ -11,6 +11,7 @@ defmodule QuoracleWeb.SecretManagementLive do
   alias Quoracle.Models.ConfigModelSettings
   alias Quoracle.Models.LLMDBModelLoader
   alias Quoracle.Profiles.TableProfiles
+  alias Quoracle.PubSub.AgentEvents
   alias Quoracle.Repo
 
   alias QuoracleWeb.SecretManagementLive.{
@@ -425,8 +426,17 @@ defmodule QuoracleWeb.SecretManagementLive do
   end
 
   def handle_event("save_profile", %{"profile" => params}, socket) do
+    old_name =
+      if socket.assigns.selected_profile,
+        do: socket.assigns.selected_profile.name,
+        else: nil
+
     case ProfileHelpers.save_profile(socket.assigns.selected_profile, params) do
-      {:ok, _profile} ->
+      {:ok, saved_profile} ->
+        broadcast_name = old_name || saved_profile.name
+        profile_data = ProfileHelpers.build_hot_reload_payload(saved_profile, broadcast_name)
+        AgentEvents.broadcast_profile_updated(broadcast_name, profile_data, socket.assigns.pubsub)
+
         {:noreply, ProfileHelpers.reset_profile_assigns(socket)}
 
       {:error, changeset} ->

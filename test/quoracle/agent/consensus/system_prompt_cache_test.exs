@@ -74,14 +74,82 @@ defmodule Quoracle.Agent.Consensus.SystemPromptCacheTest do
   # Triggers consensus by sending a user message and waits for action completion.
   # Returns the system prompt(s) captured from the model_query_fn spy.
   defp trigger_consensus_and_capture(agent_pid, model_pool \\ ["test-model-1"]) do
-    # Send a user message to trigger consensus
-    Core.handle_message(agent_pid, "Test message for consensus")
+    message_marker = "Test message for consensus #{System.unique_integer([:positive])}"
 
-    # Capture system prompts from each model query
+    # Send a user message to trigger consensus.
+    Core.handle_message(agent_pid, message_marker)
+
+    # Synchronize with GenServer mailbox ordering so the cast has been processed
+    # before we assert on query capture messages.
+    {:ok, _state} = Core.get_state(agent_pid)
+
+    deadline = System.monotonic_time(:millisecond) + 30_000
+
+    captured_messages =
+      capture_query_messages(
+        MapSet.new(model_pool),
+        message_marker,
+        %{},
+        deadline
+      )
+
     Enum.map(model_pool, fn model_id ->
-      assert_receive {:query_messages, ^model_id, messages}, 5000
-      system_msg = Enum.find(messages, &(&1.role == "system"))
-      {model_id, system_msg && system_msg.content}
+      messages = Map.fetch!(captured_messages, model_id)
+      system_msg = Enum.find(messages, &(Map.get(&1, :role) == "system"))
+      {model_id, system_msg && Map.get(system_msg, :content)}
+    end)
+  end
+
+  defp capture_query_messages(expected_models, message_marker, captured_messages, deadline_ms) do
+    if map_size(captured_messages) == MapSet.size(expected_models) do
+      captured_messages
+    else
+      remaining_ms = max(deadline_ms - System.monotonic_time(:millisecond), 0)
+
+      receive do
+        {:query_messages, model_id, messages} ->
+          cond do
+            not MapSet.member?(expected_models, model_id) ->
+              capture_query_messages(
+                expected_models,
+                message_marker,
+                captured_messages,
+                deadline_ms
+              )
+
+            not messages_include_marker?(messages, message_marker) ->
+              capture_query_messages(
+                expected_models,
+                message_marker,
+                captured_messages,
+                deadline_ms
+              )
+
+            true ->
+              capture_query_messages(
+                expected_models,
+                message_marker,
+                Map.put(captured_messages, model_id, messages),
+                deadline_ms
+              )
+          end
+      after
+        remaining_ms ->
+          pending_models =
+            expected_models
+            |> MapSet.difference(MapSet.new(Map.keys(captured_messages)))
+            |> MapSet.to_list()
+
+          flunk("Timed out waiting for query messages from models: #{inspect(pending_models)}")
+      end
+    end
+  end
+
+  defp messages_include_marker?(messages, message_marker) do
+    Enum.any?(messages, fn message ->
+      Map.get(message, :role) == "user" and
+        is_binary(Map.get(message, :content)) and
+        String.contains?(Map.get(message, :content), message_marker)
     end)
   end
 

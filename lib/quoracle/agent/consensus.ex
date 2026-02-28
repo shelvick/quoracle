@@ -7,7 +7,6 @@ defmodule Quoracle.Agent.Consensus do
 
   alias Quoracle.Models.ModelQuery
   alias Quoracle.Consensus.{ActionParser, Aggregator, Manager, Result, Temperature}
-  alias Quoracle.Actions.Validator
 
   require Logger
 
@@ -131,40 +130,57 @@ defmodule Quoracle.Agent.Consensus do
 
               true ->
                 # Build context for consensus - extract actual last user message
-                prompt = extract_last_user_content(model_histories)
+                prompt =
+                  Quoracle.Agent.Consensus.MessageUtils.extract_last_user_content(model_histories)
+
                 # v19.0: Thread max_refinement_rounds from agent state into context via opts
                 max_rounds = Keyword.get(opts, :max_refinement_rounds, 4)
                 context = Manager.build_context(prompt, [], max_refinement_rounds: max_rounds)
                 context = Map.put(context, :model_pool, model_pool)
                 context = Map.put(context, :original_opts, opts)
+                # v39.0: Thread force_reflection from state or opts to context for consensus logic
+                context =
+                  Map.put(
+                    context,
+                    :force_reflection,
+                    Keyword.get(opts, :force_reflection, Map.get(state, :force_reflection, false))
+                  )
+
                 # Include updated state for per-model refinement access (v10.0)
                 context = Map.put(context, :state, updated_state)
 
                 # Execute consensus and add per_model_queries flag to result meta
-                {:ok, {result_type, action, meta}} =
-                  execute_consensus_process(valid_responses, context, 1)
+                case execute_consensus_process(
+                       valid_responses,
+                       context,
+                       Keyword.get(opts, :round, 1)
+                     ) do
+                  {:ok, {result_type, action, meta}} ->
+                    # Add per_model_queries: true to meta
+                    updated_meta = Keyword.put(meta, :per_model_queries, true)
 
-                # Add per_model_queries: true to meta
-                updated_meta = Keyword.put(meta, :per_model_queries, true)
+                    # Track temperatures if requested
+                    updated_meta =
+                      if Keyword.get(opts, :track_temperatures, false) do
+                        round = Keyword.get(opts, :round, 1)
+                        temp_opts = [max_refinement_rounds: max_rounds]
 
-                # Track temperatures if requested
-                updated_meta =
-                  if Keyword.get(opts, :track_temperatures, false) do
-                    round = Keyword.get(opts, :round, 1)
-                    temp_opts = [max_refinement_rounds: max_rounds]
+                        temperatures =
+                          Map.new(model_pool, fn model_id ->
+                            {model_id,
+                             Temperature.calculate_round_temperature(model_id, round, temp_opts)}
+                          end)
 
-                    temperatures =
-                      Map.new(model_pool, fn model_id ->
-                        {model_id,
-                         Temperature.calculate_round_temperature(model_id, round, temp_opts)}
-                      end)
+                        Keyword.put(updated_meta, :temperatures, temperatures)
+                      else
+                        updated_meta
+                      end
 
-                    Keyword.put(updated_meta, :temperatures, temperatures)
-                  else
-                    updated_meta
-                  end
+                    {:ok, {result_type, action, updated_meta}, updated_state}
 
-                {:ok, {result_type, action, updated_meta}, updated_state}
+                  error ->
+                    error
+                end
             end
 
           {:error, reason} ->
@@ -228,7 +244,7 @@ defmodule Quoracle.Agent.Consensus do
             {:error, :all_models_failed}
 
           true ->
-            execute_consensus_process(valid_responses, context, 1)
+            execute_consensus_process(valid_responses, context, Keyword.get(opts, :round, 1))
         end
 
       {:error, reason} ->
@@ -238,43 +254,11 @@ defmodule Quoracle.Agent.Consensus do
 
   @doc "Extract the last user message as prompt for refinement context."
   @spec extract_prompt_for_context(list(map())) :: String.t()
-  def extract_prompt_for_context(messages) do
-    messages
-    |> Enum.filter(fn msg -> msg.role == "user" end)
-    |> List.last()
-    |> case do
-      %{content: content} -> content
-      nil -> "Agent decision"
-    end
-  end
+  defdelegate extract_prompt_for_context(messages), to: Quoracle.Agent.Consensus.MessageUtils
 
   @doc false
   @spec filter_invalid_responses([map()]) :: {[map()], non_neg_integer()}
-  def filter_invalid_responses(responses) do
-    # Use reduce to both filter AND apply validated/coerced params
-    # Bug fix: Previously discarded coerced params (e.g., %{} -> [] for lists)
-    {valid_reversed, invalid_count} =
-      Enum.reduce(responses, {[], 0}, fn response, {valid_acc, inv_count} ->
-        action = response.action
-        params = response.params
-
-        case Validator.validate_params(action, params) do
-          {:ok, validated_params} ->
-            # Use validated params with coercions applied (e.g., %{} -> [] for list types)
-            updated_response = %{response | params: validated_params}
-            {[updated_response | valid_acc], inv_count}
-
-          {:error, reason} ->
-            Logger.warning(
-              "Filtered invalid consensus response: action=#{action}, reason=#{inspect(reason)}"
-            )
-
-            {valid_acc, inv_count + 1}
-        end
-      end)
-
-    {Enum.reverse(valid_reversed), invalid_count}
-  end
+  defdelegate filter_invalid_responses(responses), to: Quoracle.Agent.Consensus.MessageUtils
 
   defp execute_consensus_process(responses, context, round) do
     clusters = Aggregator.cluster_responses(responses)
@@ -283,14 +267,30 @@ defmodule Quoracle.Agent.Consensus do
     max_rounds = Map.get(context, :max_refinement_rounds, 4)
     cost_opts = extract_cost_opts(context) ++ [max_refinement_rounds: max_rounds]
 
+    # Force refinement if forced reflection is enabled and it's the first round with a single-model pool.
+    # When force_reflection is true and the pool size is 1, we treat round 1 as if no majority,
+    # but only if we haven't already decided to force (this is the first time we see a single response).
+    forced? =
+      (context[:force_reflection] || false) && length(context.model_pool) == 1 && round == 1
+
     case Aggregator.find_majority_cluster(clusters, total, round) do
-      {:majority, _cluster} ->
+      {:majority, _cluster} when not forced? ->
         result = Result.format_result(clusters, total, round, cost_opts)
         {:ok, result}
 
       {:no_majority, _clusters} when round > max_rounds ->
         result = Result.format_result(clusters, total, round, cost_opts)
         {:ok, result}
+
+      _ when forced? ->
+        # v39.0: Forced reflection - trigger refinement and mark in meta
+        case execute_refinement(responses, context, round) do
+          {:ok, {type, action, meta}} ->
+            {:ok, {type, action, Keyword.put(meta, :forced_reflection_applied, true)}}
+
+          error ->
+            error
+        end
 
       {:no_majority, _clusters} ->
         execute_refinement(responses, context, round)
@@ -356,25 +356,6 @@ defmodule Quoracle.Agent.Consensus do
         end
     end
   end
-
-  # Extract the last user message content from model histories.
-  # Histories are newest-first; pick any model since user messages are identical across models.
-  # Handles both history entry format (%{type: :user}) and raw message format (%{role: "user"}).
-  defp extract_last_user_content(model_histories) do
-    model_histories
-    |> Map.values()
-    |> List.first([])
-    |> Enum.find(&user_entry?/1)
-    |> case do
-      %{content: content} when is_binary(content) -> content
-      %{content: %{content: content}} when is_binary(content) -> content
-      _ -> "Agent decision"
-    end
-  end
-
-  defp user_entry?(%{type: :user}), do: true
-  defp user_entry?(%{role: "user"}), do: true
-  defp user_entry?(_), do: false
 
   # Build system prompt once for the entire consensus process.
   # If already in opts (from ConsensusHandler), keep it.

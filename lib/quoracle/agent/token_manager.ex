@@ -217,7 +217,9 @@ defmodule Quoracle.Agent.TokenManager do
     # History is stored newest-first. Reverse to iterate from oldest.
     reversed = Enum.reverse(history)
 
-    # Accumulate from oldest until we exceed 80% of tokens
+    # Accumulate from oldest until we exceed 80% of tokens.
+    # Cap at total_tokens to prevent to_discard from exceeding the input budget
+    # (critical when total_tokens is the model's context limit for self-reflection).
     {to_remove, removed_tokens, remaining} =
       Enum.reduce_while(reversed, {[], 0, reversed}, fn entry, {removed, tokens_so_far, rest} ->
         entry_tokens = estimate_entry_tokens(entry)
@@ -225,12 +227,17 @@ defmodule Quoracle.Agent.TokenManager do
         new_removed = removed ++ [entry]
         new_rest = tl(rest)
 
-        if new_total > target_removal do
-          # We've removed enough tokens
-          {:halt, {new_removed, new_total, new_rest}}
-        else
-          # Continue removing
-          {:cont, {new_removed, new_total, new_rest}}
+        cond do
+          new_total > total_tokens ->
+            # Would exceed cap — stop WITHOUT this entry
+            {:halt, {removed, tokens_so_far, rest}}
+
+          new_total > target_removal ->
+            # Exceeded 80% target — stop WITH this entry
+            {:halt, {new_removed, new_total, new_rest}}
+
+          true ->
+            {:cont, {new_removed, new_total, new_rest}}
         end
       end)
 

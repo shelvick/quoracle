@@ -129,96 +129,23 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorTimeoutTest do
   # WHEN ActionExecutor builds execute_opts for :adjust_budget
   # THEN timeout is :infinity in the opts passed to Router.execute
   #
-  # Test strategy: Suspend the parent GenServer AFTER dispatching the action.
-  # The background task calls Core.adjust_child_budget(parent_id, ...) which
-  # does GenServer.call(parent_pid, ..., :infinity). With parent suspended, this
-  # call blocks indefinitely. The Router's Task.yield(task, timeout) behavior:
-  # - timeout=5000 (current): yields nil after 5s -> Task.shutdown -> {:error, :timeout}
-  # - timeout=:infinity (fix): yields :infinity -> never times out, we resume -> success
-  #
-  # Currently FAILS: no timeout override for adjust_budget -> 5s Task.yield -> :timeout
+  # Tests apply_timeout_override/2 directly — verifies the timeout value without
+  # needing a 7-second behavioral wait.
   # ============================================================================
 
   describe "R74: adjust_budget gets :infinity timeout" do
     @tag :r74
     @tag :unit
-    test "adjust_budget does not time out at 5s when parent GenServer is busy",
-         %{deps: deps, task: task} do
-      parent_budget = %{
-        mode: :root,
-        allocated: Decimal.new("100.00"),
-        committed: Decimal.new("30.00")
-      }
+    test "apply_timeout_override sets :infinity for adjust_budget" do
+      opts = ActionExecutor.apply_timeout_override([], :adjust_budget)
+      assert Keyword.get(opts, :timeout) == :infinity
+    end
 
-      {:ok, parent_pid} = spawn_parent_with_budget(deps, task, parent_budget)
-      {:ok, parent_state} = Core.get_state(parent_pid)
-
-      child_budget = %{
-        mode: :child,
-        allocated: Decimal.new("30.00"),
-        committed: Decimal.new("0")
-      }
-
-      {:ok, _child_pid, child_state} =
-        spawn_child_under_parent(deps, task, parent_pid, parent_state, child_budget)
-
-      # Build adjust_budget action
-      action_response = %{
-        action: :adjust_budget,
-        params: %{child_id: child_state.agent_id, new_budget: "50.00"},
-        wait: false,
-        reasoning: "Testing timeout override"
-      }
-
-      {:ok, fresh_state} = Core.get_state(parent_pid)
-
-      test_state = %{
-        fresh_state
-        | pending_actions: %{},
-          action_counter: 0
-      }
-
-      # Suspend parent GenServer. The background task's GenServer.call(parent_pid, ...)
-      # will block until we resume. This triggers the Router's Task.yield timeout:
-      # - Without fix: Task.yield(task, 5000) -> nil -> {:error, :timeout}
-      # - With fix: Task.yield(task, :infinity) -> never returns nil, waits for resume
-      :sys.suspend(parent_pid)
-
-      # Dispatch through ActionExecutor — goes to Task.Supervisor background task
-      # which calls Router.execute -> Execution.execute_action -> Task.yield(task, timeout)
-      # The inner task calls AdjustBudget.execute -> Core.adjust_child_budget -> blocked call
-      _dispatched =
-        ActionExecutor.execute_consensus_action(test_state, action_response, self())
-
-      # Wait 7 seconds — longer than the 5s default timeout but well within :infinity.
-      # Without the fix: action result with {:error, :timeout} arrives at ~5s.
-      # With the fix: no result arrives (still waiting for parent to resume).
-      receive do
-        {:"$gen_cast", {:action_result, _action_id, {:error, :timeout}, _opts}} ->
-          # Resume parent for cleanup
-          :sys.resume(parent_pid)
-
-          flunk(
-            "adjust_budget returned {:error, :timeout} after ~5s. " <>
-              "This proves ActionExecutor does NOT set timeout: :infinity for :adjust_budget. " <>
-              "The Router's Task.yield(task, 5000) killed the action."
-          )
-      after
-        7_000 ->
-          # No timeout error after 7s — the action is still waiting (timeout: :infinity)
-          # Resume parent so the action can complete
-          :sys.resume(parent_pid)
-
-          # Now the GenServer.call unblocks and the action completes
-          receive do
-            {:"$gen_cast", {:action_result, _action_id, result, _opts}} ->
-              assert match?({:ok, _}, result),
-                     "After resume, adjust_budget should succeed. Got: #{inspect(result)}"
-          after
-            10_000 ->
-              flunk("No action result after resuming parent. Action may have been killed.")
-          end
-      end
+    @tag :r74
+    @tag :unit
+    test "apply_timeout_override does not overwrite existing timeout for adjust_budget" do
+      opts = ActionExecutor.apply_timeout_override([timeout: 5_000], :adjust_budget)
+      assert Keyword.get(opts, :timeout) == 5_000
     end
   end
 

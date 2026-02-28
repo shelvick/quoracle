@@ -260,6 +260,30 @@ defmodule Quoracle.PubSub.AgentEvents do
   end
 
   @doc """
+  Broadcast profile update event to profile-specific topic.
+  """
+  @spec broadcast_profile_updated(String.t(), map(), atom()) :: :ok
+  def broadcast_profile_updated(profile_name, profile_data, pubsub) do
+    safe_broadcast(pubsub, "profiles:#{profile_name}:updated", {:profile_updated, profile_data})
+  end
+
+  @doc """
+  Subscribe to profile-specific update topic.
+  """
+  @spec subscribe_to_profile(String.t(), atom()) :: :ok
+  def subscribe_to_profile(profile_name, pubsub) do
+    Phoenix.PubSub.subscribe(pubsub, "profiles:#{profile_name}:updated")
+  end
+
+  @doc """
+  Unsubscribe from profile-specific update topic.
+  """
+  @spec unsubscribe_from_profile(String.t(), atom()) :: :ok
+  def unsubscribe_from_profile(profile_name, pubsub) do
+    Phoenix.PubSub.unsubscribe(pubsub, "profiles:#{profile_name}:updated")
+  end
+
+  @doc """
   Subscribe to all agent-specific topics for a given agent.
   """
   @spec subscribe_to_agent(String.t(), atom()) :: :ok

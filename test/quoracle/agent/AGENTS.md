@@ -102,6 +102,17 @@
   - Unit (R81): generate_images returns real result, not async tuple (300_000ms override)
   - Unit (R82): existing call_mcp/adjust_budget overrides preserved
 
+## Profile Hot-Reload Tests (Added 2026-02-27)
+- profile_hot_reload_test.exs: 15 tests (R4-R18), async: true
+  - R4-R5: Agent profile subscription lifecycle (with/without profile_name)
+  - R6-R8: Field updates (max_refinement_rounds, force_reflection forward-compat, profile_description + cache invalidation)
+  - R9-R12: Model pool switching (success path, partial-apply on failure, empty pool rejection)
+  - R11: cached_system_prompt invalidation on any field change
+  - R13: capability_groups excluded from hot-reload (no-op)
+  - R14-R15: Profile rename (resubscribe + future updates on new topic)
+  - R16: No-op on identical payload
+  - R17-R18: Rapid successive updates, termination safety
+
 ## Removed Files
 core_injection_test.exs, config_manager_injection_test.exs, dyn_sup_injection_test.exs (redundant after isolation)
 
