@@ -5,7 +5,7 @@ defmodule Quoracle.Agent.Core.MessageInfoHandler do
   """
 
   require Logger
-  alias Quoracle.Agent.{MessageHandler, StateUtils}
+  alias Quoracle.Agent.{HistoryTransfer, MessageHandler, StateUtils}
   alias Quoracle.PubSub.AgentEvents
 
   @doc """
@@ -15,6 +15,46 @@ defmodule Quoracle.Agent.Core.MessageInfoHandler do
   @spec handle_message_info(any(), map()) :: {:noreply, map()}
   def handle_message_info(message, state) do
     MessageHandler.handle_message(state, message)
+  end
+
+  @doc """
+  Handle profile_updated PubSub events for runtime profile hot-reload.
+  """
+  @spec handle_profile_updated(map(), map()) :: {:noreply, map()}
+  def handle_profile_updated(profile_data, state) when is_map(profile_data) do
+    current_profile = Map.get(state, :profile_name)
+    old_name = Map.get(profile_data, :old_name, current_profile)
+    new_name = Map.get(profile_data, :new_name, current_profile)
+
+    # Ignore stale events after a rename; we only process updates for our current subscription.
+    if is_binary(current_profile) and old_name == current_profile do
+      state = maybe_resubscribe_profile(state, current_profile, new_name)
+
+      {state, changed?} =
+        {state, false}
+        |> maybe_update_field(:profile_name, new_name, valid?: &is_binary/1)
+        |> maybe_update_field(
+          :max_refinement_rounds,
+          Map.get(profile_data, :max_refinement_rounds, state.max_refinement_rounds),
+          valid?: &(is_integer(&1) and &1 >= 0)
+        )
+        |> maybe_update_field(
+          :profile_description,
+          Map.get(profile_data, :profile_description, state.profile_description),
+          valid?: &(is_binary(&1) or is_nil(&1))
+        )
+        |> maybe_update_field(
+          :force_reflection,
+          Map.get(profile_data, :force_reflection),
+          valid?: &is_boolean/1
+        )
+        |> maybe_switch_model_pool(Map.get(profile_data, :model_pool, state.model_pool))
+
+      state = maybe_invalidate_cached_system_prompt(state, changed?)
+      {:noreply, state}
+    else
+      {:noreply, state}
+    end
   end
 
   @doc """
@@ -110,6 +150,82 @@ defmodule Quoracle.Agent.Core.MessageInfoHandler do
     # Continue consensus so agent can react to the failure
     new_state = StateUtils.schedule_consensus_continuation(state)
     {:noreply, new_state}
+  end
+
+  # Applies model pool switches without failing other profile field updates.
+  defp maybe_switch_model_pool({state, changed?}, new_pool) when is_list(new_pool) do
+    if new_pool == state.model_pool do
+      {state, changed?}
+    else
+      case HistoryTransfer.switch_model_pool(state, new_pool) do
+        {:ok, switched_state} ->
+          {switched_state, true}
+
+        {:error, reason} ->
+          Logger.warning(
+            "Agent #{state.agent_id} model pool switch failed during profile hot-reload: #{inspect(reason)}"
+          )
+
+          broadcast_warning(
+            state,
+            "Model pool switch failed during profile hot-reload: #{inspect(reason)}; keeping previous pool"
+          )
+
+          {state, changed?}
+      end
+    end
+  end
+
+  defp maybe_switch_model_pool({state, changed?}, _), do: {state, changed?}
+
+  # Marks prompt cache dirty whenever any profile-driven field changed.
+  defp maybe_invalidate_cached_system_prompt(state, true),
+    do: %{state | cached_system_prompt: nil}
+
+  defp maybe_invalidate_cached_system_prompt(state, false), do: state
+
+  @spec maybe_resubscribe_profile(map(), String.t(), String.t()) :: map()
+  defp maybe_resubscribe_profile(state, current_profile, new_profile)
+       when is_binary(current_profile) and is_binary(new_profile) do
+    if current_profile == new_profile do
+      state
+    else
+      AgentEvents.unsubscribe_from_profile(current_profile, state.pubsub)
+      AgentEvents.subscribe_to_profile(new_profile, state.pubsub)
+      state
+    end
+  end
+
+  defp maybe_resubscribe_profile(state, _current_profile, _new_profile), do: state
+
+  @spec maybe_update_field({map(), boolean()}, atom(), any(), keyword()) :: {map(), boolean()}
+  defp maybe_update_field({state, changed?}, field, value, opts) do
+    valid? = Keyword.fetch!(opts, :valid?)
+    current_value = Map.get(state, field)
+
+    cond do
+      not Map.has_key?(state, field) ->
+        {state, changed?}
+
+      not valid?.(value) ->
+        {state, changed?}
+
+      current_value == value ->
+        {state, changed?}
+
+      true ->
+        {Map.put(state, field, value), true}
+    end
+  end
+
+  # Broadcasts a warning log to the agent's UI log panel.
+  # Uses safe pattern: PubSub may be stopped during test cleanup.
+  defp broadcast_warning(state, message) do
+    try do
+      AgentEvents.broadcast_log(state.agent_id, :warning, message, %{}, state.pubsub)
+    rescue
+      ArgumentError -> :ok
+    end
   end
 
   defp truncate(str, max) when is_binary(str) and byte_size(str) > max,

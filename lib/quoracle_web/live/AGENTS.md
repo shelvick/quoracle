@@ -17,11 +17,15 @@
 
 ## SecretManagementLive (5-module architecture, 2025-10-24)
 
-**Main Module:** SecretManagementLive (487 lines)
-**Helpers:** DataHelpers (116 lines), ValidationHelpers (139 lines), ModelConfigHelpers (228 lines), ProfileHelpers (119 lines)
+**Main Module:** SecretManagementLive (497 lines)
+**Helpers:** DataHelpers (116 lines), ValidationHelpers (139 lines), ModelConfigHelpers (228 lines), ProfileHelpers (119 lines + build_hot_reload_payload/2 added v4.0)
 **Template:** secret_management_live.html.heex
 **Purpose:** Unified CRUD interface for secrets, credentials, model config, profiles, and system settings
 **v5.0:** System tab with skills_path configuration (feat-20260208-210722)
+**v6.0 (profile hot-reload):** save_profile handler captures old name + broadcasts `{:profile_updated, ...}` after successful save (2026-02-27)
+- ProfileHelpers.build_hot_reload_payload/2: Builds payload map with old_name, new_name, model_pool, max_refinement_rounds, profile_description, force_reflection (nil-filtered)
+- Broadcasts on old profile name so running agents receive rename transitions
+- Uses socket.assigns.pubsub (injected at mount) for test isolation
 
 ## Key Functions
 - mount/3: Extract pubsub/registry/sandbox_owner from session, load tasks, subscribe to agents:lifecycle + task messages (tracked in MapSet)

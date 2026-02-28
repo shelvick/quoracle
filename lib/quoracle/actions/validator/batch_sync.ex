@@ -28,10 +28,12 @@ defmodule Quoracle.Actions.Validator.BatchSync do
   end
 
   @doc false
+  @spec check_batch_length([map()]) :: :ok | {:error, :batch_too_short}
   def check_batch_length(actions) when length(actions) < 2, do: {:error, :batch_too_short}
   def check_batch_length(_), do: :ok
 
   @doc false
+  @spec check_no_nested_batch([map()]) :: :ok | {:error, :nested_batch}
   def check_no_nested_batch(actions) do
     has_nested =
       Enum.any?(actions, fn action ->
@@ -43,27 +45,30 @@ defmodule Quoracle.Actions.Validator.BatchSync do
   end
 
   @doc false
+  @spec check_all_batchable([map()]) :: :ok | {:error, {:not_batchable, atom() | String.t()}}
   def check_all_batchable(actions) do
     batchable = ActionList.batchable_actions()
 
     Enum.find_value(actions, :ok, fn action ->
       action_type = get_action_type(action)
 
-      action_atom =
-        case action_type do
-          a when is_atom(a) -> a
-          s when is_binary(s) -> String.to_existing_atom(s)
-        end
+      try do
+        action_atom =
+          case action_type do
+            a when is_atom(a) -> a
+            s when is_binary(s) -> String.to_existing_atom(s)
+          end
 
-      if action_atom in batchable do
-        nil
-      else
-        {:error, {:not_batchable, action_atom}}
+        if action_atom in batchable, do: nil, else: {:error, {:not_batchable, action_atom}}
+      rescue
+        ArgumentError -> {:error, {:not_batchable, action_type}}
       end
     end)
   end
 
   @doc false
+  @spec check_each_action_valid([map()]) ::
+          :ok | {:error, {:action_invalid, atom() | String.t(), term()}}
   def check_each_action_valid(actions) do
     # Import validate_params from parent module
     validator = Quoracle.Actions.Validator
@@ -72,15 +77,19 @@ defmodule Quoracle.Actions.Validator.BatchSync do
       action_type = get_action_type(action)
       action_params = get_action_params(action)
 
-      action_atom =
-        case action_type do
-          a when is_atom(a) -> a
-          s when is_binary(s) -> String.to_existing_atom(s)
-        end
+      try do
+        action_atom =
+          case action_type do
+            a when is_atom(a) -> a
+            s when is_binary(s) -> String.to_existing_atom(s)
+          end
 
-      case validator.validate_params(action_atom, action_params) do
-        {:ok, _} -> nil
-        {:error, reason} -> {:error, {:action_invalid, action_atom, reason}}
+        case validator.validate_params(action_atom, action_params) do
+          {:ok, _} -> nil
+          {:error, reason} -> {:error, {:action_invalid, action_atom, reason}}
+        end
+      rescue
+        ArgumentError -> {:error, {:action_invalid, action_type, :unknown_action}}
       end
     end)
   end

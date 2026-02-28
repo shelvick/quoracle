@@ -22,6 +22,10 @@ defmodule Quoracle.Agent.ConsensusHandler.LogHelper do
   @warning_errors [
     :missing_required_param,
     :invalid_param,
+    :invalid_param_type,
+    :invalid_url,
+    :invalid_url_format,
+    :invalid_url_scheme,
     :unknown_parameter,
     :unknown_action,
     :service_unavailable,

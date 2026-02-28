@@ -1193,4 +1193,56 @@ defmodule QuoracleWeb.SecretManagementLiveTest do
       assert render(view) =~ "secret_25"
     end
   end
+
+  # ===========================================================================
+  # AUDIT FAILURE TESTS - These MUST FAIL until issues are fixed
+  # ===========================================================================
+
+  describe "audit: hidden inputs for checkboxes (MUST FAIL)" do
+    test "force_reflection checkbox has hidden input with value false", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      {:ok, view, _html} = mount_secret_management_live(conn, sandbox_owner, pubsub)
+
+      view
+      |> element("[phx-click='switch_tab'][phx-value-tab='profiles']")
+      |> render_click()
+
+      view
+      |> element("button", "New Profile")
+      |> render_click()
+
+      html = render(view)
+
+      # AUDIT FAILURE: Hidden input MUST exist before checkbox for proper form submission
+      # Without it, unchecked checkbox submits nothing instead of "false"
+      assert html =~ "type=\"hidden\" name=\"profile[force_reflection]\" value=\"false\"",
+             "force_reflection checkbox requires hidden input with value='false' before it"
+    end
+
+    test "capability_groups checkboxes have hidden input for empty array", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner,
+      pubsub: pubsub
+    } do
+      {:ok, view, _html} = mount_secret_management_live(conn, sandbox_owner, pubsub)
+
+      view
+      |> element("[phx-click='switch_tab'][phx-value-tab='profiles']")
+      |> render_click()
+
+      view
+      |> element("button", "New Profile")
+      |> render_click()
+
+      html = render(view)
+
+      # AUDIT FAILURE: Hidden input MUST exist for empty array submission
+      # Without it, unchecking all boxes submits nothing instead of []
+      assert html =~ "type=\"hidden\" name=\"profile[capability_groups][]\" value=\"\"",
+             "capability_groups requires hidden input for empty array submission"
+    end
+  end
 end

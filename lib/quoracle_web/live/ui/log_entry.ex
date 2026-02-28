@@ -37,7 +37,7 @@ defmodule QuoracleWeb.UI.LogEntry do
         <% end %>
 
         <!-- Timestamp -->
-        <span class={"timestamp text-xs text-gray-500 mr-2 #{level_time_class(@log[:level])}"}>">
+        <span class={"timestamp text-xs text-gray-500 mr-2 #{level_time_class(@log[:level])}"}>
           <%= format_timestamp(@log[:timestamp], @log[:level]) %>
         </span>
         
@@ -161,7 +161,7 @@ defmodule QuoracleWeb.UI.LogEntry do
             <!-- Other metadata (excluding sent_messages) -->
             <% other_metadata = Map.drop(@log[:metadata], [:sent_messages, "sent_messages"]) %>
             <%= if map_size(other_metadata) > 0 do %>
-              <div class="mt-2 pt-2 border-t border-gray-200">
+              <div class="mt-2 pt-2 border-t border-border-subtle">
                 <pre class="text-xs break-words whitespace-pre-wrap overflow-wrap-anywhere select-text"><%= format_metadata(other_metadata) %></pre>
               </div>
             <% end %>
@@ -170,7 +170,7 @@ defmodule QuoracleWeb.UI.LogEntry do
               <!-- LLM Response Sub-Accordions -->
               <div class="llm-responses space-y-2">
                 <%= for {response, index} <- Enum.with_index(@log[:metadata][:raw_responses] || @log[:metadata]["raw_responses"] || []) do %>
-                  <div class="llm-response border border-gray-200 rounded bg-white">
+                  <div class="llm-response border border-border-subtle rounded bg-white">
                     <div
                       class="flex items-center justify-between p-2 cursor-pointer hover:bg-gray-50"
                       phx-click="toggle_response"
@@ -195,7 +195,7 @@ defmodule QuoracleWeb.UI.LogEntry do
                       </button>
                     </div>
                     <%= if MapSet.member?(@expanded_responses, index) do %>
-                      <div class="p-2 border-t border-gray-200 bg-gray-50">
+                      <div class="p-2 border-t border-border-subtle bg-gray-50">
                         <pre class="text-xs break-words whitespace-pre-wrap overflow-wrap-anywhere select-text"><%= format_response_content(response) %></pre>
                       </div>
                     <% end %>
@@ -205,7 +205,7 @@ defmodule QuoracleWeb.UI.LogEntry do
               <!-- Other metadata (excluding raw_responses) -->
               <% other_metadata = Map.drop(@log[:metadata], [:raw_responses, "raw_responses"]) %>
               <%= if map_size(other_metadata) > 0 do %>
-                <div class="mt-2 pt-2 border-t border-gray-200">
+                <div class="mt-2 pt-2 border-t border-border-subtle">
                   <pre class="text-xs break-words whitespace-pre-wrap overflow-wrap-anywhere select-text"><%= format_metadata(other_metadata) %></pre>
                 </div>
               <% end %>

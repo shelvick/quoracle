@@ -114,27 +114,7 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
 
     execute_opts = build_execute_opts(state, action_id, agent_pid, action_response)
 
-    # Force synchronous execution for actions whose latency exceeds the 100ms
-    # smart_threshold.  Without an explicit timeout the Router enters "smart mode",
-    # yields for only 100ms, and returns {:async_task, ...}.  The ActionExecutor
-    # background Task then casts that opaque tuple as the "result", the agent
-    # removes the action from pending_actions, and the *real* result arriving
-    # later is silently discarded (unknown action_id).
-    #
-    # v36.0: :call_mcp — MCP retry delays (500ms+) exceed threshold.
-    # v28.0: :adjust_budget — GenServer.call(parent, ..., :infinity) blocks.
-    # v39.0: :answer_engine, :fetch_web, :call_api, :generate_images — HTTP
-    #        API calls routinely exceed 100ms (DNS + TLS + server processing).
-    execute_opts =
-      case action_atom do
-        :call_mcp -> Keyword.put_new(execute_opts, :timeout, 600_000)
-        :adjust_budget -> Keyword.put_new(execute_opts, :timeout, :infinity)
-        :answer_engine -> Keyword.put_new(execute_opts, :timeout, 120_000)
-        :fetch_web -> Keyword.put_new(execute_opts, :timeout, 60_000)
-        :call_api -> Keyword.put_new(execute_opts, :timeout, 120_000)
-        :generate_images -> Keyword.put_new(execute_opts, :timeout, 300_000)
-        _ -> execute_opts
-      end
+    execute_opts = apply_timeout_override(execute_opts, action_atom)
 
     # v25.0: Route check_id through existing Router from shell_routers,
     # or spawn a new per-action Router for normal actions
@@ -298,6 +278,37 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
           )
       end
     end)
+  end
+
+  # Force synchronous execution for actions whose latency exceeds the 100ms
+  # smart_threshold.  Without an explicit timeout the Router enters "smart mode",
+  # yields for only 100ms, and returns {:async_task, ...}.  The ActionExecutor
+  # background Task then casts that opaque tuple as the "result", the agent
+  # removes the action from pending_actions, and the *real* result arriving
+  # later is silently discarded (unknown action_id).
+  #
+  # v36.0: :call_mcp — MCP retry delays (500ms+) exceed threshold.
+  # v28.0: :adjust_budget — GenServer.call(parent, ..., :infinity) blocks.
+  # v39.0: :answer_engine, :fetch_web, :call_api, :generate_images — HTTP
+  #        API calls routinely exceed 100ms (DNS + TLS + server processing).
+  @doc """
+  Applies action-specific timeout overrides to execute_opts.
+
+  Actions that exceed the Router's 100ms smart_threshold need explicit timeouts
+  to prevent premature async dispatch. Returns opts with `:timeout` added via
+  `Keyword.put_new/3` (existing timeout values are preserved).
+  """
+  @spec apply_timeout_override(keyword(), atom()) :: keyword()
+  def apply_timeout_override(execute_opts, action_atom) do
+    case action_atom do
+      :call_mcp -> Keyword.put_new(execute_opts, :timeout, 600_000)
+      :adjust_budget -> Keyword.put_new(execute_opts, :timeout, :infinity)
+      :answer_engine -> Keyword.put_new(execute_opts, :timeout, 120_000)
+      :fetch_web -> Keyword.put_new(execute_opts, :timeout, 60_000)
+      :call_api -> Keyword.put_new(execute_opts, :timeout, 120_000)
+      :generate_images -> Keyword.put_new(execute_opts, :timeout, 300_000)
+      _ -> execute_opts
+    end
   end
 
   defp build_execute_opts(state, action_id, agent_pid, _action_response) do

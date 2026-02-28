@@ -271,6 +271,44 @@ defmodule Quoracle.Actions.Shared.BatchValidationTest do
     end
   end
 
+  describe "unknown action type handling (string keys)" do
+    test "validate_action_params rejects unknown action string" do
+      # [UNIT] - WHEN string-keyed action has unknown type THEN returns
+      # {:error, {:invalid_action, ...}} instead of ArgumentError crash
+      actions = [
+        %{"action" => "file_delete", "params" => %{"path" => "/tmp/t.txt"}},
+        %{"action" => "file_read", "params" => %{"path" => "/tmp/a.txt"}}
+      ]
+
+      assert {:error, {:invalid_action, "file_delete", :unknown_action}} =
+               BatchValidation.validate_action_params(actions)
+    end
+
+    test "validate_actions_eligible rejects unknown action string" do
+      # [UNIT] - WHEN string-keyed action has unknown type THEN returns
+      # :unbatchable_action instead of crashing
+      actions = [
+        %{"action" => "file_delete", "params" => %{}},
+        %{"action" => "file_read", "params" => %{"path" => "/a.txt"}}
+      ]
+
+      assert {:error, :unbatchable_action} =
+               BatchValidation.validate_actions_eligible(actions, &async_batchable?/1)
+    end
+
+    test "validate_batch catches unknown action at eligibility" do
+      # [INTEGRATION] - Full pipeline: unknown string action fails at
+      # eligibility check, not with ArgumentError crash
+      actions = [
+        %{"action" => "file_delete", "params" => %{}},
+        %{"action" => "file_read", "params" => %{"path" => "/a.txt"}}
+      ]
+
+      assert {:error, :unbatchable_action} =
+               BatchValidation.validate_batch(actions, &async_batchable?/1)
+    end
+  end
+
   describe "integration with batch_sync eligibility" do
     test "validate_batch rejects slow actions for batch_sync" do
       actions = [

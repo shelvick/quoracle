@@ -13,9 +13,12 @@
 - broadcast_user_message/4: Task-specific messages
 - broadcast_state_change/4: Agent state transitions
 - broadcast_todos_updated/3: TODO list updates
+- broadcast_profile_updated/3: Profile hot-reload — publishes `{:profile_updated, payload}` to `profiles:<old_name>:updated` (v5.0)
 - subscribe_to_agent/2: Subscribe to all agent topics
 - subscribe_to_task/2: Subscribe to task messages
 - subscribe_to_all_agents/1: Subscribe to lifecycle/action topics
+- subscribe_to_profile/2: Subscribe to `profiles:<name>:updated` topic (v5.0)
+- unsubscribe_from_profile/2: Explicit unsubscribe for profile renames; process termination auto-cleans (v5.0)
 
 ## Topics
 - agents:lifecycle - spawn/terminate events
@@ -25,6 +28,7 @@
 - agents:[id]:metrics - metrics updates
 - actions:all - action events
 - tasks:[id]:messages - task messages
+- profiles:[name]:updated - profile hot-reload; broadcast always uses OLD name so renamed agents get the transition (v5.0)
 
 ## PubSub Isolation (As-Built)
 - **NO backward-compatibility defaults** - pubsub parameter is REQUIRED

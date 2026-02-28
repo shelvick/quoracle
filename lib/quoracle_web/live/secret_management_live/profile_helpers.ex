@@ -118,6 +118,28 @@ defmodule QuoracleWeb.SecretManagementLive.ProfileHelpers do
   end
 
   # =============================================================================
+  # Hot-Reload Payload (feat-20260227-profile-hot-reload)
+  # =============================================================================
+
+  @doc """
+  Build the PubSub payload for profile hot-reload notifications.
+  Strips nil values to support forward-compatible fields (e.g. force_reflection).
+  """
+  @spec build_hot_reload_payload(TableProfiles.t(), String.t()) :: map()
+  def build_hot_reload_payload(profile, old_name) do
+    %{
+      old_name: old_name,
+      new_name: profile.name,
+      model_pool: profile.model_pool,
+      max_refinement_rounds: profile.max_refinement_rounds,
+      profile_description: profile.description,
+      force_reflection: Map.get(profile, :force_reflection, nil)
+    }
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
+
+  # =============================================================================
   # Capability Groups Display (Packet 5, feat-20260107-capability-groups)
   # =============================================================================
 

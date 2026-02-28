@@ -637,6 +637,178 @@ defmodule Quoracle.Agent.ReflectorTest do
   end
 
   # ===========================================================================
+  # R28-R33: ReqLLM.Response Extraction Regression Tests
+  # Covers extract_text_from_response/1 with different content part types
+  # to prevent the thinking-prose-as-JSON bug from recurring.
+  # Root cause: DeepSeek puts output in reasoning_content (→ :thinking parts),
+  # GLM with json_object mode stores JSON as :object content parts.
+  # ===========================================================================
+
+  defp build_response_with_thinking(thinking_text) do
+    %ReqLLM.Response{
+      id: "test-thinking",
+      model: "azure:deepseek-v3.2",
+      context: %ReqLLM.Context{messages: []},
+      message: %ReqLLM.Message{
+        role: :assistant,
+        content: [%ReqLLM.Message.ContentPart{type: :thinking, text: thinking_text}],
+        tool_calls: nil,
+        metadata: %{}
+      }
+    }
+  end
+
+  defp build_response_with_text(text) do
+    %ReqLLM.Response{
+      id: "test-text",
+      model: "google-vertex:zai-org/glm-4.7-maas",
+      context: %ReqLLM.Context{messages: []},
+      message: %ReqLLM.Message{
+        role: :assistant,
+        content: [%ReqLLM.Message.ContentPart{type: :text, text: text}],
+        tool_calls: nil,
+        metadata: %{}
+      }
+    }
+  end
+
+  defp build_response_with_object(object_map) do
+    # :object content parts are plain maps (not ContentPart structs) —
+    # created by ResponseBuilder.build_content_parts when looks_like_json? is true.
+    # response.object stays nil in non-streaming decode path.
+    %ReqLLM.Response{
+      id: "test-object",
+      model: "google-vertex:zai-org/glm-4.7-maas",
+      context: %ReqLLM.Context{messages: []},
+      message: %ReqLLM.Message{
+        role: :assistant,
+        content: [%{type: :object, object: object_map}],
+        tool_calls: nil,
+        metadata: %{}
+      }
+    }
+  end
+
+  describe "R28: Thinking prose extraction" do
+    test "thinking content with chain-of-thought prose returns empty string" do
+      response =
+        build_response_with_thinking(
+          "I analyzed the conversation carefully. The user is working on auth debugging. " <>
+            "They mentioned bearer tokens. Let me think about what lessons to extract..."
+        )
+
+      result = Reflector.extract_text_from_response(response)
+
+      assert result == ""
+    end
+  end
+
+  describe "R29: Thinking with reflection JSON" do
+    test "extracts reflection JSON embedded in thinking content" do
+      valid_json =
+        Jason.encode!(%{
+          "lessons" => [%{"type" => "factual", "content" => "API requires bearer auth"}],
+          "state" => [%{"summary" => "Debugging auth module"}]
+        })
+
+      response = build_response_with_thinking(valid_json)
+
+      result = Reflector.extract_text_from_response(response)
+
+      assert {:ok, data} = Jason.decode(result)
+      assert Map.has_key?(data, "lessons")
+      assert Map.has_key?(data, "state")
+    end
+  end
+
+  describe "R30: Thinking with action JSON" do
+    test "returns empty for thinking content containing action JSON" do
+      action_json =
+        Jason.encode!(%{
+          "action" => "orient",
+          "params" => %{},
+          "reasoning" => "I should orient first"
+        })
+
+      response = build_response_with_thinking(action_json)
+
+      result = Reflector.extract_text_from_response(response)
+
+      # Action JSON has no "lessons"/"state" keys — rejected by validation
+      assert result == ""
+    end
+  end
+
+  describe "R31: Object content part extraction" do
+    test "extracts from :object content parts when response.object is nil" do
+      object = %{"lessons" => [], "state" => []}
+      response = build_response_with_object(object)
+
+      # Verify response.object is nil (non-streaming decode doesn't set it)
+      assert response.object == nil
+
+      result = Reflector.extract_text_from_response(response)
+
+      assert {:ok, data} = Jason.decode(result)
+      assert data == object
+    end
+  end
+
+  describe "R32: Text with reflection JSON" do
+    test "extracts text content directly when present" do
+      valid_json =
+        Jason.encode!(%{
+          "lessons" => [%{"type" => "behavioral", "content" => "User prefers verbose output"}],
+          "state" => []
+        })
+
+      response = build_response_with_text(valid_json)
+
+      result = Reflector.extract_text_from_response(response)
+
+      assert result == valid_json
+    end
+  end
+
+  describe "R33: Thinking prose retry loop" do
+    test "thinking prose triggers malformed_response retry loop" do
+      messages = sample_messages()
+      call_count = :counters.new(1, [:atomics])
+
+      # Simulate DeepSeek returning prose in thinking content with empty text field.
+      # The query_fn mimics what default_query does: extract text from response.
+      query_fn = fn _messages, _model_id, _opts ->
+        :counters.add(call_count, 1, 1)
+
+        response =
+          build_response_with_thinking(
+            "Step 1: The user discussed auth. Step 2: They need bearer tokens..."
+          )
+
+        text = Reflector.extract_text_from_response(response)
+        {:ok, text}
+      end
+
+      import ExUnit.CaptureLog
+
+      capture_log(fn ->
+        result =
+          Reflector.reflect(messages, "azure:deepseek-v3.2",
+            query_fn: query_fn,
+            max_retries: 1,
+            delay_fn: fn _ms -> :ok end
+          )
+
+        send(self(), {:result, result})
+      end)
+
+      assert_receive {:result, {:error, :malformed_response_after_retries}}
+      # 1 initial + 1 retry = 2 calls
+      assert :counters.get(call_count, 1) == 2
+    end
+  end
+
+  # ===========================================================================
   # Edge Cases (existing)
   # ===========================================================================
 

@@ -5,9 +5,6 @@
   {"lib/mix/tasks/quoracle.reload.ex", :unknown_function},
   {"lib/mix/tasks/llm_db.hot_reload.ex", :callback_info_missing},
   {"lib/mix/tasks/llm_db.hot_reload.ex", :unknown_function},
-  # ACE Reflector: All current callers are tests with test_mode: true.
-  # Production integration (TokenManager) will call without test_mode, making else branch reachable.
-  {"lib/quoracle/agent/reflector.ex", :pattern_match},
   # Spawn: parent_pid is nil for root agents (no parent), but dialyzer infers it's always a pid
   # through do_spawn_child flow. The is_pid guard is necessary for runtime nil safety.
   {"lib/quoracle/actions/spawn.ex", :pattern_match}

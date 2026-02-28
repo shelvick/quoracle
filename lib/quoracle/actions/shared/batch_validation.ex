@@ -51,6 +51,9 @@ defmodule Quoracle.Actions.Shared.BatchValidation do
       action_type = get_action_type(action)
 
       cond do
+        is_binary(action_type) ->
+          {:halt, {:error, :unbatchable_action}}
+
         action_type in [:batch_sync, :batch_async] ->
           {:halt, {:error, :nested_batch}}
 
@@ -111,7 +114,14 @@ defmodule Quoracle.Actions.Shared.BatchValidation do
 
   # Helper to extract action type from action map
   defp get_action_type(%{action: action_type}), do: action_type
-  defp get_action_type(%{"action" => action_type}), do: String.to_existing_atom(action_type)
+
+  defp get_action_type(%{"action" => action_type}) do
+    try do
+      String.to_existing_atom(action_type)
+    rescue
+      ArgumentError -> action_type
+    end
+  end
 
   # Helper to extract params from action map
   defp get_action_params(%{params: params}), do: params

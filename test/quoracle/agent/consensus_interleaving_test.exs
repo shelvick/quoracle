@@ -581,12 +581,20 @@ defmodule Quoracle.Agent.ConsensusInterleavingTest do
         {:action_result, batch_id, {:ok, %{results: []}}, batch_opts}
       )
 
-      # Force processing + verify consensus now triggers
+      # Force processing of cast + any self-sent :trigger_consensus
+      # Note: schedule_consensus_continuation sends :trigger_consensus to self during the
+      # cast callback. With skip_auto_consensus: true, handle_trigger_consensus clears the
+      # consensus_scheduled flag without running consensus. By the time get_state returns,
+      # the flag may already be false. Instead of checking the transient flag, verify the
+      # outcomes: batch_sync removed from pending_actions and both results in history.
       {:ok, state_after_batch} = Core.get_state(agent_pid)
 
-      # After batch_sync completes, only non-SC shell Phase 1 remains → consensus triggers
-      assert state_after_batch.consensus_scheduled,
-             "System test: consensus should trigger after batch_sync completes"
+      # batch_sync should be consumed, only phase1 shell remains
+      refute Map.has_key?(state_after_batch.pending_actions, batch_id),
+             "batch_sync should be removed from pending_actions after result delivery"
+
+      assert Map.has_key?(state_after_batch.pending_actions, phase1_shell_id),
+             "phase1 shell entry should still be retained (async Phase 1)"
 
       # Verify both results are in history (not just the stale error)
       all_entries =

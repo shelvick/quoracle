@@ -434,7 +434,7 @@ defmodule Quoracle.Actions.ShellTest do
       # Force async by setting threshold to 0ms to avoid timing dependency
       opts_async = Keyword.put(opts, :smart_threshold, 0)
       marker = "SLOW_#{System.unique_integer([:positive])}"
-      result = Shell.execute(%{command: "echo '#{marker}'"}, "agent-1", opts_async)
+      result = Shell.execute(%{command: "sleep 0.2 && echo '#{marker}'"}, "agent-1", opts_async)
 
       assert {:ok, %{status: :running, command_id: _}} = result
 

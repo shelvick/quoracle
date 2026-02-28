@@ -317,4 +317,85 @@ defmodule Quoracle.Actions.BatchSyncTest do
       assert Enum.all?(results, &(&1.action == "todo"))
     end
   end
+
+  # ===========================================================================
+  # Unknown Action Type Handling (crash fix for binary_to_existing_atom)
+  # ===========================================================================
+  describe "unknown action type in sub-actions" do
+    alias Quoracle.Actions.Validator.BatchSync, as: BatchSyncValidator
+    alias Quoracle.Agent.Consensus
+
+    test "check_all_batchable handles unknown action string" do
+      # [UNIT] - WHEN batch contains unknown action type string THEN returns
+      # {:error, {:not_batchable, "file_delete"}} instead of ArgumentError crash
+      actions = [
+        %{"action" => "file_delete", "params" => %{"path" => "/tmp/test.txt"}},
+        %{"action" => "file_read", "params" => %{"path" => "/tmp/a.txt"}}
+      ]
+
+      assert {:error, {:not_batchable, "file_delete"}} =
+               BatchSyncValidator.check_all_batchable(actions)
+    end
+
+    test "check_each_action_valid handles unknown action string" do
+      # [UNIT] - WHEN called with unknown action type string THEN returns
+      # {:error, {:action_invalid, ...}} instead of ArgumentError crash
+      actions = [
+        %{"action" => "file_delete", "params" => %{"path" => "/tmp/test.txt"}},
+        %{"action" => "file_read", "params" => %{"path" => "/tmp/a.txt"}}
+      ]
+
+      assert {:error, {:action_invalid, "file_delete", :unknown_action}} =
+               BatchSyncValidator.check_each_action_valid(actions)
+    end
+
+    @tag :integration
+    test "Validator.validate_action rejects unknown sub-action" do
+      # [INTEGRATION] - Full validation pipeline returns error tuple
+      action_json = %{
+        "action" => "batch_sync",
+        "params" => %{
+          "actions" => [
+            %{"action" => "file_delete", "params" => %{"path" => "/tmp/t.txt"}},
+            %{"action" => "file_read", "params" => %{"path" => "/tmp/a.txt"}}
+          ]
+        }
+      }
+
+      result = Quoracle.Actions.Validator.validate_action(action_json)
+      assert {:error, {:not_batchable, "file_delete"}} = result
+      refute match?({:ok, _}, result)
+    end
+
+    @tag :acceptance
+    test "filter_invalid_responses handles unknown sub-action" do
+      # Consensus.filter_invalid_responses/1 is the system boundary for LLM
+      # response validation - the actual crash site. No HTTP route exists.
+      responses = [
+        %{
+          action: :batch_sync,
+          params: %{
+            "actions" => [
+              %{"action" => "file_delete", "params" => %{}},
+              %{"action" => "file_read", "params" => %{"path" => "/a.txt"}}
+            ]
+          },
+          reasoning: "test"
+        }
+      ]
+
+      # Positive: filters invalid response gracefully, no crash
+      ExUnit.CaptureLog.capture_log(fn ->
+        send(self(), {:filter_result, Consensus.filter_invalid_responses(responses)})
+      end)
+
+      assert_receive {:filter_result, {valid, invalid_count}}
+
+      assert valid == []
+      assert invalid_count == 1
+
+      # Negative: unknown sub-action not passed through as valid
+      refute Enum.any?(valid, &(&1.action == :batch_sync))
+    end
+  end
 end

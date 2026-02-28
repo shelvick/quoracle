@@ -70,19 +70,27 @@ defmodule Quoracle.Providers.RetryHelper do
         e in [FunctionClauseError] ->
           stacktrace = __STACKTRACE__
 
-          Logger.error(
-            "LLM provider returned malformed response: #{Exception.message(e)}\n" <>
-              Exception.format_stacktrace(stacktrace)
-          )
-
           case extract_http_error_code(stacktrace) do
             code when code == 429 ->
+              Logger.warning(
+                "LLM provider crashed on HTTP #{code} response (will retry): #{Exception.message(e)}"
+              )
+
               {:error, {:retryable_provider_error, code}}
 
             code when is_integer(code) and code >= 500 and code < 600 ->
+              Logger.warning(
+                "LLM provider crashed on HTTP #{code} response (will retry): #{Exception.message(e)}"
+              )
+
               {:error, {:retryable_provider_error, code}}
 
             _ ->
+              Logger.error(
+                "LLM provider returned malformed response: #{Exception.message(e)}\n" <>
+                  Exception.format_stacktrace(stacktrace)
+              )
+
               {:error, :malformed_response}
           end
 

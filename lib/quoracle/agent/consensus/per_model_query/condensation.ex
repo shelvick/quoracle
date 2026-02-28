@@ -98,14 +98,19 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery.Condensation do
     apply_reflection_and_finalize(state, model_id, to_discard, to_keep, opts)
   end
 
-  @doc "Condenses model history with ACE reflection. Removes >80% tokens, oldest first."
+  @doc "Condenses model history with ACE reflection. Removes >80% of context window worth of tokens, oldest first."
   @spec condense_model_history_with_reflection(map(), String.t(), keyword()) :: map()
   def condense_model_history_with_reflection(state, model_id, opts) do
     history = Map.get(state.model_histories, model_id, [])
 
-    # Token-based condensation: remove >80% of tokens, oldest first
+    # Token-based condensation: remove >80% of tokens, oldest first.
+    # Capped at context_limit so to_discard never exceeds the model's context window
+    # (critical because the same model does self-reflection on discarded messages).
     total_tokens = TokenManager.estimate_history_tokens(history)
-    {to_discard, to_keep} = TokenManager.tokens_to_condense(history, total_tokens)
+    context_limit = TokenManager.get_model_context_limit(model_id)
+
+    {to_discard, to_keep} =
+      TokenManager.tokens_to_condense(history, min(total_tokens, context_limit))
 
     apply_reflection_and_finalize(state, model_id, to_discard, to_keep, opts)
   end
@@ -137,6 +142,15 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery.Condensation do
   @spec apply_reflection_and_finalize(map(), String.t(), list(map()), list(map()), keyword()) ::
           map()
   def apply_reflection_and_finalize(state, model_id, to_discard, to_keep, opts) do
+    discard_tokens = TokenManager.estimate_history_tokens(to_discard)
+    keep_tokens = TokenManager.estimate_history_tokens(to_keep)
+
+    Logger.debug(
+      "Condensation: model=#{model_id}, " <>
+        "discard=#{length(to_discard)} msgs (#{discard_tokens} tokens), " <>
+        "keep=#{length(to_keep)} msgs (#{keep_tokens} tokens)"
+    )
+
     reflector_fn = Keyword.get(opts, :reflector_fn, &Helpers.default_reflector/3)
     messages_for_reflection = Helpers.format_messages_for_reflection(to_discard)
 
