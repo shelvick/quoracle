@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-03-10
+
+### Added
+
+- **Groves**: declarative multi-agent orchestration via GROVE.md manifests. Define topology, bootstrap, governance, confinement, schemas, and spawn contracts in a single file — then run it.
+  - **Bootstrap**: pre-fill task creation forms from file references or inline values.
+  - **Governance**: dual-layer rule enforcement — prompt guidance (LLM reads the rule) AND runtime blocking (code enforces the rule). Supports `shell_pattern_block` and `action_block` hard rules.
+  - **Confinement**: per-skill filesystem restrictions enforced at the `file_read`, `file_write`, and `execute_shell` action layer.
+  - **Schema validation**: JSON Schema (Draft 2020-12) validation on `file_write` actions matching glob path patterns.
+  - **Spawn contracts**: declared parent→child topology edges with auto-injection of skills, profile (with fallback), and constraints.
+  - **PathSecurity**: three-layer defense against path traversal and symlink attacks across all grove resolvers.
+- Two example groves shipped: **livebench** (6-category benchmark) and **mmlu-pro** (14-subject multiple-choice benchmark).
+- Children context enrichment: agents see their children's latest message preview and status directly in the prompt.
+- Correction feedback injection: parent feedback is injected into child prompts with lifecycle tracking and root stall notification when children stop progressing.
+
+### Fixed
+
+- Per-model consensus queries now run in parallel instead of sequentially.
+- Context window overflow from insufficient token safety margins across multiple providers.
+- Correction feedback cleared by queued messages arriving during retry.
+- Missing `:id` field in system stall messages crashing the Mailbox UI.
+- Empty children signal not injected when no live children exist.
+- GPT wait-stall pattern causing agents to idle indefinitely.
+- LLM receive timeout too low for slow providers (increased to 300s).
+
+### Changed
+
+- Comprehensive Groves documentation added to README.
+- DRY refactors: children tracking, skill metadata construction, single-model persist path, PerModelQuery extraction.
+
 ## [0.1.17] - 2026-02-28
 
 ### Added

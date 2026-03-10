@@ -12,7 +12,7 @@
 - Persistence: DB persistence for action results (135 lines) - Added 2025-10-14
 - ShellCompletion: Shell completion notifications (71 lines) - Added 2025-10-17, v2.0 sends 4-arity cast with `[action_atom: :execute_shell]` opts (2026-02-20)
 - ClientHelpers: Client API wrappers (48 lines) - Added 2025-10-26
-- ClientAPI: Action execution (139 lines)
+- ClientAPI: Action execution (173 lines, v33.0: grove action block check + parent_config_value helper)
 - Security: Secret resolution and output scrubbing (added with secret system)
 
 ## Key Functions
@@ -28,7 +28,9 @@
 - ShellCommandManager.init/0, register/3 (validates action_id), get/2, append_output/4, update_check_position/3, mark_completed/3, mark_terminated/2
 - Persistence.execute_with_persistence/5, persist_action_result/4: DB audit trail logging
 - ShellCompletion.handle_completion/5: Builds result, notifies Core via 4-arity GenServer.cast with `[action_atom: :execute_shell]` opts, broadcasts, stores async result (2025-10-17, v2.0 2026-02-20)
-- ClientAPI.execute/5: Main execution flow
+- ClientAPI.execute/5: Main execution flow (v33.0: validate_action_hard_rules after ActionGate, before validation)
+- ClientAPI.validate_action_hard_rules/2 (private): Extracts grove_hard_rules from opts[:parent_config], delegates to HardRuleEnforcer.check_action/3
+- ClientAPI.parent_config_value/2 (private): Dual atom/string key lookup on parent_config maps
 - ClientHelpers.await_result/3: Wait for async action completion (default 5s timeout)
 - ClientHelpers.interrupt_wait/1: Interrupt pending wait
 - ClientHelpers.cancel_action/1: Cancel action execution

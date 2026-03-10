@@ -18,6 +18,17 @@ defmodule Quoracle.Models.ConfigModelSettingsTest do
   alias Quoracle.Models.TableConsensusConfig
   alias Quoracle.Models.TableCredentials
 
+  # Clear any pre-existing model_settings rows from the test database.
+  # These can leak into sandbox-isolated tests because Ecto Sandbox wraps new
+  # writes in transactions but reads can see committed data outside any sandbox.
+  setup do
+    for key <- ["embedding_model", "answer_engine_model", "summarization_model"] do
+      TableConsensusConfig.delete(key)
+    end
+
+    :ok
+  end
+
   describe "configured?/0" do
     # R8: WHEN all settings configured THEN configured? returns true
     test "returns true when all required settings present" do

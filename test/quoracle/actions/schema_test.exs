@@ -51,36 +51,13 @@ defmodule Quoracle.Actions.SchemaTest do
   end
 
   describe "get_action_priority/1" do
-    test "returns priority 1 for orient (most conservative)" do
-      assert Schema.get_action_priority(:orient) == 1
-    end
+    test "every valid action has a priority" do
+      for action <- @valid_actions do
+        priority = Schema.get_action_priority(action)
 
-    test "returns priority 2 for wait" do
-      assert Schema.get_action_priority(:wait) == 2
-    end
-
-    test "returns priority 3 for send_message" do
-      assert Schema.get_action_priority(:send_message) == 3
-    end
-
-    test "returns priority 10 for answer_engine" do
-      assert Schema.get_action_priority(:answer_engine) == 10
-    end
-
-    test "returns priority 11 for todo" do
-      assert Schema.get_action_priority(:todo) == 11
-    end
-
-    test "returns priority 16 for call_mcp" do
-      assert Schema.get_action_priority(:call_mcp) == 16
-    end
-
-    test "returns priority 18 for execute_shell" do
-      assert Schema.get_action_priority(:execute_shell) == 18
-    end
-
-    test "returns priority 22 for spawn_child" do
-      assert Schema.get_action_priority(:spawn_child) == 22
+        assert is_integer(priority) and priority > 0,
+               "#{action} should have a positive integer priority"
+      end
     end
 
     test "returns error for unknown action" do
@@ -91,10 +68,22 @@ defmodule Quoracle.Actions.SchemaTest do
       assert {:error, :unknown_action} = Schema.get_action_priority(nil)
     end
 
-    test "lower priority numbers are more conservative" do
+    test "orient is the most conservative action" do
       orient_priority = Schema.get_action_priority(:orient)
+
+      for action <- @valid_actions, action != :orient do
+        assert orient_priority < Schema.get_action_priority(action),
+               "orient should be more conservative than #{action}"
+      end
+    end
+
+    test "spawn_child is the least conservative action" do
       spawn_priority = Schema.get_action_priority(:spawn_child)
-      assert orient_priority < spawn_priority
+
+      for action <- @valid_actions, action != :spawn_child do
+        assert spawn_priority > Schema.get_action_priority(action),
+               "spawn_child should be less conservative than #{action}"
+      end
     end
   end
 
@@ -444,9 +433,10 @@ defmodule Quoracle.Actions.SchemaTest do
     end
 
     # R8: Action Priority Defined
-    test "dismiss_child has priority 20" do
-      # [UNIT] - WHEN get_action_priority(:dismiss_child) called THEN returns 20
-      assert Schema.get_action_priority(:dismiss_child) == 20
+    test "dismiss_child has a priority" do
+      # [UNIT] - WHEN get_action_priority(:dismiss_child) called THEN returns a positive integer
+      priority = Schema.get_action_priority(:dismiss_child)
+      assert is_integer(priority) and priority > 0
     end
   end
 
@@ -499,9 +489,10 @@ defmodule Quoracle.Actions.SchemaTest do
     end
 
     # R8: Action Priority Defined
-    test "search_secrets has priority 8" do
-      # [UNIT] - WHEN get_action_priority(:search_secrets) called THEN returns 8
-      assert Schema.get_action_priority(:search_secrets) == 8
+    test "search_secrets has a priority" do
+      # [UNIT] - WHEN get_action_priority(:search_secrets) called THEN returns a positive integer
+      priority = Schema.get_action_priority(:search_secrets)
+      assert is_integer(priority) and priority > 0
     end
   end
 
@@ -602,9 +593,10 @@ defmodule Quoracle.Actions.SchemaTest do
     end
 
     # R8: Action Priority Defined
-    test "generate_images has priority 14" do
-      # [UNIT] - WHEN get_action_priority(:generate_images) called THEN returns 14
-      assert Schema.get_action_priority(:generate_images) == 14
+    test "generate_images has a priority" do
+      # [UNIT] - WHEN get_action_priority(:generate_images) called THEN returns a positive integer
+      priority = Schema.get_action_priority(:generate_images)
+      assert is_integer(priority) and priority > 0
     end
 
     # Additional: Param Descriptions

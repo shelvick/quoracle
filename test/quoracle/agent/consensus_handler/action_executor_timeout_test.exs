@@ -403,4 +403,82 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutorTimeoutTest do
       end
     end
   end
+
+  # ============================================================================
+  # v6.0: R78-R79 task_id fallback removal [UNIT]
+  # ============================================================================
+
+  defp run_send_message_action(state) do
+    action_response = %{
+      action: :send_message,
+      params: %{to: "parent", content: "task_id propagation probe"},
+      wait: false,
+      reasoning: "task_id fallback regression check"
+    }
+
+    _dispatched = ActionExecutor.execute_consensus_action(state, action_response, self())
+
+    receive do
+      {:"$gen_cast", {:action_result, _action_id, result, _opts}} ->
+        assert match?({:ok, _}, result)
+        :ok
+    after
+      5_000 ->
+        flunk("No action result received for send_message action")
+    end
+  end
+
+  describe "v6 task_id fallback removal" do
+    @tag :r78
+    @tag :unit
+    test "R78: build_execute_opts passes task_id without fallback", %{deps: deps, task: task} do
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_parent_with_budget(deps, task, parent_budget)
+      {:ok, parent_state} = Core.get_state(parent_pid)
+
+      test_state =
+        parent_state
+        |> Map.delete(:task_id)
+        |> Map.put(:pending_actions, %{})
+        |> Map.put(:action_counter, 0)
+
+      Phoenix.PubSub.subscribe(deps.pubsub, "tasks:#{parent_state.agent_id}:messages")
+      run_send_message_action(test_state)
+
+      refute_receive {:agent_message, _message},
+                     200,
+                     "No message should be published on fallback task topic when task_id is missing"
+    end
+
+    @tag :r79
+    @tag :unit
+    test "R79: nil task_id propagated as nil not agent_id", %{deps: deps, task: task} do
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_parent_with_budget(deps, task, parent_budget)
+      {:ok, parent_state} = Core.get_state(parent_pid)
+
+      test_state =
+        parent_state
+        |> Map.put(:task_id, nil)
+        |> Map.put(:pending_actions, %{})
+        |> Map.put(:action_counter, 0)
+
+      Phoenix.PubSub.subscribe(deps.pubsub, "tasks:#{parent_state.agent_id}:messages")
+      run_send_message_action(test_state)
+
+      refute_receive {:agent_message, _message},
+                     200,
+                     "No message should be published on fallback task topic when task_id is nil"
+    end
+  end
 end

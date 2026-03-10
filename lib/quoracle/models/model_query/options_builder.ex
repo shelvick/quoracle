@@ -116,6 +116,9 @@ defmodule Quoracle.Models.ModelQuery.OptionsBuilder do
         base_opts
       end
 
+    # Inject receive_timeout from app config (Provider.Defaults doesn't read it)
+    base_opts = maybe_add_receive_timeout(base_opts)
+
     # Pass through caller-provided max_tokens (from dynamic calculation)
     # When present, this overrides ReqLLM's default of injecting LLMDB limits.output
     case Map.get(options, :max_tokens) do
@@ -217,6 +220,13 @@ defmodule Quoracle.Models.ModelQuery.OptionsBuilder do
   end
 
   def get_provider_prefix(_), do: "unknown"
+
+  defp maybe_add_receive_timeout(opts) do
+    case Application.get_env(:req_llm, :receive_timeout) do
+      nil -> opts
+      timeout -> Keyword.put_new(opts, :receive_timeout, timeout)
+    end
+  end
 
   defp deepseek_model?(model_spec) when is_binary(model_spec) do
     case String.split(model_spec, ":", parts: 2) do

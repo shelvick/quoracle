@@ -8,6 +8,7 @@
 - live/dashboard_delete_integration_test.exs: Delete functionality (16 tests)
 - live/dashboard_live_mailbox_integration_test.exs: Mailbox integration
 - live/dashboard_live_tasktree_integration_test.exs: TaskTree integration
+- live/grove_integration_test.exs: Grove bootstrap + spawn contract integration (31+ tests) - R6-R13, R8b/R9b/R11b/R58b audit gaps, GAP-1a/1b/GAP-2 carryover, R63-R65 grove_topology/grove_path threading (added wip-20260228-spawn-contracts)
 
 ## Test Patterns
 - live_isolated/3 with session-based dependency injection
@@ -44,6 +45,13 @@
 - R6: Mailbox integration unchanged
 - R7: Panel width calculations
 - R8: PubSub isolation per test
+
+## Grove Integration Tests (grove_integration_test.exs)
+- R6-R13: Bootstrap grove selection, field pre-fill, grove clear, stale carryover prevention
+- R8b/R9b/R11b/R58b: Audit gap remediation tests
+- GAP-1a/1b: handle_info(:loaded_grove_updated) delegation from TaskTree
+- GAP-2: Governance non-blocking on error
+- R63-R65 (wip-20260228-spawn-contracts): handle_submit_prompt extracts grove_topology + grove_path from loaded_grove, forwards to TaskManager opts
 
 ## Test Coverage
 - All tests use async: true with perfect isolation

@@ -593,8 +593,14 @@ defmodule Quoracle.Agent.ConsensusPerModelTest do
       updated_history = Map.get(updated_state.model_histories, "model-a")
       assert length(updated_history) < length(history)
 
-      # Lessons and state should be unchanged
-      assert Map.get(updated_state.context_lessons, "model-a") == []
+      # Fallback artifact preserves record of discarded content
+      lessons = Map.get(updated_state.context_lessons, "model-a", [])
+      assert lessons != []
+
+      assert Enum.all?(lessons, fn lesson ->
+               String.contains?(lesson.content, "Unreflected content discarded")
+             end)
+
       assert Map.get(updated_state.model_states, "model-a") == nil
     end
   end

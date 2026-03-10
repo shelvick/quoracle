@@ -4,13 +4,19 @@ defmodule Quoracle.Actions.FileWrite do
   Uses Claude Code edit semantics for targeted replacements.
   """
 
+  alias Quoracle.Groves.{HardRuleEnforcer, SchemaValidator}
+
+  @doc """
+  Creates a new file or edits an existing file using Claude Code semantics.
+  """
   @spec execute(map(), String.t(), keyword()) ::
           {:ok, map()} | {:error, atom() | {atom(), map()}}
-  def execute(params, _agent_id, _opts) do
+  def execute(params, _agent_id, opts) do
     with {:ok, path} <- validate_path(params),
          {:ok, mode} <- validate_mode(params),
+         :ok <- validate_confinement(path, mode, opts),
          {:ok, _} <- validate_mode_params(params, mode) do
-      execute_mode(mode, path, params)
+      execute_mode(mode, path, params, opts)
     end
   end
 
@@ -57,8 +63,18 @@ defmodule Quoracle.Actions.FileWrite do
     {:error, {:missing_old_string, %{hint: "old_string required for :edit mode"}}}
   end
 
+  defp validate_confinement(path, mode, opts) when mode in [:write, :edit] do
+    parent_config = Keyword.get(opts, :parent_config, %{})
+    confinement = parent_config_value(parent_config, :grove_confinement)
+    skill_name = parent_config_value(parent_config, :skill_name)
+
+    HardRuleEnforcer.check_file_access(path, :write, confinement, skill_name)
+  end
+
+  defp validate_confinement(_path, _mode, _opts), do: :ok
+
   # Execute write mode
-  defp execute_mode(:write, path, %{content: content}) do
+  defp execute_mode(:write, path, %{content: content}, opts) do
     case File.stat(path) do
       {:ok, _} ->
         {:error,
@@ -69,7 +85,9 @@ defmodule Quoracle.Actions.FileWrite do
           }}}
 
       {:error, :enoent} ->
-        write_new_file(path, content)
+        with :ok <- validate_schema(path, content, opts) do
+          write_new_file(path, content)
+        end
 
       {:error, :eacces} ->
         {:error, {:permission_denied, %{path: path}}}
@@ -80,10 +98,13 @@ defmodule Quoracle.Actions.FileWrite do
   end
 
   # Execute edit mode
-  defp execute_mode(:edit, path, params) do
+  defp execute_mode(:edit, path, params, opts) do
     case File.read(path) do
       {:ok, content} ->
-        apply_edit(path, content, params)
+        with {:ok, new_content, replacement_count} <- build_edited_content(path, content, params),
+             :ok <- validate_schema(path, new_content, opts) do
+          do_write(path, new_content, replacement_count)
+        end
 
       {:error, :enoent} ->
         {:error,
@@ -123,7 +144,7 @@ defmodule Quoracle.Actions.FileWrite do
     end
   end
 
-  defp apply_edit(path, content, params) do
+  defp build_edited_content(path, content, params) do
     old_string = Map.fetch!(params, :old_string)
     new_string = Map.fetch!(params, :new_string)
     replace_all = Map.get(params, :replace_all, false)
@@ -139,11 +160,10 @@ defmodule Quoracle.Actions.FileWrite do
           }}}
 
       1 ->
-        do_replace(path, content, old_string, new_string, 1)
+        {:ok, String.replace(content, old_string, new_string, global: false), 1}
 
       count when replace_all ->
-        new_content = String.replace(content, old_string, new_string)
-        do_write(path, new_content, count)
+        {:ok, String.replace(content, old_string, new_string), count}
 
       count ->
         {:error,
@@ -165,11 +185,6 @@ defmodule Quoracle.Actions.FileWrite do
     |> Kernel.-(1)
   end
 
-  defp do_replace(path, content, old_string, new_string, count) do
-    new_content = String.replace(content, old_string, new_string, global: false)
-    do_write(path, new_content, count)
-  end
-
   defp do_write(path, content, replacement_count) do
     case File.write(path, content) do
       :ok ->
@@ -185,6 +200,21 @@ defmodule Quoracle.Actions.FileWrite do
         {:error, {:write_failed, %{path: path, reason: reason}}}
     end
   end
+
+  defp validate_schema(path, final_content, opts) do
+    parent_config = Keyword.get(opts, :parent_config, %{})
+    schemas = parent_config_value(parent_config, :grove_schemas)
+    workspace = parent_config_value(parent_config, :grove_workspace)
+    grove_path = parent_config_value(parent_config, :grove_path)
+
+    SchemaValidator.validate_file_write(path, final_content, schemas, workspace, grove_path)
+  end
+
+  defp parent_config_value(parent_config, key) when is_map(parent_config) and is_atom(key) do
+    Map.get(parent_config, key, Map.get(parent_config, Atom.to_string(key)))
+  end
+
+  defp parent_config_value(_parent_config, _key), do: nil
 
   defp truncate_for_error(string) when byte_size(string) > 50 do
     String.slice(string, 0, 50) <> "..."

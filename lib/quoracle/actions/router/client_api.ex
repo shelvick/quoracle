@@ -15,6 +15,7 @@ defmodule Quoracle.Actions.Router.ClientAPI do
   require Logger
   alias Quoracle.Actions.{Schema, Validator, Router.ActionMapper, Router.Security}
   alias Quoracle.Budget.Enforcer
+  alias Quoracle.Groves.HardRuleEnforcer
   alias Quoracle.Profiles.ActionGate
   alias Quoracle.PubSub.AgentEvents
   alias Quoracle.Audit.SecretUsage
@@ -105,7 +106,7 @@ defmodule Quoracle.Actions.Router.ClientAPI do
     end
   end
 
-  # Private helper that checks autonomy for actions
+  # Private helper that checks action type validity, permission, hard rules, then validates
   defp execute_with_access_and_autonomy(
          router,
          action_type,
@@ -115,14 +116,14 @@ defmodule Quoracle.Actions.Router.ClientAPI do
          pubsub,
          opts
        ) do
-    # First check if action exists (before autonomy, to preserve :unknown_action errors)
+    # First check if action exists (before permission/hard rules, to preserve :unknown_action errors)
     case Schema.validate_action_type(action_type) do
       {:error, :unknown_action} = error ->
         AgentEvents.broadcast_action_error(agent_id, action_id, error, pubsub)
         error
 
       {:ok, _} ->
-        # Check permission via capability_groups
+        # Check permission via capability_groups (profiles are the first gate)
         permission_check = get_permission_check(opts)
 
         case ActionGate.check(action_type, permission_check) do
@@ -131,18 +132,45 @@ defmodule Quoracle.Actions.Router.ClientAPI do
             error
 
           :ok ->
-            execute_with_validation(
-              router,
-              action_type,
-              params,
-              agent_id,
-              action_id,
-              pubsub,
-              opts
-            )
+            # Grove-level action block check (after capability check, before validation)
+            case validate_action_hard_rules(action_type, opts) do
+              {:error, _} = error ->
+                AgentEvents.broadcast_action_error(agent_id, action_id, error, pubsub)
+                error
+
+              :ok ->
+                execute_with_validation(
+                  router,
+                  action_type,
+                  params,
+                  agent_id,
+                  action_id,
+                  pubsub,
+                  opts
+                )
+            end
         end
     end
   end
+
+  @spec validate_action_hard_rules(atom(), keyword()) ::
+          :ok | {:error, {:hard_rule_violation, HardRuleEnforcer.action_hard_rule_violation()}}
+  defp validate_action_hard_rules(action_type, opts)
+       when is_atom(action_type) and is_list(opts) do
+    parent_config = Keyword.get(opts, :parent_config, %{})
+    hard_rules = parent_config_value(parent_config, :grove_hard_rules)
+    skill_name = parent_config_value(parent_config, :skill_name)
+
+    HardRuleEnforcer.check_action(action_type, hard_rules, skill_name)
+  end
+
+  defp validate_action_hard_rules(_action_type, _opts), do: :ok
+
+  defp parent_config_value(parent_config, key) when is_map(parent_config) and is_atom(key) do
+    Map.get(parent_config, key, Map.get(parent_config, Atom.to_string(key)))
+  end
+
+  defp parent_config_value(_parent_config, _key), do: nil
 
   # Returns capability_groups for permission check
   defp get_permission_check(opts) do
@@ -152,7 +180,7 @@ defmodule Quoracle.Actions.Router.ClientAPI do
   # Private helper for validation and execution flow
   defp execute_with_validation(router, action_type, params, agent_id, action_id, pubsub, opts) do
     # Validate and normalize params (string keys → atom keys)
-    case Validator.validate_params(action_type, params) do
+    case Validator.validate_params(action_type, params, opts) do
       {:ok, normalized_params} ->
         # Resolve secret templates in normalized parameters
         case Security.resolve_secrets(normalized_params) do

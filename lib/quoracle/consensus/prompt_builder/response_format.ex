@@ -103,6 +103,12 @@ defmodule Quoracle.Consensus.PromptBuilder.ResponseFormat do
       WARNING: wait:true on internal actions will STALL indefinitely if no external message arrives!
     - EXTERNAL actions (API calls, web fetches, shell commands, MCP): These may take seconds to minutes.
       Use wait:true when you need the result before continuing. Use wait:false to proceed in parallel.
+
+    BEFORE choosing wait:true or the :wait action, scan your conversation history:
+    - Are there child messages or async results you haven't acted on? → Process them first
+    - Is there a failed/truncated result you can retry differently? → Retry first (e.g., paginated reads)
+    - Are you uncertain about next steps rather than truly blocked? → Use orient, not wait
+    Only wait when you have genuinely exhausted all locally available work.
     """
     |> String.trim()
   end

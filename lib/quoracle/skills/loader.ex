@@ -62,58 +62,40 @@ defmodule Quoracle.Skills.Loader do
   @doc """
   Lists all skills (metadata only, no content).
   Returns empty list if directory doesn't exist.
+  Merges grove-local and global skills when grove_skills_path provided (grove takes precedence).
   """
   @spec list_skills(keyword()) :: {:ok, [skill_metadata()]}
   def list_skills(opts \\ []) do
-    path = skills_dir(opts)
+    dirs = resolve_skill_dirs(opts)
 
-    if File.dir?(path) do
-      skills =
-        path
-        |> File.ls!()
-        |> Enum.filter(&skill_directory?(&1, path))
-        |> Enum.map(&load_skill_metadata(&1, path))
-        |> Enum.filter(&match?({:ok, _}, &1))
-        |> Enum.map(fn {:ok, skill} -> skill end)
+    all_skills =
+      Enum.flat_map(dirs, fn dir ->
+        list_skills_in_dir(dir)
+      end)
 
-      {:ok, skills}
-    else
-      {:ok, []}
-    end
+    # Deduplicate by name (first occurrence wins = grove-local priority)
+    unique_skills = Enum.uniq_by(all_skills, & &1.name)
+
+    {:ok, unique_skills}
   end
 
   @doc """
   Loads a skill by name (includes full content).
+  Searches grove-local path first (if provided), then global.
   """
   @spec load_skill(String.t(), keyword()) ::
-          {:ok, skill()} | {:error, :not_found | :invalid_format}
+          {:ok, skill()} | {:error, :not_found | :invalid_format | {:read_error, atom()}}
   def load_skill(name, opts \\ []) do
-    path = skills_dir(opts)
-    skill_path = Path.join(path, name)
-    skill_file = Path.join(skill_path, "SKILL.md")
+    dirs = resolve_skill_dirs(opts)
 
-    cond do
-      not File.dir?(skill_path) ->
-        {:error, :not_found}
-
-      not File.exists?(skill_file) ->
-        {:error, :not_found}
-
-      true ->
-        content = File.read!(skill_file)
-
-        case parse_skill_file(skill_path, content) do
-          {:ok, skill} ->
-            if skill.name == name do
-              {:ok, skill}
-            else
-              {:error, :invalid_format}
-            end
-
-          {:error, _} = error ->
-            error
-        end
-    end
+    Enum.find_value(dirs, {:error, :not_found}, fn dir ->
+      case load_skill_from_dir(name, dir) do
+        {:ok, _skill} = result -> result
+        {:error, :invalid_format} = error -> error
+        {:error, {:read_error, _}} = error -> error
+        {:error, :not_found} -> nil
+      end
+    end)
   end
 
   @doc """
@@ -121,7 +103,9 @@ defmodule Quoracle.Skills.Loader do
   Returns error if ANY skill not found.
   """
   @spec load_skills([String.t()], keyword()) ::
-          {:ok, [skill()]} | {:error, {:not_found, String.t()} | :not_found | :invalid_format}
+          {:ok, [skill()]}
+          | {:error,
+             {:not_found, String.t()} | :not_found | :invalid_format | {:read_error, atom()}}
   def load_skills(names, opts \\ []) do
     results =
       Enum.map(names, fn name ->
@@ -164,6 +148,76 @@ defmodule Quoracle.Skills.Loader do
 
   # Private functions
 
+  # Builds ordered list of directories to search: grove-local first (if provided), then global.
+  @spec resolve_skill_dirs(keyword()) :: [String.t()]
+  defp resolve_skill_dirs(opts) do
+    global_dir = skills_dir(opts)
+
+    case Keyword.get(opts, :grove_skills_path) do
+      nil ->
+        [global_dir]
+
+      grove_path ->
+        expanded = Path.expand(grove_path)
+        if File.dir?(expanded), do: [expanded, global_dir], else: [global_dir]
+    end
+  end
+
+  # Lists skills from a single directory (metadata only).
+  @spec list_skills_in_dir(String.t()) :: [skill_metadata()]
+  defp list_skills_in_dir(dir) do
+    if File.dir?(dir) do
+      case File.ls(dir) do
+        {:ok, entries} ->
+          entries
+          |> Enum.filter(&skill_directory?(&1, dir))
+          |> Enum.map(&load_skill_metadata(&1, dir))
+          |> Enum.filter(&match?({:ok, _}, &1))
+          |> Enum.map(fn {:ok, skill} -> skill end)
+
+        {:error, _reason} ->
+          []
+      end
+    else
+      []
+    end
+  end
+
+  # Loads a single skill from a specific directory.
+  @spec load_skill_from_dir(String.t(), String.t()) ::
+          {:ok, skill()} | {:error, :not_found | :invalid_format | {:read_error, atom()}}
+  defp load_skill_from_dir(name, dir) do
+    skill_path = Path.join(dir, name)
+    skill_file = Path.join(skill_path, "SKILL.md")
+
+    cond do
+      not File.dir?(skill_path) ->
+        {:error, :not_found}
+
+      not File.exists?(skill_file) ->
+        {:error, :not_found}
+
+      true ->
+        case File.read(skill_file) do
+          {:ok, content} ->
+            case parse_skill_file(skill_path, content) do
+              {:ok, skill} ->
+                if skill.name == name do
+                  {:ok, skill}
+                else
+                  {:error, :invalid_format}
+                end
+
+              {:error, _} = error ->
+                error
+            end
+
+          {:error, reason} ->
+            {:error, {:read_error, reason}}
+        end
+    end
+  end
+
   defp skill_directory?(name, base_path) do
     dir_path = Path.join(base_path, name)
     skill_file = Path.join(dir_path, "SKILL.md")
@@ -173,25 +227,30 @@ defmodule Quoracle.Skills.Loader do
   defp load_skill_metadata(name, base_path) do
     skill_path = Path.join(base_path, name)
     skill_file = Path.join(skill_path, "SKILL.md")
-    content = File.read!(skill_file)
 
-    case parse_skill_file(skill_path, content) do
-      {:ok, skill} ->
-        if skill.name == name do
-          metadata = %{
-            name: skill.name,
-            description: skill.description,
-            path: skill.path,
-            metadata: skill.metadata
-          }
+    case File.read(skill_file) do
+      {:ok, content} ->
+        case parse_skill_file(skill_path, content) do
+          {:ok, skill} ->
+            if skill.name == name do
+              metadata = %{
+                name: skill.name,
+                description: skill.description,
+                path: skill.path,
+                metadata: skill.metadata
+              }
 
-          {:ok, metadata}
-        else
-          {:error, :invalid_format}
+              {:ok, metadata}
+            else
+              {:error, :invalid_format}
+            end
+
+          {:error, _} = error ->
+            error
         end
 
-      {:error, _} = error ->
-        error
+      {:error, _reason} ->
+        {:error, :read_error}
     end
   end
 
@@ -243,5 +302,31 @@ defmodule Quoracle.Skills.Loader do
 
         {:ok, skill}
     end
+  end
+
+  @doc """
+  Converts a loaded skill struct into a metadata map for agent consumption.
+
+  Options:
+  - `:content` - include skill content (default: true). Set false to re-read from disk at prompt time.
+  - `:permanent` - mark as permanent with timestamp (default: false).
+  """
+  @spec skill_to_metadata(skill(), keyword()) :: map()
+  def skill_to_metadata(skill, opts \\ []) do
+    base = %{
+      name: skill.name,
+      description: skill.description,
+      path: skill.path,
+      metadata: skill.metadata
+    }
+
+    base =
+      if Keyword.get(opts, :content, true),
+        do: Map.put(base, :content, skill.content),
+        else: base
+
+    if Keyword.get(opts, :permanent, false),
+      do: Map.merge(base, %{permanent: true, loaded_at: DateTime.utc_now()}),
+      else: base
   end
 end

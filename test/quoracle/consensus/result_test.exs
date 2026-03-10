@@ -596,13 +596,13 @@ defmodule Quoracle.Consensus.ResultTest do
     test "handles multiple tied clusters" do
       tied_clusters = [
         %{representative: %{action: :execute_shell, params: %{}, reasoning: ""}, count: 2},
-        %{representative: %{action: :wait, params: %{}, reasoning: ""}, count: 2},
+        %{representative: %{action: :spawn_child, params: %{}, reasoning: ""}, count: 2},
         %{representative: %{action: :send_message, params: %{}, reasoning: ""}, count: 2}
       ]
 
       winner = Result.break_tie(tied_clusters)
-      # wait has priority 2, lowest of the three
-      assert winner.representative.action == :wait
+      # send_message has lowest priority number of the three (most conservative wins)
+      assert winner.representative.action == :send_message
     end
 
     test "returns first when priorities are the same" do

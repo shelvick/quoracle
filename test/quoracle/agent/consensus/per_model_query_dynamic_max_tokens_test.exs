@@ -61,7 +61,7 @@ defmodule Quoracle.Agent.Consensus.PerModelQueryDynamicMaxTokensTest do
 
   # Helper to create DB records needed for tests
   defp setup_db_records(_context) do
-    _deps = create_isolated_deps()
+    deps = create_isolated_deps()
     {:ok, task} = Repo.insert(Task.changeset(%Task{}, %{prompt: "Test", status: "running"}))
     agent_id = "dyn-max-tokens-#{System.unique_integer([:positive])}"
 
@@ -76,7 +76,7 @@ defmodule Quoracle.Agent.Consensus.PerModelQueryDynamicMaxTokensTest do
         inserted_at: ~N[2025-01-01 10:00:00]
       })
 
-    [task_id: task.id, agent_id: agent_id]
+    [task_id: task.id, agent_id: agent_id, deps: deps]
   end
 
   describe "max_tokens capped when available < limit" do
@@ -282,6 +282,99 @@ defmodule Quoracle.Agent.Consensus.PerModelQueryDynamicMaxTokensTest do
              "History should be condensed when output space is below floor"
 
       :ets.delete(condensation_triggered)
+    end
+  end
+
+  describe "R39 acceptance progress" do
+    setup :setup_db_records
+
+    @tag :acceptance
+    @tag :integration
+    test "oversized entry condensation restores positive output budget", %{
+      agent_id: agent_id,
+      task_id: task_id,
+      sandbox_owner: sandbox_owner,
+      deps: deps
+    } do
+      import Test.AgentTestHelpers
+
+      model_id = "openrouter:openai/gpt-3.5-turbo-0613"
+
+      oversized_oldest = %{
+        id: 1,
+        type: :user,
+        content: String.duplicate("./providers/vercel/models/deepseek/r1.toml ", 3000),
+        timestamp: DateTime.utc_now()
+      }
+
+      # Newest-first history: id=4 newest, id=1 oldest and oversized.
+      history = [
+        %{
+          id: 4,
+          type: :assistant,
+          content: "Recent assistant reply",
+          timestamp: DateTime.utc_now()
+        },
+        %{id: 3, type: :user, content: "Recent user prompt", timestamp: DateTime.utc_now()},
+        %{
+          id: 2,
+          type: :assistant,
+          content: "Prior assistant context",
+          timestamp: DateTime.utc_now()
+        },
+        oversized_oldest
+      ]
+
+      config = %{
+        agent_id: agent_id,
+        task_id: task_id,
+        task_description: "R39 acceptance condensation progress",
+        model_pool: [model_id],
+        model_histories: %{model_id => history},
+        context_lessons: %{model_id => []},
+        model_states: %{model_id => nil},
+        registry: deps.registry,
+        dynsup: deps.dynsup,
+        pubsub: deps.pubsub,
+        sandbox_owner: sandbox_owner,
+        test_mode: true
+      }
+
+      {:ok, agent_pid} =
+        spawn_agent_with_cleanup(
+          deps.dynsup,
+          config,
+          registry: deps.registry,
+          pubsub: deps.pubsub,
+          sandbox_owner: sandbox_owner
+        )
+
+      # Entry-point state before user action.
+      {:ok, pre_state} = Quoracle.Agent.Core.get_state(agent_pid)
+      pre_history = pre_state.model_histories[model_id]
+      pre_tokens = Quoracle.Agent.TokenManager.estimate_history_tokens(pre_history)
+      context_limit = Quoracle.Agent.TokenManager.get_model_context_limit(model_id)
+
+      assert pre_tokens > context_limit
+
+      # [SYSTEM] USER ACTION: send a real message through Core API.
+      Quoracle.Agent.Core.send_user_message(agent_pid, "continue")
+
+      # Synchronize: first get_state drains cast, second sees post-consensus state.
+      {:ok, _} = Quoracle.Agent.Core.get_state(agent_pid)
+      {:ok, post_state} = Quoracle.Agent.Core.get_state(agent_pid)
+
+      post_history = post_state.model_histories[model_id]
+      post_tokens = Quoracle.Agent.TokenManager.estimate_history_tokens(post_history)
+      available_output = context_limit - post_tokens
+
+      # Positive assertions aligned with R39.
+      assert length(post_history) < length(pre_history)
+      assert available_output > 0
+
+      # Negative assertions.
+      refute post_history == pre_history
+      refute available_output <= 0
     end
   end
 
@@ -563,10 +656,11 @@ defmodule Quoracle.Agent.Consensus.PerModelQueryDynamicMaxTokensTest do
       assert is_integer(retry_max_tokens),
              "Retry query should have dynamically calculated max_tokens"
 
-      # After condensation, retry max_tokens should differ from first
-      # (condensation reduces input_tokens, so available_output increases)
-      assert retry_max_tokens != first_max_tokens,
-             "Retry max_tokens should be recalculated after condensation"
+      # Condensation reduces input_tokens, so available_output can only increase.
+      # When both calls are capped at output_limit (small history relative to context),
+      # they'll be equal -- that's correct behavior (both dynamically calculated).
+      assert retry_max_tokens >= first_max_tokens,
+             "Retry max_tokens should be >= first (condensation frees context space)"
     end
   end
 

@@ -22,8 +22,7 @@ defmodule Quoracle.Actions.Spawn do
   alias Quoracle.Agent.Core
   alias Quoracle.Agent.DynSup
   alias Quoracle.Fields.PromptFieldManager
-  alias Quoracle.Profiles.Resolver, as: ProfileResolver
-  alias Quoracle.Actions.Spawn.{ConfigBuilder, BudgetValidation, Helpers}
+  alias Quoracle.Actions.Spawn.{ConfigBuilder, BudgetValidation, Helpers, TopologyResolver}
   alias Quoracle.Skills.Loader, as: SkillLoader
   require Logger
 
@@ -114,15 +113,17 @@ defmodule Quoracle.Actions.Spawn do
     # Normalize params (unwrap if wrapped, convert string keys to atoms)
     normalized_params = normalize_params(params)
 
-    # Validate params synchronously (fast, no LLM calls)
-    with {:ok, profile_data} <- resolve_profile(normalized_params),
-         {:ok, skills_metadata} <- resolve_skills(normalized_params, deps),
-         {:ok, task_result} <- extract_task(normalized_params),
+    # Apply topology first so auto-injected values are available for validation.
+    with {:ok, resolved_params} <- TopologyResolver.apply_spawn_contract(normalized_params, deps),
+         {:ok, profile_data} <-
+           TopologyResolver.resolve_profile_data(normalized_params, resolved_params),
+         {:ok, skills_metadata} <- resolve_skills(resolved_params, deps),
+         {:ok, task_result} <- extract_task(resolved_params),
          {:ok, dynsup} <- ConfigBuilder.get_dynsup(deps),
          {:ok, budget_result} <-
-           BudgetValidation.validate_and_check_budget(normalized_params, deps) do
+           BudgetValidation.validate_and_check_budget(resolved_params, deps) do
       # Add profile data and skills to params for ConfigBuilder
-      merged_params = Map.put(normalized_params, :_profile_data, profile_data)
+      merged_params = Map.put(resolved_params, :_profile_data, profile_data)
       merged_params = Map.put(merged_params, :_skills_metadata, skills_metadata)
       {:field_based, _task_string} = task_result
 
@@ -277,9 +278,9 @@ defmodule Quoracle.Actions.Spawn do
           unless is_function(dynsup) do
             {:ok, _state} = Core.get_state(child_pid)
 
-            # Trigger initial consensus (matches root agent pattern in event_handlers.ex:54)
-            # send_user_message skips adding to history when content matches task_description
-            Core.send_user_message(child_pid, task_string)
+            # Trigger initial consensus with the field-based initial message.
+            initial_message = Map.get(config, :initial_message, task_string)
+            Core.send_user_message(child_pid, initial_message)
           end
 
           # Notify parent to track child (idempotent - ChildrenTracker deduplicates)
@@ -329,22 +330,6 @@ defmodule Quoracle.Actions.Spawn do
     {:error, reason}
   end
 
-  # Private functions
-
-  # v14.0: Resolve profile from params (required parameter)
-  defp resolve_profile(params) do
-    case Map.get(params, :profile) || Map.get(params, "profile") do
-      nil ->
-        {:error, :profile_required}
-
-      profile_name ->
-        case ProfileResolver.resolve(profile_name) do
-          {:ok, profile_data} -> {:ok, profile_data}
-          {:error, :profile_not_found} -> {:error, :profile_not_found}
-        end
-    end
-  end
-
   # v15.0: Resolve skills via Loader - converts skill names to metadata
   defp resolve_skills(params, deps) do
     skill_names = Map.get(params, :skills) || Map.get(params, "skills") || []
@@ -352,23 +337,25 @@ defmodule Quoracle.Actions.Spawn do
     if skill_names == [] do
       {:ok, []}
     else
-      opts = if deps[:skills_path], do: [skills_path: deps[:skills_path]], else: []
+      grove_skills_path = TopologyResolver.resolve_grove_skills_path(deps)
+
+      opts =
+        []
+        |> then(fn current ->
+          if deps[:skills_path], do: [{:skills_path, deps[:skills_path]} | current], else: current
+        end)
+        |> then(fn current ->
+          if grove_skills_path,
+            do: [{:grove_skills_path, grove_skills_path} | current],
+            else: current
+        end)
 
       # Load each skill and convert to active_skills metadata format
       results =
         Enum.map(skill_names, fn name ->
           case SkillLoader.load_skill(name, opts) do
             {:ok, skill} ->
-              # Convert to active_skills metadata (no content in state)
-              {:ok,
-               %{
-                 name: skill.name,
-                 permanent: true,
-                 loaded_at: DateTime.utc_now(),
-                 description: skill.description,
-                 path: skill.path,
-                 metadata: skill.metadata
-               }}
+              {:ok, SkillLoader.skill_to_metadata(skill, content: false, permanent: true)}
 
             {:error, :not_found} ->
               {:error, {:skill_not_found, name}}

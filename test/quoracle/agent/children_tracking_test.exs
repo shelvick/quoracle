@@ -5,14 +5,16 @@ defmodule Quoracle.Agent.ChildrenTrackingTest do
   Tests the interaction between ACTION_Spawn, AGENT_ChildrenTracker,
   CONSENSUS_ChildrenInjector, and ACTION_DismissChild.
 
-  WorkGroupID: feat-20251227-children-inject
-  Packet: 3 (Action Integration)
+  WorkGroupID: feat-20260309-185610
+  Packet: 1 (Message Enrichment)
 
   Requirements tested:
   - R1: Spawn Updates Parent Children List
   - R2: Child Has spawned_at Timestamp
   - R3: Dismiss Removes Child from List
   - R4: Children Injected into Consensus Prompts
+  - R4a: Enriched children context shows message from child (v2.0)
+  - R4b: Children context shows null when child has not replied (v2.0)
   - R5: Restoration Rebuilds Children from Registry
   - R6: Multiple Children Ordering
   """
@@ -418,7 +420,7 @@ defmodule Quoracle.Agent.ChildrenTrackingTest do
     end
 
     @tag :r4
-    test "parent without children has no children block in consensus flow", %{
+    test "parent without children shows empty children signal", %{
       deps: deps,
       profile: _profile
     } do
@@ -427,18 +429,16 @@ defmodule Quoracle.Agent.ChildrenTrackingTest do
       {:ok, parent_state} = Core.get_state(parent_pid)
       assert parent_state.children == [], "Parent should have no children"
 
-      # Act: Build consensus state and verify no children injection
+      # Act: Build consensus state and verify empty children signal
       alias Quoracle.Agent.ConsensusHandler
 
       messages = [%{role: "user", content: "What should I do?"}]
       injected = ConsensusHandler.inject_children_context(parent_state, messages)
 
-      # Assert: No children block when no children exist
-      refute hd(injected).content =~ "<children>",
-             "Messages should NOT contain <children> block when no children"
-
-      # Verify messages are unchanged
-      assert injected == messages
+      # Assert: Empty children signal injected
+      content = hd(injected).content
+      assert content =~ "<children>No child agents running.</children>"
+      assert content =~ "What should I do?"
     end
 
     test "children appear in consensus messages via ChildrenInjector", %{
@@ -495,6 +495,70 @@ defmodule Quoracle.Agent.ChildrenTrackingTest do
       content = hd(injected).content
       assert content =~ "<children>"
       assert content =~ spawn_result.agent_id
+    end
+
+    # R4a: Enriched children context shows message from child (NEW v2.0)
+    @tag :r4a
+    test "children context includes preview when child has sent a message", %{
+      deps: deps,
+      profile: _profile
+    } do
+      # Arrange: Create parent agent and manually add child
+      {:ok, parent_pid} = spawn_parent_agent(deps)
+      {:ok, _parent_state} = Core.get_state(parent_pid)
+
+      child_id = "child-enriched-#{System.unique_integer([:positive])}"
+      child_data = %{agent_id: child_id, spawned_at: DateTime.utc_now()}
+
+      # Register fake child in Registry so filter_live_children finds it
+      Registry.register(deps.registry, {:agent, child_id}, %{pid: self()})
+      GenServer.cast(parent_pid, {:child_spawned, child_data})
+
+      # Simulate child sending a message to the parent (3-tuple format)
+      send(parent_pid, {:agent_message, child_id, "Here are the benchmark results"})
+
+      # Sync wait — get_state processes all preceding messages
+      {:ok, state_with_child} = Core.get_state(parent_pid)
+
+      # Act: Inject children context as consensus would
+      messages = [%{role: "user", content: "What should I do next?"}]
+      injected = ChildrenInjector.inject_children_context(state_with_child, messages)
+
+      # Assert: Children block contains message preview
+      content = hd(injected).content
+      assert content =~ "<children>"
+      assert content =~ child_id
+      assert content =~ "Here are the benchmark results"
+      # Should have a latest_message_at timestamp (not null)
+      refute content =~ ~s("latest_message_preview":null)
+    end
+
+    # R4b: Children context shows null when child has NOT sent a message (NEW v2.0)
+    @tag :r4b
+    test "children context shows null preview when child has not replied", %{
+      deps: deps,
+      profile: _profile
+    } do
+      # Arrange: Create parent agent with child but NO messages from child
+      {:ok, parent_pid} = spawn_parent_agent(deps)
+
+      child_id = "child-silent-#{System.unique_integer([:positive])}"
+      child_data = %{agent_id: child_id, spawned_at: DateTime.utc_now()}
+
+      Registry.register(deps.registry, {:agent, child_id}, %{pid: self()})
+      GenServer.cast(parent_pid, {:child_spawned, child_data})
+
+      {:ok, state_with_child} = Core.get_state(parent_pid)
+
+      # Act
+      messages = [%{role: "user", content: "What should I do next?"}]
+      injected = ChildrenInjector.inject_children_context(state_with_child, messages)
+
+      # Assert: Child entry has null message fields
+      content = hd(injected).content
+      assert content =~ child_id
+      assert content =~ ~s("latest_message_preview":null)
+      assert content =~ ~s("latest_message_at":null)
     end
   end
 

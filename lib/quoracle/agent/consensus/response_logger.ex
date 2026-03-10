@@ -1,12 +1,37 @@
 defmodule Quoracle.Agent.Consensus.ResponseLogger do
   @moduledoc """
-  Helpers for logging LLM responses during consensus.
-  Extracts only UI-needed fields from ReqLLM.Response objects to prevent
-  O(n^2) memory growth from storing full conversation context in log metadata.
+  Extracted response logging and slimming utilities for Consensus module.
+  Handles broadcasting LLM response summaries to PubSub for UI display,
+  and slimming ReqLLM.Response structs to avoid O(n^2) memory growth.
   """
 
   @doc """
-  Slim a list of LLM responses for logging, dropping the massive context field.
+  Broadcasts a debug log for received LLM responses if agent_id and pubsub are provided.
+  """
+  @spec maybe_log_responses(map(), keyword()) :: :ok
+  def maybe_log_responses(result, opts) do
+    if opts[:agent_id] && opts[:pubsub] do
+      Quoracle.PubSub.AgentEvents.broadcast_log(
+        opts[:agent_id],
+        :debug,
+        "Received #{length(result.successful_responses)} LLM responses",
+        %{
+          raw_responses: slim_responses_for_logging(result.successful_responses),
+          failed_models: result.failed_models,
+          total_latency_ms: result.total_latency_ms,
+          aggregate_usage: result.aggregate_usage
+        },
+        opts[:pubsub]
+      )
+    end
+
+    :ok
+  end
+
+  @doc """
+  Extracts only the fields needed for UI display from ReqLLM.Response objects.
+  Drops the `context` field which contains the full conversation history and
+  causes O(n^2) memory growth when stored in log metadata.
   """
   @spec slim_responses_for_logging([any()]) :: [map()]
   def slim_responses_for_logging(responses) when is_list(responses) do

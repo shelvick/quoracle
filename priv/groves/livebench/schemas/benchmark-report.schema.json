@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "livebench-benchmark-report.schema.json",
+  "title": "LiveBench Benchmark Report",
+  "description": "Final report for a LiveBench benchmark run with per-category and aggregate accuracy.",
+  "type": "object",
+  "required": ["run_id", "benchmark", "profile", "started_at", "completed_at", "aggregate", "categories"],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "description": "Unique run identifier (e.g., run-20260303T143022Z)"
+    },
+    "benchmark": {
+      "type": "string",
+      "enum": ["livebench"],
+      "description": "Which benchmark was run"
+    },
+    "profile": {
+      "type": "string",
+      "description": "Quoracle profile name used for solver agents"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "aggregate": {
+      "type": "object",
+      "required": ["total", "accuracy"],
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total questions attempted"
+        },
+        "accuracy": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Score (0.0 to 1.0); macro-average of per-category scores"
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Questions where the solver failed or timed out"
+        }
+      }
+    },
+    "categories": {
+      "type": "object",
+      "description": "Per-category breakdown",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["total", "accuracy"],
+        "properties": {
+          "total": { "type": "integer", "minimum": 0 },
+          "accuracy": { "type": "number", "minimum": 0, "maximum": 1 },
+          "per_task": {
+            "type": "object",
+            "description": "Per-task accuracy breakdown within this category",
+            "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }
+          },
+          "failed": { "type": "integer", "minimum": 0, "description": "Questions where the solver failed or timed out" }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

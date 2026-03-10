@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mmlu-pro-benchmark-report.schema.json",
+  "title": "MMLU-Pro Benchmark Report",
+  "description": "Final report for an MMLU-Pro benchmark run with per-subject and aggregate accuracy.",
+  "type": "object",
+  "required": ["run_id", "benchmark", "profile", "started_at", "completed_at", "aggregate", "categories"],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "description": "Unique run identifier (e.g., run-20260303T143022Z)"
+    },
+    "benchmark": {
+      "type": "string",
+      "enum": ["mmlu-pro"],
+      "description": "Which benchmark was run"
+    },
+    "profile": {
+      "type": "string",
+      "description": "Quoracle profile name used for answerer agents"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "aggregate": {
+      "type": "object",
+      "required": ["total", "correct", "accuracy"],
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total questions attempted"
+        },
+        "correct": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Questions answered correctly"
+        },
+        "accuracy": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Fraction correct (0.0 to 1.0)"
+        },
+        "unanswered": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Questions where answer extraction failed"
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Questions where the agent failed or timed out"
+        }
+      }
+    },
+    "categories": {
+      "type": "object",
+      "description": "Per-subject breakdown",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["total", "correct", "accuracy"],
+        "properties": {
+          "total": { "type": "integer", "minimum": 0 },
+          "correct": { "type": "integer", "minimum": 0 },
+          "accuracy": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

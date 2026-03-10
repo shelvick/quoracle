@@ -318,6 +318,9 @@ defmodule QuoracleWeb.DashboardLive.MessageHandlers do
     else
       # Dashboard must handle agent messages and update its messages assign
       # Otherwise Mailbox's messages get overwritten on every Dashboard re-render
+      # Normalize: ensure message has :id (system messages may lack one)
+      message = Map.put_new_lazy(message, :id, fn -> System.unique_integer([:positive]) end)
+
       # Deduplicate by id to handle buffer replay (page refresh)
       message_id = message[:id]
 

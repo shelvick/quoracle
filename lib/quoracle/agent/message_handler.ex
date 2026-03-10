@@ -72,6 +72,8 @@ defmodule Quoracle.Agent.MessageHandler do
 
     if has_unacked_actions or Map.get(state, :consensus_scheduled, false) do
       # Queue the message - will be flushed when action result arrives
+      # NOTE: Do NOT clear correction_feedback here — the retry is still in-flight
+      # and the correction is still relevant for the upcoming consensus cycle.
       queued_message = %{
         sender_id: sender_id,
         content: content,
@@ -82,6 +84,11 @@ defmodule Quoracle.Agent.MessageHandler do
       new_state = Map.put(state, :queued_messages, queued_messages ++ [queued_message])
       {:noreply, new_state}
     else
+      # R105: Clear correction_feedback on new external message — old corrections are stale.
+      # Only clear when message is actually processed into history (not queued).
+      # When queued, the retry consensus cycle is still pending and needs the correction.
+      state = Map.put(state, :correction_feedback, %{})
+
       # v18.0 R70: Idle agent - DEFER consensus to allow message batching
       # R26-R28: Store structured content with sender info
       message_content = %{
@@ -126,8 +133,8 @@ defmodule Quoracle.Agent.MessageHandler do
         flush_costs(accumulator, state)
         # Step 4: Merge ACE state updates
         merged_state = StateUtils.merge_consensus_state(state, updated_state)
-        # Step 5: Reset retry counter on success
-        merged_state = Map.put(merged_state, :consensus_retry_count, 0)
+        # Step 5: Reset retry counter and clear correction feedback on success
+        merged_state = reset_consensus_retry_state(merged_state)
         # Step 6: Execute action via callback
         final_state = execute_action_fn.(merged_state, action)
         {:noreply, final_state}
@@ -194,7 +201,7 @@ defmodule Quoracle.Agent.MessageHandler do
           # v23.0: Flush accumulated costs before action execution
           flush_costs(accumulator, new_state)
           merged_state = StateUtils.merge_consensus_state(new_state, updated_state)
-          merged_state = Map.put(merged_state, :consensus_retry_count, 0)
+          merged_state = reset_consensus_retry_state(merged_state)
           {:noreply, execute_consensus_action(merged_state, action)}
 
         {:error, reason, accumulator} ->
@@ -334,11 +341,21 @@ defmodule Quoracle.Agent.MessageHandler do
     ConsensusHandler.execute_consensus_action(state, decision, self())
   end
 
+  # Resets retry-related state after a successful consensus.
+  # DRY helper used by both run_consensus_cycle/2 and handle_message_impl/2.
+  @spec reset_consensus_retry_state(map()) :: map()
+  defp reset_consensus_retry_state(state) do
+    state
+    |> Map.put(:consensus_retry_count, 0)
+    |> Map.put(:correction_feedback, %{})
+  end
+
   @retryable_consensus_errors [:all_responses_invalid, :all_models_failed]
   @max_consensus_attempts 3
 
   # v15.0 REFACTOR: DRY consensus error handling (5 call sites -> 1 helper)
   # v22.0: Added retry logic for transient failures
+  # v23.0: Correction feedback generation on retry, root agent stall notification
   defp handle_consensus_error(state, reason, context, extra_metadata \\ %{}) do
     Logger.error("Consensus failed #{context}: #{inspect(reason)}")
     pubsub = Map.get(state, :pubsub)
@@ -358,44 +375,126 @@ defmodule Quoracle.Agent.MessageHandler do
     cond do
       retryable? and retry_count + 1 < @max_consensus_attempts ->
         state = Map.put(state, :consensus_retry_count, retry_count + 1)
+        state = generate_correction_feedback(state, reason)
         state = StateUtils.schedule_consensus_continuation(state)
         {:noreply, state}
 
       retryable? ->
-        notify_parent_of_stall(state, reason, retry_count + 1)
-        {:noreply, state}
+        # Max attempts exhausted — clear correction_feedback, notify
+        state = Map.put(state, :correction_feedback, %{})
+        notify_parent_or_self_of_stall(state, reason, retry_count + 1)
 
       true ->
         {:noreply, state}
     end
   end
 
-  defp notify_parent_of_stall(state, reason, attempts) do
+  # Generates per-model correction feedback for retryable consensus failures.
+  # Each model in model_histories gets a correction message tailored to the error type.
+  @spec generate_correction_feedback(map(), atom()) :: map()
+  defp generate_correction_feedback(state, reason) do
+    models = Map.keys(Map.get(state, :model_histories, %{}))
+
+    feedback =
+      Map.new(models, fn model_id ->
+        {model_id, correction_message_for(reason)}
+      end)
+
+    Map.put(state, :correction_feedback, feedback)
+  end
+
+  # Returns forward-looking correction text differentiated by error type.
+  # Must NOT reference previous output (R102).
+  @spec correction_message_for(atom()) :: String.t()
+  defp correction_message_for(:all_models_failed) do
+    "[SYSTEM] CORRECTION: You MUST respond with a single, well-formed JSON object. " <>
+      "Ensure the response contains valid JSON with \"action\", \"params\", and \"reasoning\" fields."
+  end
+
+  defp correction_message_for(:all_responses_invalid) do
+    "[SYSTEM] CORRECTION: Your response must specify a valid action with correct parameters. " <>
+      "Ensure the action name is one of the available actions and all required parameters are provided."
+  end
+
+  defp correction_message_for(_reason) do
+    "[SYSTEM] CORRECTION: You MUST respond with a single, well-formed JSON object."
+  end
+
+  # Notifies parent (child agent) or self (root agent) when retries are exhausted.
+  # Root agents (nil parent_pid) add stall message to own messages and broadcast via PubSub.
+  # Child agents send {:agent_message, agent_id, message} to parent (unchanged v1.0 behavior).
+  @spec notify_parent_or_self_of_stall(map(), atom(), non_neg_integer()) :: {:noreply, map()}
+  defp notify_parent_or_self_of_stall(state, reason, attempts) do
     parent_pid = Map.get(state, :parent_pid)
 
     if parent_pid && Process.alive?(parent_pid) do
+      # Child agent: notify parent (existing v1.0 behavior)
       message = "Consensus failed after #{attempts} attempts: #{inspect(reason)}"
       send(parent_pid, {:agent_message, state.agent_id, message})
+      {:noreply, state}
+    else
+      # Root agent (nil parent_pid): add stall message to own messages + PubSub broadcast
+      notify_root_agent_stall(state, reason, attempts)
     end
   end
 
-  @doc "Broadcast that a message was received (for tests)."
+  @spec notify_root_agent_stall(map(), atom(), non_neg_integer()) :: {:noreply, map()}
+  defp notify_root_agent_stall(state, reason, attempts) do
+    now = DateTime.utc_now()
+
+    stall_content =
+      "Consensus failed after #{attempts} attempts: #{inspect(reason)}. " <>
+        "The agent was unable to reach consensus and has stalled."
+
+    # Add stall message to agent's own messages list
+    msg_id = System.unique_integer([:positive])
+    task_id = Map.get(state, :task_id)
+
+    stall_msg = %{
+      id: msg_id,
+      from: :system,
+      sender_id: state.agent_id,
+      content: stall_content,
+      timestamp: now,
+      task_id: task_id,
+      status: :received
+    }
+
+    messages = Map.get(state, :messages, [])
+    state = Map.put(state, :messages, messages ++ [stall_msg])
+
+    # Broadcast via PubSub for Mailbox/Dashboard visibility
+    pubsub = Map.get(state, :pubsub)
+
+    if task_id && pubsub do
+      msg_data = %{
+        id: msg_id,
+        agent_id: state.agent_id,
+        from: :system,
+        sender_id: state.agent_id,
+        content: stall_content,
+        timestamp: now,
+        task_id: task_id,
+        status: :received
+      }
+
+      Phoenix.PubSub.broadcast(pubsub, "tasks:#{task_id}:messages", {:agent_message, msg_data})
+    end
+
+    {:noreply, state}
+  end
+
+  # Test helpers
   @spec broadcast_message_received(any(), map()) :: :ok
   defdelegate broadcast_message_received(message, state), to: TestHelpers
-
-  @doc "Broadcast that a message was sent (for tests)."
   @spec broadcast_message_sent(any(), map()) :: :ok
   defdelegate broadcast_message_sent(message, state), to: TestHelpers
-
-  @doc "Handle threaded messages with pubsub from state (for tests)."
   @spec handle_threaded_message(map(), map()) :: {:ok, map()}
   defdelegate handle_threaded_message(message, state), to: TestHelpers
 
-  @doc "Persist inter-agent message to database."
+  # Persistence
   @spec persist_message(map(), String.t()) :: :ok
   defdelegate persist_message(state, content), to: Persistence
-
-  @doc "Flush accumulated costs to the database."
   @spec flush_costs(Quoracle.Costs.Accumulator.t() | nil, map()) :: :ok
   defdelegate flush_costs(accumulator, state), to: Persistence
 end

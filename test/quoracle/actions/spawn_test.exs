@@ -61,6 +61,19 @@ defmodule Quoracle.Actions.SpawnTest do
     end
   end
 
+  defp extract_initial_user_message(state) do
+    state.model_histories
+    |> Map.values()
+    |> List.flatten()
+    |> Enum.find_value(fn
+      %{type: :event, content: %{from: "user", content: content}} when is_binary(content) ->
+        content
+
+      _ ->
+        nil
+    end)
+  end
+
   # Parameter Validation Tests
   describe "parameter validation" do
     test "requires task parameter", %{deps: deps, profile: profile} do
@@ -302,6 +315,76 @@ defmodule Quoracle.Actions.SpawnTest do
       child_pid = wait_for_spawn_complete(result.agent_id)
       if child_pid, do: Process.exit(child_pid, :kill)
     end
+
+    test "R2109: child inherits grove_schemas and grove_workspace from parent", %{
+      deps: deps,
+      profile: profile
+    } do
+      grove_schemas = [
+        %{
+          "name" => "output-schema",
+          "definition" => "schemas/output.json",
+          "validate_on" => "file_write",
+          "path_pattern" => "data/**/*.json"
+        }
+      ]
+
+      grove_workspace =
+        Path.join(System.tmp_dir!(), "spawn_workspace_#{System.unique_integer([:positive])}")
+
+      parent_config = %{
+        agent_id: "parent-R2109-#{System.unique_integer([:positive])}",
+        task_id: Ecto.UUID.generate(),
+        test_mode: true,
+        skip_auto_consensus: true,
+        sandbox_owner: deps.sandbox_owner,
+        pubsub: deps.pubsub,
+        prompt_fields: %{
+          provided: %{task_description: "Parent task"},
+          injected: %{global_context: "", constraints: []},
+          transformed: %{}
+        },
+        models: ["gpt-4"],
+        grove_schemas: grove_schemas,
+        grove_workspace: grove_workspace
+      }
+
+      {:ok, parent_pid} =
+        Test.AgentTestHelpers.spawn_agent_with_cleanup(deps.dynsup, parent_config,
+          registry: deps.registry,
+          pubsub: deps.pubsub,
+          sandbox_owner: deps.sandbox_owner
+        )
+
+      assert {:ok, parent_state} = Core.get_state(parent_pid)
+
+      params = %{
+        "task_description" => "Schema inheritance task",
+        "success_criteria" => "Complete",
+        "immediate_context" => "Test",
+        "approach_guidance" => "Standard",
+        "profile" => profile.name
+      }
+
+      spawn_opts = Map.to_list(deps) ++ [agent_pid: parent_pid, parent_config: parent_state]
+
+      {:ok, result} = Spawn.execute(params, parent_config.agent_id, spawn_opts)
+      child_pid = wait_for_spawn_complete(result.agent_id)
+
+      on_exit(fn ->
+        if child_pid && Process.alive?(child_pid) do
+          try do
+            GenServer.stop(child_pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      assert {:ok, child_state} = Core.get_state(child_pid)
+      assert Map.get(child_state, :grove_schemas) == grove_schemas
+      assert Map.get(child_state, :grove_workspace) == grove_workspace
+    end
   end
 
   # Retry Mechanism Tests
@@ -539,7 +622,7 @@ defmodule Quoracle.Actions.SpawnTest do
   describe "property-based tests" do
     property "generates unique agent IDs for all spawns", %{deps: deps, profile: profile} do
       check all(
-              task <- string(:printable, min_length: 1),
+              task <- filter(string(:printable, min_length: 1), &(String.trim(&1) != "")),
               max_runs: 100
             ) do
         params = %{
@@ -571,7 +654,11 @@ defmodule Quoracle.Actions.SpawnTest do
 
     property "handles various task string formats", %{deps: deps, profile: profile} do
       check all(
-              task <- string(:printable, min_length: 1, max_length: 1000),
+              task <-
+                filter(
+                  string(:printable, min_length: 1, max_length: 1000),
+                  &(String.trim(&1) != "")
+                ),
               max_runs: 50
             ) do
         params = %{
@@ -698,7 +785,7 @@ defmodule Quoracle.Actions.SpawnTest do
 
     property "agent_id format consistency", %{deps: deps, profile: profile} do
       check all(
-              task <- string(:printable, min_length: 1),
+              task <- filter(string(:printable, min_length: 1), &(String.trim(&1) != "")),
               max_runs: 100
             ) do
         params = %{
@@ -963,6 +1050,330 @@ defmodule Quoracle.Actions.SpawnTest do
       # Assert: No crash occurred - spawn completed
       assert is_binary(result.agent_id)
       refute Process.alive?(parent_pid), "Parent should be dead"
+    end
+  end
+
+  # =============================================================================
+  # Child Initial Message Prompt Field Coverage (R2111-R2118)
+  # WorkGroupID: fix-20260304-initial-message-fields
+  # =============================================================================
+
+  describe "child initial message prompt fields (R2111-R2118)" do
+    @tag :acceptance
+    test "child agent initial message contains all provided prompt fields with XML tags", %{
+      deps: deps,
+      profile: profile
+    } do
+      params = %{
+        "task_description" => "Map protocol events",
+        "success_criteria" => "Produce complete event matrix",
+        "immediate_context" => "Analyzing current production traces",
+        "approach_guidance" => "Prioritize deterministic replay",
+        "profile" => profile.name
+      }
+
+      opts = Map.to_list(deps) ++ [agent_pid: self()]
+
+      {:ok, result} = Spawn.execute(params, "parent-acceptance-initial-message", opts)
+      child_pid = wait_for_spawn_complete(result.agent_id)
+      assert child_pid, "Child agent should have been spawned"
+
+      on_exit(fn ->
+        if Process.alive?(child_pid) do
+          try do
+            GenServer.stop(child_pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      {:ok, state} = Core.get_state(child_pid)
+      initial_message = extract_initial_user_message(state)
+
+      assert is_binary(initial_message)
+      assert initial_message =~ "<task>Map protocol events</task>"
+
+      assert initial_message =~
+               "<success_criteria>Produce complete event matrix</success_criteria>"
+
+      assert initial_message =~
+               "<immediate_context>Analyzing current production traces</immediate_context>"
+
+      assert initial_message =~
+               "<approach_guidance>Prioritize deterministic replay</approach_guidance>"
+
+      refute initial_message == "Map protocol events"
+      refute initial_message =~ "<error>"
+    end
+
+    test "R2111 child initial message wraps task_description in XML tags", %{
+      deps: deps,
+      profile: profile
+    } do
+      params = %{
+        "task_description" => "Map protocol events",
+        "success_criteria" => "Produce complete event matrix",
+        "immediate_context" => "Analyzing current production traces",
+        "approach_guidance" => "Prioritize deterministic replay",
+        "profile" => profile.name
+      }
+
+      opts = Map.to_list(deps) ++ [agent_pid: self()]
+
+      {:ok, result} = Spawn.execute(params, "parent-R2111", opts)
+      child_pid = wait_for_spawn_complete(result.agent_id)
+      assert child_pid, "Child agent should have been spawned"
+
+      on_exit(fn ->
+        if Process.alive?(child_pid) do
+          try do
+            GenServer.stop(child_pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      {:ok, state} = Core.get_state(child_pid)
+      initial_message = extract_initial_user_message(state)
+
+      assert is_binary(initial_message)
+      assert initial_message =~ "<task>Map protocol events</task>"
+    end
+
+    test "R2112 child initial message includes immediate_context with XML tags", %{
+      deps: deps,
+      profile: profile
+    } do
+      params = %{
+        "task_description" => "Map protocol events",
+        "success_criteria" => "Produce complete event matrix",
+        "immediate_context" => "Analyzing current production traces",
+        "approach_guidance" => "Prioritize deterministic replay",
+        "profile" => profile.name
+      }
+
+      opts = Map.to_list(deps) ++ [agent_pid: self()]
+
+      {:ok, result} = Spawn.execute(params, "parent-R2112", opts)
+      child_pid = wait_for_spawn_complete(result.agent_id)
+      assert child_pid, "Child agent should have been spawned"
+
+      on_exit(fn ->
+        if Process.alive?(child_pid) do
+          try do
+            GenServer.stop(child_pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      {:ok, state} = Core.get_state(child_pid)
+      initial_message = extract_initial_user_message(state)
+
+      assert is_binary(initial_message)
+
+      assert initial_message =~
+               "<immediate_context>Analyzing current production traces</immediate_context>"
+    end
+
+    test "R2113 child initial message includes success_criteria with XML tags", %{
+      deps: deps,
+      profile: profile
+    } do
+      params = %{
+        "task_description" => "Map protocol events",
+        "success_criteria" => "Produce complete event matrix",
+        "immediate_context" => "Analyzing current production traces",
+        "approach_guidance" => "Prioritize deterministic replay",
+        "profile" => profile.name
+      }
+
+      opts = Map.to_list(deps) ++ [agent_pid: self()]
+
+      {:ok, result} = Spawn.execute(params, "parent-R2113", opts)
+      child_pid = wait_for_spawn_complete(result.agent_id)
+      assert child_pid, "Child agent should have been spawned"
+
+      on_exit(fn ->
+        if Process.alive?(child_pid) do
+          try do
+            GenServer.stop(child_pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      {:ok, state} = Core.get_state(child_pid)
+      initial_message = extract_initial_user_message(state)
+
+      assert is_binary(initial_message)
+
+      assert initial_message =~
+               "<success_criteria>Produce complete event matrix</success_criteria>"
+    end
+
+    test "R2114 child initial message includes approach_guidance with XML tags", %{
+      deps: deps,
+      profile: profile
+    } do
+      params = %{
+        "task_description" => "Map protocol events",
+        "success_criteria" => "Produce complete event matrix",
+        "immediate_context" => "Analyzing current production traces",
+        "approach_guidance" => "Prioritize deterministic replay",
+        "profile" => profile.name
+      }
+
+      opts = Map.to_list(deps) ++ [agent_pid: self()]
+
+      {:ok, result} = Spawn.execute(params, "parent-R2114", opts)
+      child_pid = wait_for_spawn_complete(result.agent_id)
+      assert child_pid, "Child agent should have been spawned"
+
+      on_exit(fn ->
+        if Process.alive?(child_pid) do
+          try do
+            GenServer.stop(child_pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      {:ok, state} = Core.get_state(child_pid)
+      initial_message = extract_initial_user_message(state)
+
+      assert is_binary(initial_message)
+
+      assert initial_message =~
+               "<approach_guidance>Prioritize deterministic replay</approach_guidance>"
+    end
+
+    test "R2115 child initial message includes accumulated_narrative when present", %{
+      deps: deps,
+      profile: profile
+    } do
+      params = %{
+        "task_description" => "Sub-task from parent narrative",
+        "success_criteria" => "Child captures inherited context",
+        "immediate_context" => "Use parent history",
+        "approach_guidance" => "Keep continuity",
+        "profile" => profile.name
+      }
+
+      deps_with_parent_narrative =
+        Map.put(deps, :parent_config, %{
+          deps.parent_config
+          | prompt_fields: %{
+              injected: %{global_context: "", constraints: []},
+              provided: %{},
+              transformed: %{
+                accumulated_narrative: "Parent already validated ingestion and parsing paths"
+              }
+            }
+        })
+
+      opts = Map.to_list(deps_with_parent_narrative) ++ [agent_pid: self()]
+
+      {:ok, result} = Spawn.execute(params, "parent-R2115", opts)
+      child_pid = wait_for_spawn_complete(result.agent_id)
+      assert child_pid, "Child agent should have been spawned"
+
+      on_exit(fn ->
+        if Process.alive?(child_pid) do
+          try do
+            GenServer.stop(child_pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      {:ok, state} = Core.get_state(child_pid)
+      initial_message = extract_initial_user_message(state)
+
+      assert is_binary(initial_message)
+
+      assert initial_message =~
+               "<accumulated_narrative>Parent already validated ingestion and parsing paths</accumulated_narrative>"
+    end
+
+    test "R2116 child initial message omits empty optional fields", %{
+      deps: deps,
+      profile: profile
+    } do
+      params = %{
+        "task_description" => "Only required field",
+        "success_criteria" => "Required for schema validation",
+        "immediate_context" => "Required for schema validation",
+        "approach_guidance" => "Required for schema validation",
+        "sibling_context" => [],
+        "profile" => profile.name
+      }
+
+      opts = Map.to_list(deps) ++ [agent_pid: self()]
+
+      {:ok, result} = Spawn.execute(params, "parent-R2116", opts)
+      child_pid = wait_for_spawn_complete(result.agent_id)
+      assert child_pid, "Child agent should have been spawned"
+
+      on_exit(fn ->
+        if Process.alive?(child_pid) do
+          try do
+            GenServer.stop(child_pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      {:ok, state} = Core.get_state(child_pid)
+      initial_message = extract_initial_user_message(state)
+
+      assert is_binary(initial_message)
+      assert initial_message =~ "<task>Only required field</task>"
+      refute initial_message =~ "<task></task>"
+      refute initial_message =~ "<sibling_context>"
+    end
+
+    test "R2118 spawn broadcast uses plain task string not XML-tagged initial_message", %{
+      deps: deps,
+      profile: profile
+    } do
+      task_string = "Broadcast verification task"
+
+      params = %{
+        "task_description" => task_string,
+        "success_criteria" => "Complete",
+        "immediate_context" => "Context",
+        "approach_guidance" => "Guidance",
+        "profile" => profile.name
+      }
+
+      opts = Map.to_list(deps) ++ [agent_pid: self()]
+
+      {:ok, result} = Spawn.execute(params, "parent-R2118", opts)
+
+      assert_receive {:agent_spawned, event}, 30_000
+      assert event.agent_id == result.agent_id
+      assert event.task == task_string
+      refute event.task =~ "<task>"
+
+      child_pid = wait_for_spawn_complete(result.agent_id)
+
+      on_exit(fn ->
+        if child_pid && Process.alive?(child_pid) do
+          try do
+            GenServer.stop(child_pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
     end
   end
 
@@ -1272,7 +1683,9 @@ defmodule Quoracle.Actions.SpawnTest do
                "got #{length(unique_event_contents)}: #{inspect(unique_event_contents)}"
 
       # Verify both expected messages are present
-      assert Enum.any?(unique_event_contents, fn c -> c.content == task_string end),
+      assert Enum.any?(unique_event_contents, fn c ->
+               is_binary(c.content) and String.contains?(c.content, "<task>#{task_string}</task>")
+             end),
              "Should have initial task in history"
 
       assert Enum.any?(unique_event_contents, fn c -> c.content == "Additional instruction" end),

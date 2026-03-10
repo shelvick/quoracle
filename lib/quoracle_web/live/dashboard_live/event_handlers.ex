@@ -15,65 +15,163 @@ defmodule QuoracleWeb.DashboardLive.EventHandlers do
   """
   @spec handle_submit_prompt(map(), Socket.t()) :: {:noreply, Socket.t()}
   def handle_submit_prompt(params, socket) do
-    # Process and validate form params using FieldProcessor
-    case Quoracle.Tasks.FieldProcessor.process_form_params(params) do
-      {:ok, %{task_fields: task_fields, agent_fields: agent_fields}} ->
-        # Use TASK_Manager to create task and spawn root agent
-        # Pass all dependencies for test isolation
-        opts =
-          []
-          |> maybe_add_opt(:sandbox_owner, socket.assigns[:sandbox_owner])
-          |> maybe_add_opt(:dynsup, socket.assigns[:dynsup])
-          |> maybe_add_opt(:registry, socket.assigns[:registry])
-          |> maybe_add_opt(:pubsub, socket.assigns[:pubsub])
+    # Read grove_skills_path from server-derived socket assigns (not from params).
+    # TaskTree sets this via {:grove_skills_path_updated, path} on grove selection.
+    # Ignoring params["grove_skills_path"] prevents client-side injection (SEC-2a).
+    grove_skills_path = socket.assigns[:grove_skills_path]
 
-        case Quoracle.Tasks.TaskManager.create_task(task_fields, agent_fields, opts) do
-          {:ok, {task, root_pid}} ->
-            # Task saved to DB, root agent spawned and persisting
-            # Will receive agent_spawned event for UI update
+    loaded_grove = socket.assigns[:loaded_grove]
+    grove_topology = loaded_grove && Map.get(loaded_grove, :topology)
+    grove_path = loaded_grove && Map.get(loaded_grove, :path)
+    grove_schemas = loaded_grove && Map.get(loaded_grove, :schemas)
+    grove_workspace = loaded_grove && Map.get(loaded_grove, :workspace)
 
-            # Add task to local state (root_agent_id follows pattern: root-{task.id})
-            root_agent_id = "root-#{task.id}"
+    grove_confinement = loaded_grove && Map.get(loaded_grove, :confinement)
 
-            task_entry = %{
-              id: task.id,
-              prompt: task.prompt,
-              status: "running",
-              live: true,
-              result: nil,
-              error_message: nil,
-              inserted_at: task.inserted_at,
-              updated_at: task.updated_at,
-              budget_limit: task.budget_limit,
-              root_agent_id: root_agent_id
-            }
+    # Use cached grove struct from socket assigns (loaded by GroveHandlers on selection)
+    # to avoid redundant file I/O. Falls back to nil governance when no grove selected.
+    governance_result =
+      case socket.assigns[:loaded_grove] do
+        nil ->
+          {:ok, %{governance_rules: nil, governance_config: nil, grove_hard_rules: nil}}
 
-            updated_tasks = Map.put(socket.assigns.tasks, task.id, task_entry)
+        grove ->
+          case Quoracle.Groves.GovernanceResolver.resolve_all(grove) do
+            {:ok, injections} ->
+              hard_rules = Map.get(grove.governance || %{}, "hard_rules")
 
-            # Subscribe to task messages and costs
-            socket = Subscriptions.safe_subscribe(socket, "tasks:#{task.id}:messages")
-            socket = Subscriptions.safe_subscribe(socket, "tasks:#{task.id}:costs")
+              raw_skills = Map.get(params, "skills", "")
 
-            # Send explicit message to agent (use task_description)
-            prompt = Map.get(agent_fields, :task_description, "")
-            Quoracle.Agent.Core.send_user_message(root_pid, prompt)
+              skill_names =
+                if is_binary(raw_skills) and raw_skills != "" do
+                  raw_skills
+                  |> String.split(",")
+                  |> Enum.map(&String.trim/1)
+                  |> Enum.reject(&(&1 == ""))
+                else
+                  []
+                end
 
-            {:noreply, Phoenix.Component.assign(socket, tasks: updated_tasks)}
+              {:ok,
+               %{
+                 governance_rules:
+                   Quoracle.Groves.GovernanceResolver.build_agent_governance(
+                     injections,
+                     skill_names,
+                     hard_rules
+                   ),
+                 governance_config: injections,
+                 grove_hard_rules: hard_rules
+               }}
 
-          {:error, :profile_required} ->
-            {:noreply, LiveView.put_flash(socket, :error, "Missing required field: profile")}
+            {:error, _reason} ->
+              {:ok, %{governance_rules: nil, governance_config: nil, grove_hard_rules: nil}}
+          end
+      end
 
-          {:error, :profile_not_found} ->
-            {:noreply, LiveView.put_flash(socket, :error, "Profile not found")}
+    with {:ok,
+          %{
+            governance_rules: governance_rules,
+            governance_config: governance_config,
+            grove_hard_rules: grove_hard_rules
+          }} <-
+           governance_result,
+         {:ok, %{task_fields: task_fields, agent_fields: agent_fields}} <-
+           Quoracle.Tasks.FieldProcessor.process_form_params(params) do
+      task_manager_test_opts =
+        case socket.assigns[:sandbox_owner] do
+          nil ->
+            socket.assigns[:task_manager_test_opts]
 
-          {:error, {:skill_not_found, name}} ->
-            {:noreply, LiveView.put_flash(socket, :error, "Skill '#{name}' not found")}
-
-          {:error, reason} ->
-            {:noreply,
-             LiveView.put_flash(socket, :error, "Failed to create task: #{inspect(reason)}")}
+          _owner ->
+            socket.assigns[:task_manager_test_opts]
+            |> Kernel.||([])
+            |> Keyword.put_new(:force_persist, true)
         end
 
+      # Use TASK_Manager to create task and spawn root agent
+      # Pass all dependencies for test isolation
+      opts =
+        []
+        |> maybe_add_opt(:sandbox_owner, socket.assigns[:sandbox_owner])
+        |> maybe_add_opt(:dynsup, socket.assigns[:dynsup])
+        |> maybe_add_opt(:registry, socket.assigns[:registry])
+        |> maybe_add_opt(:pubsub, socket.assigns[:pubsub])
+        |> maybe_add_opt(:grove_skills_path, grove_skills_path)
+        |> maybe_add_opt(:skills_path, socket.assigns[:skills_path])
+        |> maybe_add_opt(:governance_rules, governance_rules)
+        |> maybe_add_opt(:governance_config, governance_config)
+        |> maybe_add_opt(:grove_hard_rules, grove_hard_rules)
+        |> maybe_add_opt(:grove_topology, grove_topology)
+        |> maybe_add_opt(:grove_path, grove_path)
+        |> maybe_add_opt(:grove_schemas, grove_schemas)
+        |> maybe_add_opt(:grove_workspace, grove_workspace)
+        |> maybe_add_opt(:grove_confinement, grove_confinement)
+        |> maybe_add_opt(:test_opts, task_manager_test_opts)
+
+      case Quoracle.Tasks.TaskManager.create_task(task_fields, agent_fields, opts) do
+        {:ok, {task, root_pid}} ->
+          # Task saved to DB, root agent spawned and persisting
+          # Will receive agent_spawned event for UI update
+
+          # Add task to local state (root_agent_id follows pattern: root-{task.id})
+          root_agent_id = "root-#{task.id}"
+
+          task_entry = %{
+            id: task.id,
+            prompt: task.prompt,
+            status: "running",
+            live: true,
+            result: nil,
+            error_message: nil,
+            inserted_at: task.inserted_at,
+            updated_at: task.updated_at,
+            budget_limit: task.budget_limit,
+            root_agent_id: root_agent_id
+          }
+
+          updated_tasks = Map.put(socket.assigns.tasks, task.id, task_entry)
+
+          # Subscribe to task messages and costs
+          socket = Subscriptions.safe_subscribe(socket, "tasks:#{task.id}:messages")
+          socket = Subscriptions.safe_subscribe(socket, "tasks:#{task.id}:costs")
+
+          # Build XML-tagged initial message directly from agent_fields (already in scope).
+          # agent_fields contains the same provided fields (:task_description, :immediate_context,
+          # :success_criteria, :approach_guidance) that PromptFieldManager.build_user_prompt uses.
+          # This avoids a redundant Core.get_state call — TaskManager.create_task already
+          # computed the same prompt (stored in agent config), so we build from the source data
+          # rather than round-tripping through the agent's state.
+          {_system_prompt, user_prompt} =
+            Quoracle.Fields.PromptFieldManager.build_prompts_from_fields(%{
+              provided: agent_fields,
+              injected: %{},
+              transformed: %{}
+            })
+
+          initial_message =
+            if user_prompt == "",
+              do: Map.get(agent_fields, :task_description, ""),
+              else: user_prompt
+
+          Quoracle.Agent.Core.send_user_message(root_pid, initial_message)
+
+          {:noreply, Phoenix.Component.assign(socket, tasks: updated_tasks)}
+
+        {:error, :profile_required} ->
+          {:noreply, LiveView.put_flash(socket, :error, "Missing required field: profile")}
+
+        {:error, :profile_not_found} ->
+          {:noreply, LiveView.put_flash(socket, :error, "Profile not found")}
+
+        {:error, {:skill_not_found, name}} ->
+          {:noreply, LiveView.put_flash(socket, :error, "Skill '#{name}' not found")}
+
+        {:error, reason} ->
+          {:noreply,
+           LiveView.put_flash(socket, :error, "Failed to create task: #{inspect(reason)}")}
+      end
+    else
       {:error, {:missing_required, fields}} ->
         field_names = Enum.map(fields, &Atom.to_string/1)
         error_msg = "Missing required field: #{Enum.join(field_names, ", ")}"

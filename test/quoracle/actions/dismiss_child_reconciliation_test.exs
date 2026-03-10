@@ -1,9 +1,11 @@
 defmodule Quoracle.Actions.DismissChildReconciliationTest do
   @moduledoc """
-  Tests for ACTION_DismissChild v4.0/v5.0 - Budget Reconciliation on Dismissal.
+  Tests for ACTION_DismissChild v4.0/v5.0/v6.0 - Budget Reconciliation on Dismissal.
 
-  WorkGroupID: fix-20260211-budget-enforcement, fix-20260223-cost-display-budget-timeout
-  Packet: Packet 2 (Dismissal Reconciliation), Packet 1 (Per-Model Cost Absorption)
+  WorkGroupID: fix-20260211-budget-enforcement, fix-20260223-cost-display-budget-timeout,
+               fix-20260301-cost-decrease-on-dismiss
+  Packet: Packet 2 (Dismissal Reconciliation), Packet 1 (Per-Model Cost Absorption),
+          Packet 2 (Atomic Absorption)
 
   Tests the corrected budget reconciliation flow when parent dismisses child:
   - R22: Tree spent queried before termination
@@ -21,7 +23,7 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
   - R31: Per-model absorption records created
   - R32: Model spec preserved in absorption metadata
   - R33: Token counts preserved in absorption metadata
-  - R34: Non-model costs absorbed without model_spec
+  - R34: Non-model costs absorbed WITH sentinel model_spec "(external)" (v6.0 update)
   - R35: Cost Detail model table preserves totals (SYSTEM)
   - R36: Absorption succeeds when parent dead
   - R37: No Core.get_state call (uses parent_id directly)
@@ -30,6 +32,18 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
   - R40: Property - absorption records sum equals tree spent
   - R41: Property - task total unchanged after dismissal
   - R42: Escrow release before absorption record creation (audit gap)
+
+  v6.0 Requirements (fix-20260301-cost-decrease-on-dismiss):
+  - R43: Atomic batch insertion via Recorder.record_batch/2
+  - R44: No intermediate broadcasts (all arrive after all DB records exist)
+  - R45: External costs get sentinel model_spec "(external)" in absorption metadata
+  - R46: Sentinel model_spec visible in by_task_and_model_detailed results
+  - R47: Batch insert failure logged with warning
+  - R48: Batch insert failure does not crash dismissal
+  - R49: Zero-cost model rows excluded from absorption batch
+  - R50: All 5 token fields and 2 cost fields always present in metadata
+  - R51: Task cost total stable after child dismissal with mixed model costs (SYSTEM)
+  - R52: Nil pubsub uses direct insert_all for batch
   """
 
   use Quoracle.DataCase, async: true
@@ -42,6 +56,9 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
   alias Quoracle.Tasks.Task, as: TaskSchema
   alias Test.IsolationHelpers
 
+  @repo_query_event [:quoracle, :repo, :query]
+
+  import ExUnit.CaptureLog
   import Test.AgentTestHelpers
 
   setup %{sandbox_owner: sandbox_owner} do
@@ -157,6 +174,15 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
       )
 
     cost
+  end
+
+  defp params_include?(params, value) do
+    Enum.any?(params, fn
+      ^value -> true
+      nested when is_list(nested) -> params_include?(nested, value)
+      nested when is_tuple(nested) -> nested |> Tuple.to_list() |> params_include?(value)
+      _ -> false
+    end)
   end
 
   # ==========================================================================
@@ -728,7 +754,7 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
       # In this case parent is still over budget because total spent (120) > allocated (100).
       # The test verifies the mechanism works - the actual recovery test is better done
       # with a scenario where recovery actually makes the agent go under budget.
-      # For now, verify the over_budget field was re-evaluated (not short-circuited).
+      # Verify the over_budget field was re-evaluated (not short-circuited).
       assert is_boolean(parent_state_after.over_budget),
              "over_budget should be a boolean after re-evaluation"
     end
@@ -1070,9 +1096,11 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
       absorption = hd(absorption_records)
       assert Decimal.equal?(absorption.cost_usd, Decimal.new("5.00"))
 
-      # External costs should NOT have model_spec in metadata
-      refute Map.has_key?(absorption.metadata, "model_spec"),
-             "External cost absorption should not have model_spec"
+      # v6.0: External costs MUST have sentinel model_spec "(external)" in metadata
+      # (changed from v5.0 which omitted model_spec entirely)
+      assert absorption.metadata["model_spec"] == "(external)",
+             "External cost absorption must use sentinel model_spec \"(external)\". " <>
+               "Got: #{inspect(absorption.metadata)}"
     end
   end
 
@@ -1574,6 +1602,593 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
 
       assert Decimal.equal?(parent_state.budget_data.committed, Decimal.new("0")),
              "After resume, escrow should be released (committed = 0)"
+    end
+  end
+
+  # ==========================================================================
+  # v6.0: R43-R52 - Atomic Batch Absorption, Sentinel, and Failure Handling
+  # ==========================================================================
+
+  describe "v6 R43-R52 atomic absorption" do
+    @tag :r43
+    @tag :integration
+    test "R43: absorption records created atomically via batch insert", %{deps: deps, task: task} do
+      parent_id = "parent-R43-#{System.unique_integer([:positive])}"
+      child_id = "child-R43-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("10.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("7.00"),
+        model_spec: "openai/gpt-4o"
+      )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("3.00"),
+        model_spec: "google/gemini-2.5-pro"
+      )
+
+      Phoenix.PubSub.subscribe(deps.pubsub, "tasks:#{task.id}:costs")
+
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+
+      assert_receive {:cost_recorded, _event}, 5_000
+
+      absorbed_count =
+        Repo.aggregate(
+          from(c in AgentCost,
+            where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
+          ),
+          :count
+        )
+
+      assert absorbed_count == 3,
+             "Atomic batch insertion should make all 3 rows visible before first broadcast. " <>
+               "Observed count: #{absorbed_count}"
+
+      :ok = wait_for_dismiss_complete(child_id)
+    end
+
+    @tag :r44
+    @tag :integration
+    test "R44: broadcasts arrive only after all absorption records inserted", %{
+      deps: deps,
+      task: task
+    } do
+      parent_id = "parent-R44-#{System.unique_integer([:positive])}"
+      child_id = "child-R44-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("9.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("8.00"),
+        model_spec: "openai/gpt-4o"
+      )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("4.00"),
+        model_spec: "google/gemini-2.5-pro"
+      )
+
+      Phoenix.PubSub.subscribe(deps.pubsub, "tasks:#{task.id}:costs")
+
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+
+      for _ <- 1..3 do
+        assert_receive {:cost_recorded, _event}, 5_000
+
+        absorbed_count =
+          Repo.aggregate(
+            from(c in AgentCost,
+              where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
+            ),
+            :count
+          )
+
+        assert absorbed_count == 3,
+               "Every broadcast should happen after full insert. Observed count: #{absorbed_count}"
+      end
+
+      :ok = wait_for_dismiss_complete(child_id)
+    end
+
+    @tag :r45
+    @tag :integration
+    test "R45: external costs get sentinel model_spec in absorption metadata",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R45-#{System.unique_integer([:positive])}"
+      child_id = "child-R45-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("6.00"),
+        cost_type: "external"
+      )
+
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+      :ok = wait_for_dismiss_complete(child_id)
+
+      [absorption] =
+        Repo.all(
+          from(c in AgentCost,
+            where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
+          )
+        )
+
+      assert absorption.metadata["model_spec"] == "(external)",
+             "External absorption rows must carry sentinel model_spec"
+    end
+
+    @tag :r46
+    @tag :integration
+    test "R46: sentinel model_spec absorption records visible in detailed aggregation",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R46-#{System.unique_integer([:positive])}"
+      child_id = "child-R46-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("6.00"),
+        cost_type: "external"
+      )
+
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+      :ok = wait_for_dismiss_complete(child_id)
+
+      detail = Aggregator.by_task_and_model_detailed(task.id)
+
+      external = Enum.find(detail, &(&1.model_spec == "(external)"))
+
+      assert external != nil,
+             "Detailed aggregation must include (external) sentinel row after dismissal"
+    end
+
+    @tag :r47
+    @tag :integration
+    test "R47: absorption warning logged when batch fails (nil task_id)",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R47-#{System.unique_integer([:positive])}"
+      child_id = "child-R47-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("5.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("4.00"),
+        model_spec: "openai/gpt-4o"
+      )
+
+      # Provide nil task_id to force batch insert failure
+      failing_opts = action_opts(deps, task) |> Keyword.put(:task_id, nil)
+
+      log =
+        capture_log(fn ->
+          {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, failing_opts)
+          :ok = wait_for_dismiss_complete(child_id)
+        end)
+
+      # v6.0 spec: Logger.warning with child_id and record count on batch failure.
+      # Current v5.0 uses per-row Recorder.record, which silently skips via debug-level
+      # "invalid task_id" log. No warning-level log contains the batch context.
+      assert log =~ child_id and log =~ "2",
+             "Batch failure warning should include child_id and record count (2). Log: #{log}"
+    end
+
+    @tag :r48
+    @tag :integration
+    test "R48: absorption insert failure logs warning and dismissal continues",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R48-#{System.unique_integer([:positive])}"
+      child_id = "child-R48-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("5.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      failing_opts = action_opts(deps, task) |> Keyword.put(:task_id, nil)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{status: "terminating"}} =
+                   DismissChild.execute(%{child_id: child_id}, parent_id, failing_opts)
+
+          assert :ok = wait_for_dismiss_complete(child_id)
+        end)
+
+      assert log =~ child_id,
+             "Failure path should emit warning with child context. Log: #{log}"
+
+      # Reconciliation failure must not kill parent process.
+      assert Process.alive?(parent_pid)
+    end
+
+    @tag :r49
+    @tag :unit
+    test "R49: zero-cost model rows excluded from absorption batch", %{deps: deps, task: task} do
+      parent_id = "parent-R49-#{System.unique_integer([:positive])}"
+      child_id = "child-R49-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("0.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("5.00"),
+        model_spec: "openai/gpt-4o"
+      )
+
+      failing_opts = action_opts(deps, task) |> Keyword.put(:task_id, nil)
+
+      log =
+        capture_log(fn ->
+          {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, failing_opts)
+          :ok = wait_for_dismiss_complete(child_id)
+        end)
+
+      # v6.0 warning should report filtered batch size (1), not raw rows (2).
+      assert log =~ child_id and log =~ "1",
+             "Filtered batch failure warning should include child_id and record count (1). Log: #{log}"
+    end
+
+    @tag :r50
+    @tag :unit
+    test "R50: all token and cost fields present in absorption metadata", %{
+      deps: deps,
+      task: task
+    } do
+      parent_id = "parent-R50-#{System.unique_integer([:positive])}"
+      child_id = "child-R50-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("6.00"),
+        cost_type: "external"
+      )
+
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+      :ok = wait_for_dismiss_complete(child_id)
+
+      [absorption] =
+        Repo.all(
+          from(c in AgentCost,
+            where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
+          )
+        )
+
+      meta = absorption.metadata
+
+      assert meta["model_spec"] == "(external)"
+      assert Map.has_key?(meta, "input_tokens")
+      assert Map.has_key?(meta, "output_tokens")
+      assert Map.has_key?(meta, "reasoning_tokens")
+      assert Map.has_key?(meta, "cached_tokens")
+      assert Map.has_key?(meta, "cache_creation_tokens")
+      assert Map.has_key?(meta, "input_cost")
+      assert Map.has_key?(meta, "output_cost")
+    end
+
+    @tag :r51
+    @tag :acceptance
+    @tag :system
+    test "R51: task cost total stable after child dismissal with mixed model costs",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R51-#{System.unique_integer([:positive])}"
+      child_id = "child-R51-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("200.00"),
+        committed: Decimal.new("100.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(parent_id, task.id,
+        cost_usd: Decimal.new("10.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("20.00"),
+        model_spec: "openai/gpt-4o"
+      )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("5.00"),
+        cost_type: "external"
+      )
+
+      before_total = Aggregator.by_task(task.id).total_cost
+
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
+      :ok = wait_for_dismiss_complete(child_id)
+
+      after_total = Aggregator.by_task(task.id).total_cost
+      detail_rows = Aggregator.by_task_and_model_detailed(task.id)
+
+      detail_sum =
+        Enum.reduce(detail_rows, Decimal.new("0"), fn row, acc ->
+          if row.total_cost, do: Decimal.add(acc, row.total_cost), else: acc
+        end)
+
+      assert Decimal.equal?(after_total, before_total),
+             "Task total must be invariant across dismissal"
+
+      refute Decimal.compare(after_total, before_total) == :lt,
+             "Task total must never decrease after dismissal"
+
+      assert Decimal.equal?(detail_sum, after_total),
+             "Detailed model sum must equal task header total after dismissal"
+    end
+
+    @tag :r52
+    @tag :integration
+    test "R52: nil pubsub uses direct insert_all for one INSERT statement",
+         %{deps: deps, task: task} do
+      parent_id = "parent-R52-#{System.unique_integer([:positive])}"
+      child_id = "child-R52-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("5.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("4.00"),
+        model_spec: "openai/gpt-4o"
+      )
+
+      nil_pubsub_opts = action_opts(deps, task) |> Keyword.put(:pubsub, nil)
+
+      telemetry_handler_id = {:r52_repo_query_handler, System.unique_integer([:positive])}
+      parent_pid_capture = self()
+
+      :ok =
+        :telemetry.attach(
+          telemetry_handler_id,
+          @repo_query_event,
+          fn _event, _measurements, metadata, _config ->
+            query = metadata.query || ""
+            params = metadata[:params] || []
+
+            # Filter to this test's absorption insert to avoid async cross-test telemetry noise.
+            if String.contains?(query, ~s(INSERT INTO "agent_costs")) and
+                 params_include?(params, parent_id) and
+                 params_include?(params, "child_budget_absorbed") do
+              send(parent_pid_capture, {:r52_insert_query, query})
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(telemetry_handler_id) end)
+
+      {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, nil_pubsub_opts)
+      :ok = wait_for_dismiss_complete(child_id)
+
+      insert_query_count =
+        Stream.repeatedly(fn ->
+          receive do
+            {:r52_insert_query, _query} -> :insert
+          after
+            0 -> :done
+          end
+        end)
+        |> Enum.take_while(&(&1 == :insert))
+        |> length()
+
+      assert insert_query_count == 1,
+             "Nil pubsub path should use one insert_all statement; observed #{insert_query_count} INSERTs"
+
+      absorbed_count =
+        Repo.aggregate(
+          from(c in AgentCost,
+            where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
+          ),
+          :count
+        )
+
+      assert absorbed_count == 2,
+             "Nil pubsub batch path must insert both absorption records. Got: #{absorbed_count}"
     end
   end
 

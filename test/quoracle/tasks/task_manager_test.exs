@@ -72,21 +72,6 @@ defmodule Quoracle.Tasks.TaskManagerTest do
     end
 
     @tag :integration
-    test "ARC_FUNC_02: spawn failure rolls back transaction", %{deps: deps} do
-      # TODO: Proper spawn failure test requires mocking DynSup.start_agent
-      # Empty string tests validation failure, not spawn failure
-      # Will implement proper spawn failure simulation in IMPLEMENT phase
-      # For now, verify function exists and returns error on invalid input
-      assert {:error, _reason} =
-               TaskManager.create_task(%{profile: deps.profile.name}, %{task_description: ""},
-                 sandbox_owner: deps.sandbox_owner,
-                 pubsub: deps.pubsub,
-                 registry: deps.registry,
-                 dynsup: deps.dynsup
-               )
-    end
-
-    @tag :integration
     test "create_task with empty prompt validation fails", %{deps: deps} do
       # Empty prompt should fail validation
       assert {:error, changeset} =
@@ -1176,6 +1161,160 @@ defmodule Quoracle.Tasks.TaskManagerTest do
       assert db_task.status == "running"
 
       register_agent_cleanup(agent_pid, cleanup_tree: true, registry: deps.registry)
+    end
+
+    test "R43: create_task forwards grove_topology to root agent state", %{deps: deps} do
+      grove_topology = %{
+        "edges" => [
+          %{
+            "from" => ["venture-orchestrator"],
+            "to" => ["factory-oversight"],
+            "auto_inject" => %{"skills" => ["venture-management"]}
+          }
+        ]
+      }
+
+      task_fields = %{profile: deps.profile.name}
+      agent_fields = %{task_description: "Topology forwarding task"}
+
+      opts = [
+        dynsup: deps.dynsup,
+        registry: deps.registry,
+        pubsub: deps.pubsub,
+        sandbox_owner: deps.sandbox_owner,
+        grove_topology: grove_topology
+      ]
+
+      assert {:ok, {_task, agent_pid}} = TaskManager.create_task(task_fields, agent_fields, opts)
+      register_agent_cleanup(agent_pid, cleanup_tree: true, registry: deps.registry)
+
+      assert {:ok, state} = Quoracle.Agent.Core.get_state(agent_pid)
+      assert Map.get(state, :grove_topology) == grove_topology
+    end
+
+    test "R44: create_task forwards grove_path to root agent state", %{deps: deps} do
+      grove_path =
+        Path.join(
+          System.tmp_dir!(),
+          "task_manager_topology_#{System.unique_integer([:positive])}"
+        )
+
+      task_fields = %{profile: deps.profile.name}
+      agent_fields = %{task_description: "Path forwarding task"}
+
+      opts = [
+        dynsup: deps.dynsup,
+        registry: deps.registry,
+        pubsub: deps.pubsub,
+        sandbox_owner: deps.sandbox_owner,
+        grove_path: grove_path
+      ]
+
+      assert {:ok, {_task, agent_pid}} = TaskManager.create_task(task_fields, agent_fields, opts)
+      register_agent_cleanup(agent_pid, cleanup_tree: true, registry: deps.registry)
+
+      assert {:ok, state} = Quoracle.Agent.Core.get_state(agent_pid)
+      assert Map.get(state, :grove_path) == grove_path
+    end
+
+    test "R45: create_task without topology opts omits topology fields from agent config", %{
+      deps: deps
+    } do
+      task_fields = %{profile: deps.profile.name}
+      agent_fields = %{task_description: "Baseline task without topology"}
+
+      opts = [
+        dynsup: deps.dynsup,
+        registry: deps.registry,
+        pubsub: deps.pubsub,
+        sandbox_owner: deps.sandbox_owner
+      ]
+
+      assert {:ok, {_task, agent_pid}} = TaskManager.create_task(task_fields, agent_fields, opts)
+      register_agent_cleanup(agent_pid, cleanup_tree: true, registry: deps.registry)
+
+      assert {:ok, state} = Quoracle.Agent.Core.get_state(agent_pid)
+      assert is_nil(Map.get(state, :grove_topology))
+      assert is_nil(Map.get(state, :grove_path))
+    end
+
+    test "R46: create_task forwards grove_schemas to agent config", %{deps: deps} do
+      grove_schemas = [
+        %{
+          "name" => "output-schema",
+          "definition" => "schemas/output.json",
+          "validate_on" => "file_write",
+          "path_pattern" => "data/**/*.json"
+        }
+      ]
+
+      task_fields = %{profile: deps.profile.name}
+      agent_fields = %{task_description: "Schema forwarding task"}
+
+      opts = [
+        dynsup: deps.dynsup,
+        registry: deps.registry,
+        pubsub: deps.pubsub,
+        sandbox_owner: deps.sandbox_owner,
+        grove_schemas: grove_schemas
+      ]
+
+      assert {:ok, {_task, agent_pid}} = TaskManager.create_task(task_fields, agent_fields, opts)
+      register_agent_cleanup(agent_pid, cleanup_tree: true, registry: deps.registry)
+
+      assert {:ok, state} = Quoracle.Agent.Core.get_state(agent_pid)
+      assert Map.get(state, :grove_schemas) == grove_schemas
+    end
+
+    test "R47: create_task forwards grove_workspace to agent config", %{deps: deps} do
+      grove_workspace =
+        Path.join(
+          System.tmp_dir!(),
+          "task_manager_workspace_#{System.unique_integer([:positive])}"
+        )
+
+      task_fields = %{profile: deps.profile.name}
+      agent_fields = %{task_description: "Workspace forwarding task"}
+
+      opts = [
+        dynsup: deps.dynsup,
+        registry: deps.registry,
+        pubsub: deps.pubsub,
+        sandbox_owner: deps.sandbox_owner,
+        grove_workspace: grove_workspace
+      ]
+
+      assert {:ok, {_task, agent_pid}} = TaskManager.create_task(task_fields, agent_fields, opts)
+      register_agent_cleanup(agent_pid, cleanup_tree: true, registry: deps.registry)
+
+      assert {:ok, state} = Quoracle.Agent.Core.get_state(agent_pid)
+      assert Map.get(state, :grove_workspace) == grove_workspace
+    end
+
+    test "R48: create_task without schema opts omits schema fields in agent config", %{deps: deps} do
+      task_fields = %{profile: deps.profile.name}
+      agent_fields = %{task_description: "Baseline task without schema config"}
+
+      opts = [
+        dynsup: deps.dynsup,
+        registry: deps.registry,
+        pubsub: deps.pubsub,
+        sandbox_owner: deps.sandbox_owner,
+        test_opts: [force_persist: true]
+      ]
+
+      assert {:ok, {task, agent_pid}} = TaskManager.create_task(task_fields, agent_fields, opts)
+      register_agent_cleanup(agent_pid, cleanup_tree: true, registry: deps.registry)
+
+      root_agent_id = "root-#{task.id}"
+      assert {:ok, root_agent} = TaskManager.get_agent(root_agent_id)
+
+      refute Map.has_key?(root_agent.config || %{}, "grove_schemas")
+      refute Map.has_key?(root_agent.config || %{}, "grove_workspace")
+
+      assert {:ok, state} = Quoracle.Agent.Core.get_state(agent_pid)
+      assert is_nil(state.grove_schemas)
+      assert is_nil(state.grove_workspace)
     end
 
     # R11: Root Agent Prompt Conversion - INTEGRATION

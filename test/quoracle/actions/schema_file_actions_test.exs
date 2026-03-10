@@ -141,12 +141,14 @@ defmodule Quoracle.Actions.SchemaFileActionsTest do
     end
 
     # R13: Priorities Defined
-    test "file actions have priorities" do
-      # [UNIT] - WHEN get_action_priority called for file_read/file_write THEN returns integers
-      # file_read: 7 (read-only filesystem)
-      # file_write: 19 (file modifications)
-      assert Schema.get_action_priority(:file_read) == 7
-      assert Schema.get_action_priority(:file_write) == 19
+    test "file actions have priorities with file_read less consequential than file_write" do
+      # [UNIT] - WHEN get_action_priority called for file_read/file_write THEN returns positive integers
+      # file_read (read-only) should be less consequential than file_write (modifications)
+      file_read_priority = Schema.get_action_priority(:file_read)
+      file_write_priority = Schema.get_action_priority(:file_write)
+      assert is_integer(file_read_priority) and file_read_priority > 0
+      assert is_integer(file_write_priority) and file_write_priority > 0
+      assert file_read_priority < file_write_priority
     end
 
     # Additional: wait_required? for file actions

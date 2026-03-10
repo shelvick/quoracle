@@ -112,11 +112,11 @@ defmodule QuoracleWeb.UI.TaskTreeModalTest do
 
       # Submit form
       view
-      |> form("#new-task-modal form", form_data)
+      |> form("#new-task-form", form_data)
       |> render_submit()
 
       # Verify message sent to parent with all fields
-      assert_received {:submit_prompt, sent_params}
+      assert_receive {:submit_prompt, sent_params}, 1000
 
       # Check all fields are in sent params
       assert sent_params["global_context"] == "Project context"
@@ -153,11 +153,11 @@ defmodule QuoracleWeb.UI.TaskTreeModalTest do
 
       # Submit form
       view
-      |> form("#new-task-modal form", form_data)
+      |> form("#new-task-form", form_data)
       |> render_submit()
 
       # Verify message sent to parent with minimal fields
-      assert_received {:submit_prompt, sent_params}
+      assert_receive {:submit_prompt, sent_params}, 1000
 
       assert sent_params["task_description"] == "Build something"
       # Other fields should be empty strings (HTML forms submit "" for empty inputs)
@@ -183,7 +183,7 @@ defmodule QuoracleWeb.UI.TaskTreeModalTest do
       form_data = %{"task_description" => "Test task"}
 
       view
-      |> form("#new-task-modal form", form_data)
+      |> form("#new-task-form", form_data)
       |> render_submit()
 
       # Modal should be hidden after submission
@@ -322,7 +322,7 @@ defmodule QuoracleWeb.UI.TaskTreeModalTest do
 
       # Submit form
       view
-      |> form("#new-task-modal form", form_data)
+      |> form("#new-task-form", form_data)
       |> render_submit()
 
       # TaskTree should send message to parent
@@ -517,11 +517,11 @@ defmodule QuoracleWeb.UI.TaskTreeModalTest do
       }
 
       view
-      |> form("#new-task-modal form", form_data)
+      |> form("#new-task-form", form_data)
       |> render_submit()
 
       # Verify skills included in params sent to parent
-      assert_received {:submit_prompt, sent_params}
+      assert_receive {:submit_prompt, sent_params}, 1000
       assert sent_params["skills"] == "deployment, code-review"
     end
 
@@ -567,11 +567,11 @@ defmodule QuoracleWeb.UI.TaskTreeModalTest do
       }
 
       view
-      |> form("#new-task-modal form", form_data)
+      |> form("#new-task-form", form_data)
       |> render_submit()
 
       # Form should submit successfully (parent receives message)
-      assert_received {:submit_prompt, sent_params}
+      assert_receive {:submit_prompt, sent_params}, 1000
       assert sent_params["task_description"] == "Test task without skills"
       # Empty skills should be sent as empty string
       assert sent_params["skills"] == ""

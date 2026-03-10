@@ -954,20 +954,24 @@ defmodule Quoracle.Integration.SpawnTest do
   defp spawn_child_via_parent(parent_pid, task, profile) do
     action_id = "action-#{System.unique_integer([:positive])}"
 
-    GenServer.call(parent_pid, {
-      :process_action,
-      %{
-        action: "spawn_child",
-        params: %{
-          task_description: task,
-          success_criteria: "Complete",
-          immediate_context: "Test",
-          approach_guidance: "Standard",
-          profile: profile.name
-        }
+    GenServer.call(
+      parent_pid,
+      {
+        :process_action,
+        %{
+          action: "spawn_child",
+          params: %{
+            task_description: task,
+            success_criteria: "Complete",
+            immediate_context: "Test",
+            approach_guidance: "Standard",
+            profile: profile.name
+          }
+        },
+        action_id
       },
-      action_id
-    })
+      15_000
+    )
   end
 
   defp build_hierarchy(parent_pid, levels, profile) do

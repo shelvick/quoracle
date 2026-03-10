@@ -3,7 +3,7 @@
 Frontend assets for Phoenix web interface
 
 ## Files
-- js/app.js: LiveView setup, WebSocket connection
+- js/app.js: LiveView setup, WebSocket connection, GrovePrefill hook
 - css/app.css: Tailwind imports, custom styles
 - vendor/topbar.js: Progress bar for page loads
 - tailwind.config.js: Tailwind configuration
@@ -14,3 +14,6 @@ Frontend assets for Phoenix web interface
 - Tailwind: Scans .ex/.heex, compiles CSS to priv/static/assets/app.css (gitignored)
 - Heroicons: Embedded via Tailwind plugin
 - Phoenix watchers: Auto-rebuild in dev
+
+## JS Hooks
+- **GrovePrefill**: Handles `grove_prefill` push_event from server. Populates or clears 13 form fields in NewTaskModal. On `{clear: true}`, clears all fields. Otherwise writes all payload values including empty strings (prevents stale carryover on grove A→B switching).

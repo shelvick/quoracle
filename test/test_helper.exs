@@ -59,5 +59,10 @@ ExUnit.start()
 # 3. DynSup - REMOVED to enable test isolation
 # Each test will create its own isolated DynamicSupervisor instance
 
+# Clean stale model_settings rows that can leak from non-sandboxed test runs.
+# These pre-committed rows are visible to all sandboxed tests and cause flaky
+# failures in tests that assume an unconfigured state (e.g., configured?/0 tests).
+Quoracle.Repo.query!("DELETE FROM model_settings")
+
 # Configure the sandbox for concurrent testing
 Ecto.Adapters.SQL.Sandbox.mode(Quoracle.Repo, :manual)

@@ -2,13 +2,15 @@
 
 ## Modules
 - AgentCost: Ecto schema for cost records (53 lines)
-- Recorder: Cost recording + PubSub broadcast (90 lines)
+- Recorder: Cost recording + PubSub broadcast + batch recording API (159 lines, v3.0)
 - Aggregator: Query module with recursive CTE for agent trees (446 lines, v3.0)
 
 ## Key Functions
 - AgentCost.changeset/2: Validates cost_type in [llm_consensus, llm_embedding, llm_answer, llm_summarization, llm_condensation, image_generation, external, child_budget_absorbed]
 - Recorder.record/2: Insert + broadcast to tasks/agents topics, requires pubsub opt
 - Recorder.record_silent/1: Insert without broadcast
+- Recorder.record_batch/2: Atomic batch insert via Repo.insert_all + per-record broadcast (v3.0)
+- Recorder.record_silent_batch/1: Atomic batch insert without broadcast (v3.0, used by DismissChild nil-pubsub path)
 - Aggregator.by_agent/1: Agent's own costs
 - Aggregator.by_agent_children/1: Descendants only (recursive CTE)
 - Aggregator.by_task/1: All agents in task
@@ -42,4 +44,4 @@ agent_costs: id(uuid), agent_id(string), task_id(uuid), cost_type(string),
 - Phoenix.PubSub for broadcasts
 - TABLE_Tasks (foreign key)
 
-Test coverage: 111 tests (29 schema + 28 recorder + 54 aggregator)
+Test coverage: 119 tests (29 schema + 36 recorder + 54 aggregator)

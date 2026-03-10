@@ -28,6 +28,16 @@ Quoracle is a Phoenix LiveView application that lets you build hierarchical agen
   - [Writing Good Profiles](#writing-good-profiles)
   - [Using Skills](#using-skills)
   - [Prompting Well](#prompting-well)
+- [Groves](#groves)
+  - [What's in a Grove](#whats-in-a-grove)
+  - [The GROVE.md Manifest](#the-grovemd-manifest)
+  - [Bootstrap](#bootstrap)
+  - [Governance](#governance)
+  - [Filesystem Confinement](#filesystem-confinement)
+  - [Schema Validation](#schema-validation)
+  - [Spawn Topology](#spawn-topology)
+  - [Shipped Groves](#shipped-groves)
+  - [Creating Your Own Grove](#creating-your-own-grove)
 - [Security](#security)
 - [Tech Rundown](#tech-rundown)
   - [Agent Architecture](#agent-architecture)
@@ -318,6 +328,255 @@ The prompt fields map directly to how the LLM sees its instructions. A few patte
 
 **Approach Guidance** is your chance to nudge the methodology without mandating it. "Consider using blue-green deployment" is a suggestion; putting it in constraints makes it a rule.
 
+## Groves
+
+Skills tell a single agent _how to do something_. But non-trivial tasks need _trees_ of agents working together -- a coordinator dispatching workers, governance rules that apply to the whole hierarchy, schemas that keep shared data consistent, filesystem boundaries that keep agents in their lane. When all of that coordination lives in natural language inside skill files, agents forget rules under context pressure, misconfigure children, and produce malformed output. The failure rate compounds with tree depth.
+
+Groves solve this by moving coordination logic out of prose and into a machine-readable manifest that Quoracle enforces mechanically. A grove declares the full agent tree: who spawns whom, what rules apply, what data contracts exist, and how to start the whole thing with a single click.
+
+**The analogy:** If skills are Docker containers, groves are Docker Compose files. Individual containers are useful on their own. A compose file declares how they work together -- networking, volumes, startup order, shared config. You `docker-compose up` instead of manually starting each container with the right flags.
+
+### What's in a Grove
+
+A grove is a directory containing a manifest (`GROVE.md`), skills, governance rules, schemas, and bootstrap configuration:
+
+```
+~/.quoracle/groves/
+  my-grove/
+    GROVE.md                       # Manifest (required)
+    skills/                        # Skills belonging to this grove
+      coordinator/
+        SKILL.md
+      worker/
+        SKILL.md
+    governance/                    # Rules injected into agent prompts
+      safety-rules.md
+    schemas/                       # JSON Schema for data validation
+      output.schema.json
+    bootstrap/                     # Pre-fills the task creation form
+      global-context.md
+      task-description.md
+      success-criteria.md
+    scripts/                       # Supporting tooling
+    README.md                      # Optional documentation
+```
+
+By default, Quoracle looks for groves in `~/.quoracle/groves/`. You can change this in **Settings > System**. Quoracle also ships with example groves in `priv/groves/` -- copy them to your groves directory to use them.
+
+**Skill resolution:** When an agent requests a skill by name, Quoracle checks the active grove's `skills/` directory first, then falls back to the global `~/.quoracle/skills/` directory. Grove-local skills shadow global skills of the same name, so a grove can carry customized versions without affecting anything else.
+
+### The GROVE.md Manifest
+
+Same format as SKILL.md -- YAML frontmatter between `---` delimiters. The frontmatter declares everything Quoracle needs to bootstrap and enforce the agent tree:
+
+```yaml
+---
+name: my-grove
+description: >
+  Multi-agent research system. Coordinator dispatches
+  specialist workers, aggregates findings.
+version: "1.0"
+
+topology:
+  root: coordinator
+  edges:
+    - parent: coordinator
+      child: worker
+      auto_inject:
+        skills: [worker]
+
+bootstrap:
+  skills: [coordinator]
+  role: "Research Coordinator"
+  cognitive_style: systematic
+  delegation_strategy: parallel
+  global_context_file: bootstrap/global-context.md
+  task_description_file: bootstrap/task-description.md
+  success_criteria_file: bootstrap/success-criteria.md
+
+governance:
+  hard_rules:
+    - type: shell_pattern_block
+      pattern: "rm -rf|dd if="
+      message: "Destructive commands are forbidden."
+      scope: all
+
+    - type: action_block
+      actions: [execute_shell]
+      message: "Workers may not run shell commands."
+      scope: [worker]
+
+  injections:
+    - source: governance/safety-rules.md
+      inject_into: [coordinator, worker]
+      priority: high
+
+schemas:
+  - name: output.json
+    definition: schemas/output.schema.json
+    validate_on: file_write
+    path_pattern: "runs/*/output.json"
+
+workspace: "~/.quoracle/projects/my-grove"
+
+confinement:
+  coordinator:
+    paths:
+      - ~/.quoracle/projects/my-grove/runs/**
+    read_only_paths:
+      - ~/.quoracle/projects/my-grove/data/**
+  worker:
+    read_only_paths:
+      - ~/.quoracle/projects/my-grove/data/**
+---
+```
+
+Each top-level section is described below.
+
+### Bootstrap
+
+The `bootstrap` section pre-fills the task creation form when you select a grove from the dropdown on the dashboard. Instead of copy-pasting role descriptions, constraints, and context into a dozen form fields every time, you select the grove and the form fills itself.
+
+Bootstrap supports two kinds of fields:
+
+**File references** (read from the grove directory at selection time):
+- `global_context_file`, `task_description_file`, `success_criteria_file`, `immediate_context_file`, `approach_guidance_file`
+
+**Inline values** (passed through directly):
+- `role`, `cognitive_style`, `delegation_strategy`, `output_style`, `profile`, `budget_limit`, `global_constraints`, `skills`
+
+File paths are relative to the grove root. Path traversal attempts (`../`, absolute paths, symlinks escaping the grove) are rejected.
+
+### Governance
+
+Governance rules are the things you _really_ don't want an agent to forget under context pressure. Instead of inlining "CRITICAL: Never run destructive commands" into every skill and hoping the LLM retains it, you declare it once in the manifest and Quoracle enforces it at two layers: the prompt (so the model knows the rule) _and_ the runtime (so it can't violate it even if it tries).
+
+**Hard rules** come in two types:
+
+`shell_pattern_block` -- rejects shell commands matching a regex pattern before they execute:
+```yaml
+- type: shell_pattern_block
+  pattern: "rm -rf|dd if="
+  message: "Destructive commands are forbidden."
+  scope: all
+```
+
+`action_block` -- blocks specific action types entirely:
+```yaml
+- type: action_block
+  actions: [execute_shell, call_mcp]
+  message: "Workers may not run shell commands or MCP tools."
+  scope: [worker]
+```
+
+`scope` controls which skills the rule applies to. Use a list of skill names, or `all` for every agent in the grove.
+
+**Injections** are governance documents that get auto-injected into agent system prompts:
+```yaml
+injections:
+  - source: governance/safety-rules.md
+    inject_into: [coordinator, worker]
+    priority: high
+```
+
+`priority: high` places the content before skill content in the prompt. `normal` (default) places it after. Either way, delivery is guaranteed -- no manual inlining, no version drift, one source of truth.
+
+### Filesystem Confinement
+
+The `confinement` section declares which paths each skill is allowed to read and write. Quoracle enforces this at the action layer -- `file_read`, `file_write`, and `execute_shell` all check confinement before proceeding.
+
+```yaml
+confinement:
+  coordinator:
+    paths:                              # Read + write
+      - ~/.quoracle/projects/runs/**
+    read_only_paths:                    # Read only
+      - ~/.quoracle/projects/data/**
+  worker:
+    read_only_paths:
+      - ~/.quoracle/projects/data/**
+```
+
+Patterns support `*` (single directory segment) and `**` (any depth). Tilde (`~`) is expanded at parse time. A coordinator that tries to write outside its declared paths gets a confinement violation error. A worker that tries to write _anything_ (only `read_only_paths` declared) gets blocked.
+
+Skills not listed in `confinement` are unrestricted. This is intentional -- confinement is opt-in per skill, and unlisted skills get a log warning rather than a hard failure.
+
+### Schema Validation
+
+The `schemas` section defines JSON Schema files that Quoracle validates against before writing. If an agent tries to write a file with a missing required field or a wrong type, the write is rejected with field-level error messages that the agent can act on.
+
+```yaml
+schemas:
+  - name: output.json
+    definition: schemas/output.schema.json
+    validate_on: file_write
+    path_pattern: "runs/*/output.json"
+```
+
+`path_pattern` is a glob relative to the grove's `workspace`. Only files matching the pattern are validated -- everything else passes through. When multiple schemas match (unlikely but possible), the most specific pattern wins.
+
+Schema files use standard JSON Schema (Draft 2020-12). Put them in the grove's `schemas/` directory.
+
+### Spawn Topology
+
+The `topology` section declares the expected agent tree structure -- who spawns whom, and what gets auto-injected when they do.
+
+```yaml
+topology:
+  root: coordinator
+  edges:
+    - parent: coordinator
+      child: worker
+      auto_inject:
+        skills: [worker]
+        profile: my-profile
+```
+
+When a coordinator spawns a child matching the `worker` skill, Quoracle automatically injects the declared skills and profile. The parent agent still decides _when_ to spawn, but doesn't have to remember _how_ to configure the child correctly.
+
+**Auto-inject fields:**
+- `skills` -- merged with any skills the parent already specified (union, no duplicates)
+- `profile` -- used as a fallback if the parent didn't specify one
+- `constraints` -- a file path (optionally with `#section-name` anchor) whose content gets merged with downstream constraints
+
+Edges declare _valid_ relationships, not mandatory ones. An agent is free to not spawn a child if it doesn't need to. The topology is a declaration of what's expected, not an execution plan.
+
+### Shipped Groves
+
+Quoracle ships with two groves in `priv/groves/` that demonstrate the full feature set. Both are LLM benchmarks -- they make good examples because benchmarks naturally need everything groves offer: coordinated agent trees, strict governance (no cheating), filesystem confinement, and schema-validated output.
+
+**mmlu-pro** -- 12,032 multiple-choice questions across 14 academic subjects. A coordinator dispatches one answerer per question, collects results, and scores everything via a shell script. Governance blocks internet access and external knowledge sources for answerers. Schema validation ensures well-formed reports.
+
+**livebench** -- ~1,150 questions per release across 6 categories (math, reasoning, coding, language, data analysis, instruction following). Same coordinator/worker pattern with category-specific Python scoring scripts.
+
+To try them:
+
+```bash
+mkdir -p ~/.quoracle/groves
+cp -r priv/groves/mmlu-pro ~/.quoracle/groves/
+cp -r priv/groves/livebench ~/.quoracle/groves/
+```
+
+Each grove has a `README.md` with setup instructions (dataset preparation, Python dependencies for scoring, etc.) -- read it before running. Then select the grove from the dropdown when creating a new task and the bootstrap config will pre-fill the form.
+
+Of course, groves aren't just for benchmarks. Any multi-agent workflow benefits -- research pipelines, code review systems, data processing chains, anything where a coordinator delegates to specialized workers and you want the coordination enforced rather than hoped for.
+
+### Creating Your Own Grove
+
+The simplest grove is a `GROVE.md` with a `bootstrap` section -- it just pre-fills the task form. Add sections as your system grows more complex:
+
+1. **Start with bootstrap.** Define the role, skills, and prompt fragments your root agent needs. This alone saves you from manually filling out the task form every time.
+
+2. **Add governance when you need rules.** If you find yourself inlining "NEVER do X" into every skill, move it to a governance injection. If you need mechanical enforcement (not just prompting), add hard rules.
+
+3. **Add topology when you spawn children.** If your root agent spawns child agents, declare the edges so children get auto-injected with the right skills and profiles.
+
+4. **Add confinement when you need boundaries.** If agents should only read/write specific directories, declare the paths. This is especially important for agents with `local_execution` or `file_write` capabilities.
+
+5. **Add schemas when you share structured data.** If agents write JSON files that other agents or scripts need to parse, define a JSON Schema so malformed writes are caught at write time rather than downstream.
+
+Groves are the unit of distribution. If you build something useful, the entire grove directory is self-contained and shareable.
+
 ## Security
 
 Quoracle stores API keys and secrets encrypted at rest using AES-256-GCM via [Cloak](https://hexdocs.pm/cloak_ecto). Sensitive values in action parameters (like `{{SECRET:my_api_key}}`) are resolved at execution time and scrubbed from results before they're fed back to the LLMs.
@@ -405,7 +664,7 @@ Batch operations (`batch_sync`, `batch_async`) let agents execute multiple actio
 
 ### PubSub Isolation
 
-Every component receives its PubSub instance as an explicit parameter -- no global topics, no named processes, no process dictionary. This means the full test suite of 5900+ tests runs with `async: true`.
+Every component receives its PubSub instance as an explicit parameter -- no global topics, no named processes, no process dictionary. This means the full test suite of 6000+ tests runs with `async: true`.
 
 ## Configuration Reference
 
@@ -436,6 +695,7 @@ Things that work well:
 - Capability-based action gating
 - Persistent state with task restoration on restart
 - Local/self-hosted model support (Ollama, vLLM, LM Studio, LlamaCpp, TGI)
+- Grove-based task templates with JSON Schema validation for file writes and hard rule enforcement (shell pattern blocking, filesystem confinement per agent role)
 
 Known limitations:
 - No user authentication (single-user assumption)

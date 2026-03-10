@@ -56,7 +56,7 @@ defmodule QuoracleWeb.DashboardCreateTaskIntegrationTest do
 
       # Submit the form with a prompt
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{
         "task_description" => "Build a web scraper",
         "profile" => context.profile.name
@@ -98,7 +98,7 @@ defmodule QuoracleWeb.DashboardCreateTaskIntegrationTest do
       view |> element("button", "New Task") |> render_click()
 
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{"task_description" => "Test task", "profile" => context.profile.name})
 
       # Process the message
@@ -135,7 +135,7 @@ defmodule QuoracleWeb.DashboardCreateTaskIntegrationTest do
       view |> element("button", "New Task") |> render_click()
 
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{"task_description" => special_prompt, "profile" => context.profile.name})
 
       # Process message
@@ -168,7 +168,7 @@ defmodule QuoracleWeb.DashboardCreateTaskIntegrationTest do
       view |> element("button", "New Task") |> render_click()
 
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{"task_description" => "First task", "profile" => context.profile.name})
 
       render(view)
@@ -178,7 +178,7 @@ defmodule QuoracleWeb.DashboardCreateTaskIntegrationTest do
       view |> element("button", "New Task") |> render_click()
 
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{"task_description" => "Second task", "profile" => context.profile.name})
 
       render(view)
@@ -217,7 +217,7 @@ defmodule QuoracleWeb.DashboardCreateTaskIntegrationTest do
       view |> element("button", "New Task") |> render_click()
 
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{"task_description" => long_prompt, "profile" => context.profile.name})
 
       render(view)
@@ -252,7 +252,7 @@ defmodule QuoracleWeb.DashboardCreateTaskIntegrationTest do
 
       # Submit form with multiple fields (new hierarchical field system)
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{
         "task_description" => "Build feature",
         "profile" => context.profile.name,
@@ -302,7 +302,7 @@ defmodule QuoracleWeb.DashboardCreateTaskIntegrationTest do
 
       # Submit form with invalid enum value
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{
         "task_description" => "Test",
         "profile" => context.profile.name,
@@ -332,7 +332,7 @@ defmodule QuoracleWeb.DashboardCreateTaskIntegrationTest do
 
       # Submit form without task_description (required field)
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{
         "profile" => context.profile.name,
         "role" => "Developer"
@@ -358,7 +358,7 @@ defmodule QuoracleWeb.DashboardCreateTaskIntegrationTest do
 
       # Submit form with global fields
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{
         "task_description" => "Build microservice",
         "profile" => context.profile.name,
@@ -389,7 +389,121 @@ defmodule QuoracleWeb.DashboardCreateTaskIntegrationTest do
     end
   end
 
+  describe "initial root message prompt fields (R71-R76)" do
+    @tag :acceptance
+    test "creating a task sends all provided prompt fields with XML tags",
+         %{conn: conn} = context do
+      {:ok, view, _html} = mount_dashboard(conn, context)
+
+      view |> element("button", "New Task") |> render_click()
+
+      view
+      |> element("#new-task-form")
+      |> render_submit(%{
+        "task_description" => "Ship packet parser",
+        "profile" => context.profile.name,
+        "immediate_context" => "Operating in recovery mode",
+        "success_criteria" => "All malformed packets are rejected",
+        "approach_guidance" => "Prefer deterministic parsers"
+      })
+
+      render(view)
+
+      task = Repo.one(from(t in Task, order_by: [desc: t.id], limit: 1))
+      root_agent_id = "root-#{task.id}"
+
+      {:ok, agent_pid} =
+        wait_for_agent_in_registry(root_agent_id, context.registry, timeout: 2000)
+
+      {:ok, state} = Quoracle.Agent.Core.get_state(agent_pid)
+      register_agent_cleanup(agent_pid, cleanup_tree: true, registry: context.registry)
+
+      initial_message = find_user_initial_message(state, "Ship packet parser")
+
+      assert is_binary(initial_message)
+      assert initial_message =~ "<task>Ship packet parser</task>"
+
+      assert initial_message =~
+               "<immediate_context>Operating in recovery mode</immediate_context>"
+
+      assert initial_message =~
+               "<success_criteria>All malformed packets are rejected</success_criteria>"
+
+      assert initial_message =~
+               "<approach_guidance>Prefer deterministic parsers</approach_guidance>"
+
+      model_id = state.model_histories |> Map.keys() |> List.first() || "default"
+
+      consensus_messages =
+        Quoracle.Agent.ContextManager.build_conversation_messages(state, model_id)
+
+      assert Enum.any?(consensus_messages, fn msg ->
+               msg.role == "user" and
+                 msg.content =~ "<task>Ship packet parser</task>" and
+                 msg.content =~
+                   "<immediate_context>Operating in recovery mode</immediate_context>" and
+                 msg.content =~
+                   "<success_criteria>All malformed packets are rejected</success_criteria>" and
+                 msg.content =~
+                   "<approach_guidance>Prefer deterministic parsers</approach_guidance>"
+             end)
+
+      refute Enum.any?(consensus_messages, fn msg ->
+               msg.role == "user" and msg.content == "Ship packet parser"
+             end)
+
+      refute initial_message =~ "<task></task>"
+      refute initial_message =~ "<error>"
+    end
+
+    test "initial message omits empty optional fields", %{conn: conn} = context do
+      {:ok, view, _html} = mount_dashboard(conn, context)
+
+      view |> element("button", "New Task") |> render_click()
+
+      view
+      |> element("#new-task-form")
+      |> render_submit(%{
+        "task_description" => "Single required field",
+        "profile" => context.profile.name
+      })
+
+      render(view)
+
+      task = Repo.one(from(t in Task, order_by: [desc: t.id], limit: 1))
+      root_agent_id = "root-#{task.id}"
+
+      {:ok, agent_pid} =
+        wait_for_agent_in_registry(root_agent_id, context.registry, timeout: 2000)
+
+      {:ok, state} = Quoracle.Agent.Core.get_state(agent_pid)
+      register_agent_cleanup(agent_pid, cleanup_tree: true, registry: context.registry)
+
+      initial_message = find_user_initial_message(state, "Single required field")
+
+      assert initial_message =~ "<task>Single required field</task>"
+      refute initial_message =~ "<immediate_context>"
+      refute initial_message =~ "<success_criteria>"
+      refute initial_message =~ "<approach_guidance>"
+    end
+  end
+
   # Helper functions
+
+  defp find_user_initial_message(state, expected_fragment) do
+    state.model_histories
+    |> Map.values()
+    |> List.flatten()
+    |> Enum.filter(&(&1.type == :event))
+    |> Enum.map(& &1.content)
+    |> Enum.find_value(fn
+      %{from: "user", content: content} when is_binary(content) ->
+        if String.contains?(content, expected_fragment), do: content
+
+      _ ->
+        nil
+    end)
+  end
 
   defp mount_dashboard(conn, context) do
     conn

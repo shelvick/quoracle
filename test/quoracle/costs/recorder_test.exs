@@ -15,6 +15,14 @@ defmodule Quoracle.Costs.RecorderTest do
   - R7: Silent Recording [INTEGRATION]
   - R8: Safe Broadcast [UNIT]
   - R9: Explicit PubSub Parameter [UNIT]
+  - R13: Batch Insert Atomicity [INTEGRATION]
+  - R14: Batch Broadcast After Insert [INTEGRATION]
+  - R15: Batch Empty List [UNIT]
+  - R16: Batch Insert Failure [INTEGRATION]
+  - R17: Batch Preserves Metadata [INTEGRATION]
+  - R18: Batch Generates Unique IDs [INTEGRATION]
+  - R19: Batch PubSub Event Format [UNIT]
+  - R20: Batch No Partial Broadcast [INTEGRATION]
   """
 
   use Quoracle.DataCase, async: true
@@ -34,6 +42,18 @@ defmodule Quoracle.Costs.RecorderTest do
   # Helper to call record_silent/1 at runtime
   defp call_record_silent(cost_data) do
     @recorder_module.record_silent(cost_data)
+  end
+
+  # Helper to call record_batch/2 at runtime
+  defp call_record_batch(cost_data_list, opts) do
+    @recorder_module.record_batch(cost_data_list, opts)
+  end
+
+  defp receive_cost_events(0, acc), do: Enum.reverse(acc)
+
+  defp receive_cost_events(expected, acc) do
+    assert_receive {:cost_recorded, event}, 1000
+    receive_cost_events(expected - 1, [event | acc])
   end
 
   # Helper to create valid cost data
@@ -470,6 +490,173 @@ defmodule Quoracle.Costs.RecorderTest do
 
       # Should not raise
       assert {:ok, _cost} = call_record(cost_data, pubsub: pubsub)
+    end
+  end
+
+  # ============================================================
+  # COST_Recorder: R13-R20 - Batch Recording API [Packet 1]
+  # ============================================================
+
+  describe "record_batch/2" do
+    test "record_batch inserts all records atomically", %{task: task, pubsub: pubsub} do
+      before_count = Repo.aggregate(@agent_cost_module, :count, :id)
+
+      batch = [
+        valid_cost_data(task.id, %{
+          agent_id: "batch_agent_a_#{System.unique_integer([:positive])}"
+        }),
+        valid_cost_data(task.id, %{
+          agent_id: "batch_agent_b_#{System.unique_integer([:positive])}"
+        }),
+        valid_cost_data(task.id, %{
+          agent_id: "batch_agent_c_#{System.unique_integer([:positive])}"
+        })
+      ]
+
+      assert {:ok, inserted} = call_record_batch(batch, pubsub: pubsub)
+      assert length(inserted) == 3
+
+      after_count = Repo.aggregate(@agent_cost_module, :count, :id)
+      assert after_count - before_count == 3
+    end
+
+    test "record_batch broadcasts for each inserted record", %{task: task, pubsub: pubsub} do
+      batch = [
+        valid_cost_data(task.id, %{agent_id: "broadcast_a_#{System.unique_integer([:positive])}"}),
+        valid_cost_data(task.id, %{agent_id: "broadcast_b_#{System.unique_integer([:positive])}"}),
+        valid_cost_data(task.id, %{agent_id: "broadcast_c_#{System.unique_integer([:positive])}"})
+      ]
+
+      Phoenix.PubSub.subscribe(pubsub, "tasks:#{task.id}:costs")
+
+      Enum.each(batch, fn cost_data ->
+        Phoenix.PubSub.subscribe(pubsub, "agents:#{cost_data.agent_id}:costs")
+      end)
+
+      assert {:ok, inserted} = call_record_batch(batch, pubsub: pubsub)
+
+      # Subscribed to task + per-agent topics, so each inserted id should appear twice.
+      events = receive_cost_events(6, [])
+      counts_by_id = Enum.frequencies_by(events, & &1.id)
+
+      assert Enum.all?(inserted, fn cost -> counts_by_id[cost.id] == 2 end)
+    end
+
+    test "record_batch with empty list returns ok", %{pubsub: pubsub} do
+      assert {:ok, []} = call_record_batch([], pubsub: pubsub)
+      refute_receive {:cost_recorded, _}, 100
+    end
+
+    test "record_batch returns error on insert failure", %{pubsub: pubsub} do
+      fake_task_id = Ecto.UUID.generate()
+
+      batch = [
+        valid_cost_data(fake_task_id, %{
+          agent_id: "bad_batch_#{System.unique_integer([:positive])}"
+        })
+      ]
+
+      assert {:error, _reason} = call_record_batch(batch, pubsub: pubsub)
+      refute_receive {:cost_recorded, _}, 100
+    end
+
+    test "record_batch preserves metadata for all records", %{task: task, pubsub: pubsub} do
+      batch = [
+        valid_cost_data(task.id, %{
+          agent_id: "meta_a_#{System.unique_integer([:positive])}",
+          metadata: %{"model_spec" => "model/a", "input_tokens" => 10, "tag" => "first"}
+        }),
+        valid_cost_data(task.id, %{
+          agent_id: "meta_b_#{System.unique_integer([:positive])}",
+          metadata: %{"model_spec" => "model/b", "output_tokens" => 20, "tag" => "second"}
+        }),
+        valid_cost_data(task.id, %{
+          agent_id: "meta_c_#{System.unique_integer([:positive])}",
+          metadata: %{"model_spec" => "model/c", "cache_read_tokens" => 30, "tag" => "third"}
+        })
+      ]
+
+      assert {:ok, inserted} = call_record_batch(batch, pubsub: pubsub)
+
+      input_by_agent =
+        Map.new(batch, fn cost_data -> {cost_data.agent_id, cost_data.metadata} end)
+
+      Enum.each(inserted, fn cost ->
+        assert cost.metadata == input_by_agent[cost.agent_id]
+      end)
+    end
+
+    test "record_batch generates unique IDs for each record", %{task: task, pubsub: pubsub} do
+      batch = [
+        valid_cost_data(task.id, %{agent_id: "uuid_a_#{System.unique_integer([:positive])}"}),
+        valid_cost_data(task.id, %{agent_id: "uuid_b_#{System.unique_integer([:positive])}"}),
+        valid_cost_data(task.id, %{agent_id: "uuid_c_#{System.unique_integer([:positive])}"})
+      ]
+
+      assert {:ok, inserted} = call_record_batch(batch, pubsub: pubsub)
+
+      ids = Enum.map(inserted, & &1.id)
+      assert Enum.uniq(ids) == ids
+      assert Enum.all?(ids, &is_binary/1)
+    end
+
+    test "record_batch broadcast events match single-record format", %{task: task, pubsub: pubsub} do
+      Phoenix.PubSub.subscribe(pubsub, "tasks:#{task.id}:costs")
+
+      batch = [
+        valid_cost_data(task.id, %{
+          agent_id: "format_a_#{System.unique_integer([:positive])}",
+          metadata: %{"model_spec" => "model/one"}
+        }),
+        valid_cost_data(task.id, %{
+          agent_id: "format_b_#{System.unique_integer([:positive])}",
+          metadata: %{"model_spec" => "model/two"}
+        })
+      ]
+
+      assert {:ok, inserted} = call_record_batch(batch, pubsub: pubsub)
+
+      events = receive_cost_events(2, [])
+      inserted_by_id = Map.new(inserted, fn cost -> {cost.id, cost} end)
+
+      Enum.each(events, fn event ->
+        assert Map.has_key?(event, :id)
+        assert Map.has_key?(event, :agent_id)
+        assert Map.has_key?(event, :task_id)
+        assert Map.has_key?(event, :cost_type)
+        assert Map.has_key?(event, :cost_usd)
+        assert Map.has_key?(event, :model_spec)
+        assert Map.has_key?(event, :timestamp)
+
+        inserted_cost = inserted_by_id[event.id]
+        assert inserted_cost.agent_id == event.agent_id
+        assert inserted_cost.task_id == event.task_id
+        assert inserted_cost.cost_type == event.cost_type
+        assert inserted_cost.cost_usd == event.cost_usd
+        assert inserted_cost.inserted_at == event.timestamp
+      end)
+    end
+
+    test "no broadcasts on batch insert failure", %{task: task, pubsub: pubsub} do
+      good_agent_id = "mixed_good_#{System.unique_integer([:positive])}"
+      bad_agent_id = "mixed_bad_#{System.unique_integer([:positive])}"
+
+      Phoenix.PubSub.subscribe(pubsub, "tasks:#{task.id}:costs")
+      Phoenix.PubSub.subscribe(pubsub, "agents:#{good_agent_id}:costs")
+      Phoenix.PubSub.subscribe(pubsub, "agents:#{bad_agent_id}:costs")
+
+      batch = [
+        valid_cost_data(task.id, %{agent_id: good_agent_id}),
+        valid_cost_data(Ecto.UUID.generate(), %{agent_id: bad_agent_id})
+      ]
+
+      assert {:error, _reason} = call_record_batch(batch, pubsub: pubsub)
+
+      refute Repo.exists?(
+               from(c in @agent_cost_module, where: c.agent_id in ^[good_agent_id, bad_agent_id])
+             )
+
+      refute_receive {:cost_recorded, _}, 100
     end
   end
 end

@@ -101,6 +101,15 @@ defmodule Quoracle.Agent.Core.State do
     # Prompt system
     prompt_fields: nil,
     system_prompt: nil,
+    governance_rules: nil,
+    governance_config: nil,
+    grove_hard_rules: nil,
+    grove_confinement: nil,
+    grove_topology: nil,
+    grove_path: nil,
+    grove_skills_path: nil,
+    grove_schemas: nil,
+    grove_workspace: nil,
     # MCP integration
     mcp_client: nil,
     # Model configuration
@@ -154,7 +163,9 @@ defmodule Quoracle.Agent.Core.State do
     # shell_routers: command_id => router_pid (shell command Routers for status routing)
     shell_routers: %{},
     # v38.0: Cached system prompt for consensus (lazy build, invalidated by learn_skills)
-    cached_system_prompt: nil
+    cached_system_prompt: nil,
+    # v43.0: Per-model correction feedback for consensus retry injection
+    correction_feedback: %{}
   ]
 
   @type t :: %__MODULE__{
@@ -193,6 +204,15 @@ defmodule Quoracle.Agent.Core.State do
           # Prompt system
           prompt_fields: map() | nil,
           system_prompt: String.t() | nil,
+          governance_rules: String.t() | nil,
+          governance_config: [map()] | nil,
+          grove_hard_rules: [map()] | nil,
+          grove_confinement: map() | nil,
+          grove_topology: map() | nil,
+          grove_path: String.t() | nil,
+          grove_skills_path: String.t() | nil,
+          grove_schemas: [map()] | nil,
+          grove_workspace: String.t() | nil,
           # MCP integration
           mcp_client: pid() | nil,
           # Model configuration
@@ -240,7 +260,9 @@ defmodule Quoracle.Agent.Core.State do
           active_routers: %{reference() => pid()},
           shell_routers: %{String.t() => pid()},
           # v38.0: Cached system prompt
-          cached_system_prompt: String.t() | nil
+          cached_system_prompt: String.t() | nil,
+          # v43.0: Per-model correction feedback
+          correction_feedback: %{String.t() => String.t()}
         }
 
   @type queued_message :: %{
@@ -362,7 +384,7 @@ defmodule Quoracle.Agent.Core.State do
       task_id: Map.get(config, :task_id),
       task: Map.get(config, :task),
       children: Map.get(config, :children, []),
-      model_histories: init_model_histories(config),
+      model_histories: init_per_model_map(config, :model_histories, []),
       messages: Map.get(config, :messages, []),
       pending_actions: Map.get(config, :pending_actions, %{}),
       wait_timer: Map.get(config, :wait_timer),
@@ -377,10 +399,19 @@ defmodule Quoracle.Agent.Core.State do
       additional_context: Map.get(config, :additional_context, []),
       # ACE Context Management (v15.0)
       # Initialize per-model if models provided, otherwise use config or empty
-      context_lessons: init_context_lessons(config),
-      model_states: init_model_states(config),
+      context_lessons: init_per_model_map(config, :context_lessons, []),
+      model_states: init_per_model_map(config, :model_states, nil),
       prompt_fields: Map.get(config, :prompt_fields),
       system_prompt: Map.get(config, :system_prompt),
+      governance_rules: Map.get(config, :governance_rules),
+      governance_config: Map.get(config, :governance_config),
+      grove_hard_rules: Map.get(config, :grove_hard_rules),
+      grove_confinement: Map.get(config, :grove_confinement),
+      grove_topology: Map.get(config, :grove_topology),
+      grove_path: Map.get(config, :grove_path),
+      grove_skills_path: Map.get(config, :grove_skills_path),
+      grove_schemas: Map.get(config, :grove_schemas),
+      grove_workspace: Map.get(config, :grove_workspace),
       mcp_client: Map.get(config, :mcp_client),
       model_id: Map.get(config, :model_id),
       models: Map.get(config, :models, []),
@@ -426,7 +457,9 @@ defmodule Quoracle.Agent.Core.State do
       active_routers: Map.get(config, :active_routers, %{}),
       shell_routers: Map.get(config, :shell_routers, %{}),
       # v38.0: Cached system prompt
-      cached_system_prompt: Map.get(config, :cached_system_prompt)
+      cached_system_prompt: Map.get(config, :cached_system_prompt),
+      # v43.0: Per-model correction feedback
+      correction_feedback: Map.get(config, :correction_feedback, %{})
     }
   end
 
@@ -442,46 +475,12 @@ defmodule Quoracle.Agent.Core.State do
     end
   end
 
-  # ACE Context Management helpers (v15.0)
-  # Initialize context_lessons from config or based on model pool
-  defp init_context_lessons(config) do
-    case Map.get(config, :context_lessons) do
-      nil ->
-        # No explicit context_lessons - initialize from model pool
-        models = Map.get(config, :models, [])
-        Map.new(models, fn model_id -> {model_id, []} end)
-
-      lessons ->
-        # Use provided context_lessons
-        lessons
-    end
-  end
-
-  # Initialize model_states from config or based on model pool
-  defp init_model_states(config) do
-    case Map.get(config, :model_states) do
-      nil ->
-        # No explicit model_states - initialize from model pool
-        models = Map.get(config, :models, [])
-        Map.new(models, fn model_id -> {model_id, nil} end)
-
-      states ->
-        # Use provided model_states
-        states
-    end
-  end
-
-  # Initialize model_histories from config or based on model pool
-  defp init_model_histories(config) do
-    case Map.get(config, :model_histories) do
-      nil ->
-        # No explicit model_histories - initialize from model pool
-        models = Map.get(config, :models, [])
-        Map.new(models, fn model_id -> {model_id, []} end)
-
-      histories ->
-        # Use provided model_histories
-        histories
+  # Initialize a per-model map from config, falling back to model pool with a default value.
+  # Used for context_lessons (default []), model_states (default nil), model_histories (default []).
+  defp init_per_model_map(config, key, default) do
+    case Map.get(config, key) do
+      nil -> Map.new(Map.get(config, :models, []), fn model_id -> {model_id, default} end)
+      value -> value
     end
   end
 end

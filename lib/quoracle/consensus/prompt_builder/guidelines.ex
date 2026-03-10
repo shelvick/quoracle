@@ -205,6 +205,9 @@ defmodule Quoracle.Consensus.PromptBuilder.Guidelines do
       - NEVER request responses in "5 minutes" or "10 minutes" — physically impossible
       - Prefer `wait: true` (block until reply) over short timers when awaiting a specific response
       - Have children report on completion rather than polling on a timer
+
+      **Check History Before Waiting**
+      Before choosing wait or wait:true, look at your conversation history. If it contains child messages reporting results, act on those results first. If it contains async action results (shell output, web fetches, API responses), process them. Messages already in your history are available NOW — waiting will not produce them again.
       """
     else
       ""

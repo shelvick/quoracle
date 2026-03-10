@@ -27,6 +27,50 @@ let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("
 // Hooks for LiveView components
 let Hooks = {}
 
+// GrovePrefill hook - populates form fields from grove bootstrap push_event
+Hooks.GrovePrefill = {
+  mounted() {
+    this.handleEvent("grove_prefill", (payload) => {
+      if (payload.clear) {
+        // Clear all form fields when grove is deselected
+        const fields = this.el.querySelectorAll("input, textarea, select")
+        fields.forEach((field) => {
+          if (field.type !== "hidden" && field.name !== "_csrf_token") {
+            field.value = ""
+          }
+        })
+        return
+      }
+
+      // Map payload keys to form field names and populate values
+      const fieldMap = {
+        global_context: "global_context",
+        task_description: "task_description",
+        success_criteria: "success_criteria",
+        immediate_context: "immediate_context",
+        global_constraints: "global_constraints",
+        approach_guidance: "approach_guidance",
+        output_style: "output_style",
+        cognitive_style: "cognitive_style",
+        delegation_strategy: "delegation_strategy",
+        role: "role",
+        skills: "skills",
+        profile: "profile",
+        budget_limit: "budget_limit"
+      }
+
+      for (const [key, fieldName] of Object.entries(fieldMap)) {
+        if (key in payload) {
+          const field = this.el.querySelector(`[name="${fieldName}"]`)
+          if (field) {
+            field.value = payload[key] ?? ""
+          }
+        }
+      }
+    })
+  }
+}
+
 // LogEntry hook - prevents accordion toggle when text is being selected
 Hooks.LogEntry = {
   mounted() {

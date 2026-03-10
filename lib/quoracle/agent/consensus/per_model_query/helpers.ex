@@ -7,6 +7,7 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery.Helpers do
   - Reflection message formatting
   - Context length error detection
   - Test embedding function
+  - Query function resolution and mock responses
   """
 
   alias Quoracle.Agent.Reflector
@@ -60,20 +61,18 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery.Helpers do
     Reflector.reflect(messages, model_id, opts)
   end
 
-  # Test embedding function - returns unique vectors to avoid false deduplication
+  # Test embedding function - deterministic vector with low accidental similarity.
+  @doc """
+  Deterministic test embedding helper used in isolated condensation tests.
+  """
   @spec test_embedding_fn(String.t()) :: {:ok, map()}
   def test_embedding_fn(text) do
-    # Generate a simple hash-based embedding for test isolation
-    hash = :erlang.phash2(text)
-    # Create a 3-dim vector based on hash for uniqueness
-    {:ok,
-     %{
-       embedding: [
-         rem(hash, 100) / 100,
-         rem(div(hash, 100), 100) / 100,
-         rem(div(hash, 10000), 100) / 100
-       ]
-     }}
+    embedding =
+      :crypto.hash(:sha256, text)
+      |> :binary.bin_to_list()
+      |> Enum.map(fn byte -> byte / 255 end)
+
+    {:ok, %{embedding: embedding}}
   end
 
   @doc """
@@ -102,5 +101,110 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery.Helpers do
       String.contains?(reason, "Input is too long") or
       String.contains?(reason, "maximum context length") or
       String.contains?(reason, "exceeds the maximum number of tokens")
+  end
+
+  @doc """
+  Resolve the query function to use based on opts.
+  Returns the injected model_query_fn, a mock function in test mode,
+  or the real ModelQuery.query_models/3 in production.
+  """
+  @spec resolve_query_fn(keyword()) :: function()
+  def resolve_query_fn(opts) do
+    case Keyword.fetch(opts, :model_query_fn) do
+      {:ok, query_fn} ->
+        query_fn
+
+      :error ->
+        if test_mode?(opts) do
+          &mock_query_models/3
+        else
+          &Quoracle.Models.ModelQuery.query_models/3
+        end
+    end
+  end
+
+  @doc """
+  Check if test mode is enabled in opts.
+  """
+  @spec test_mode?(keyword()) :: boolean()
+  def test_mode?(opts), do: Keyword.get(opts, :test_mode, false)
+
+  @doc """
+  Lightweight query path: test mode with injected query fn.
+  Skips tiktoken BPE encoding, LLMDB scans, and condensation checks
+  since test query functions don't depend on accurate token management.
+  Tests that specifically verify token management pass force_token_management: true.
+  """
+  @spec lightweight_test_query?(keyword()) :: boolean()
+  def lightweight_test_query?(opts) do
+    test_mode?(opts) && Keyword.has_key?(opts, :model_query_fn) &&
+      !Keyword.get(opts, :force_token_management, false)
+  end
+
+  @doc """
+  Merge state-level test options into call-site opts without overriding explicit call opts.
+  This keeps spawned-process test settings (e.g., model_query_fn, max_batch_tokens,
+  force_token_management) intact across consensus entry paths.
+  """
+  @spec merge_state_test_opts(map(), keyword()) :: keyword()
+  def merge_state_test_opts(state, opts) do
+    state_test_opts =
+      state
+      |> Map.get(:test_opts, [])
+      |> List.wrap()
+
+    Keyword.merge(state_test_opts, opts)
+  end
+
+  @doc """
+  Build test options map for model query options.
+  Maps test simulation flags from keyword opts to a map for query behavior.
+  """
+  @spec build_test_options(keyword()) :: map()
+  def build_test_options(opts) do
+    %{
+      test_mode: true,
+      seed: Keyword.get(opts, :seed),
+      simulate_tie: Keyword.get(opts, :simulate_tie, false),
+      simulate_no_consensus: Keyword.get(opts, :simulate_no_consensus, false),
+      simulate_refinement_agreement: Keyword.get(opts, :simulate_refinement_agreement, false),
+      simulate_timeout: Keyword.get(opts, :simulate_timeout, false),
+      simulate_all_models_fail: Keyword.get(opts, :simulate_all_models_fail, false),
+      simulate_failure: Keyword.get(opts, :simulate_failure, false)
+    }
+  end
+
+  @doc """
+  Generate a mock successful response for a model in test mode.
+  Returns a map with :model and :content (JSON-encoded orient action).
+  """
+  @spec mock_successful_response(String.t()) :: map()
+  def mock_successful_response(model_id) do
+    response_json =
+      Jason.encode!(%{
+        "action" => "orient",
+        "params" => %{
+          "current_situation" => "Processing task",
+          "goal_clarity" => "Clear objectives",
+          "available_resources" => "Full capabilities",
+          "key_challenges" => "None identified",
+          "delegation_consideration" => "none"
+        },
+        "reasoning" => "Mock reasoning for #{model_id}",
+        "wait" => true
+      })
+
+    %{model: model_id, content: response_json}
+  end
+
+  # Mock query function for test mode without injected query fn
+  @spec mock_query_models(list(map()), list(String.t()), map()) ::
+          {:ok, map()}
+  defp mock_query_models(_messages, models, _query_opts) do
+    {:ok,
+     %{
+       successful_responses: Enum.map(models, &mock_successful_response/1),
+       failed_models: []
+     }}
   end
 end

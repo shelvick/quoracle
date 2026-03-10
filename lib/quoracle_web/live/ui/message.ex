@@ -164,6 +164,11 @@ defmodule QuoracleWeb.UI.Message do
   defp badge_text(%{from: :user}), do: "You"
   defp badge_text(%{from: :agent, sender_id: nil}), do: "Unknown Agent"
   defp badge_text(%{from: :agent, sender_id: sender_id}), do: sender_id
+
+  defp badge_text(%{from: :system, sender_id: sender_id}) when not is_nil(sender_id),
+    do: sender_id
+
+  defp badge_text(%{from: :system}), do: "System"
   defp badge_text(_), do: "Unknown"
 
   defp preview_content(nil), do: "(empty message)"

@@ -11,8 +11,8 @@
   - get_filtered_logs/2: Filter logs by selected_agent_id
   - build_agent_alive_map/1: Build agent_id => alive status map
 - Subscriptions: safe_subscribe with MapSet tracking, auto-subscribe to agent todos topic, task message topics
-- EventHandlers: submit_prompt, pause/resume_task, delete_task, select_agent
-- MessageHandlers: agent_spawned/terminated (v12.0: first-writer-wins root_agent_id guard), log_entry, task_message, agent_message, todos_updated (2025-12), send_direct_message (2025-11), link_orphaned_children (2025-12)
+- EventHandlers (451 lines): submit_prompt (grove_skills_path forwarding, XML-tagged initial message via PromptFieldManager), pause/resume_task, delete_task, select_agent
+- MessageHandlers: agent_spawned/terminated (v12.0: first-writer-wins root_agent_id guard), log_entry, task_message, agent_message, todos_updated (2025-12), send_direct_message (2025-11), link_orphaned_children (2025-12), grove_skills_path_updated (2026-02)
 - TestHelpers: Test-specific handlers
 
 ## SecretManagementLive (5-module architecture, 2025-10-24)
@@ -33,7 +33,7 @@
 - merge_task_state/3: Combine persisted tasks with live agents
 - safe_subscribe/2: Prevent duplicate subscriptions via MapSet
 - get_filtered_logs/2: Filter logs by selected_agent_id
-- EventHandlers.handle_submit_prompt/2: FieldProcessor validation → TaskManager.create_task/3 → safe_subscribe
+- EventHandlers.handle_submit_prompt/2: FieldProcessor validation → TaskManager.create_task/3 → safe_subscribe → build XML-tagged initial message via PromptFieldManager.build_prompts_from_fields/1 → Core.send_user_message
 
 ## Critical Bug Fix (2025-10-21)
 - Fixed duplicate PubSub subscription in mount/3 (lines 53-60)
@@ -88,4 +88,33 @@ TaskManager, TaskRestorer, RegistryQueries, Core, PubSub, UI.TaskTree, UI.LogVie
 - **EventHandlers**: Removed redundant TaskManager.update_task_status("running") after restore (TaskRestorer.handle_restore_result already does this)
 - Pattern: `if is_nil(task[:root_agent_id])` guards root_agent_id assignment
 
-Test coverage: 51 dashboard_live_test (48 base + 3 new R6-R9), 16 dashboard_delete_integration_test, 16 dashboard_3panel_integration_test, 16 buffer_integration_test (UI persistence R17-R24, R35-R42)
+## Grove Bootstrap Integration (2026-02, wip-20260222-grove-bootstrap)
+- **DashboardLive v13.0**: mount loads groves via Loader.list_groves/1, passes to TaskTree. Assigns: grove_skills_path, skills_path
+- **EventHandlers**: Forwards grove_skills_path to TaskManager.create_task opts (server-derived, SEC-2a)
+- **MessageHandlers**: handle_info({:grove_skills_path_updated, path}) updates socket assigns
+- **TaskTree**: Passes groves list + grove_skills_path to NewTaskModal. GroveHandlers submodule for selection events
+- Flow: GroveSelector → grove_selected → GroveHandlers → BootstrapResolver → push_event → GrovePrefill JS hook → form fields
+
+## Grove Governance Integration (2026-02-28, wip-20260226-grove-governance)
+- **DashboardLive v14.0**: Adds `:loaded_grove` socket assign (cached grove struct from GroveHandlers)
+- **MessageHandlers**: Handles `{:loaded_grove_updated, grove}` info message — updates loaded_grove assign (nil on clear/error)
+- **EventHandlers.handle_submit_prompt/2**: Reads `socket.assigns[:loaded_grove]`; if non-nil, calls `GovernanceResolver.resolve_all/1` + `build_agent_governance/3`; governance opts passed to TaskManager
+- **Governance resolution at submit time** (NOT grove selection time): Skills unknown until form submit
+- **Graceful degradation**: Governance errors are non-blocking — task proceeds without governance rather than failing
+- **3 governance fields passed to TaskManager**: `governance_rules`, `governance_config`, `grove_hard_rules`
+- Flow: GroveHandlers → {:loaded_grove_updated, grove} → Dashboard → EventHandlers (at submit) → GovernanceResolver → TaskManager
+
+## Grove Hard Enforcement (2026-03-03, wip-20260302-grove-hard-enforcement)
+- **EventHandlers v17.0**: Extracts `grove_confinement` from `loaded_grove.confinement` at submit time
+  - Added `grove_confinement = loaded_grove && Map.get(loaded_grove, :confinement)` extraction
+  - Added `maybe_add_opt(:grove_confinement, grove_confinement)` to opts pipeline
+  - 4 governance/enforcement fields now passed to TaskManager: `governance_rules`, `governance_config`, `grove_hard_rules`, `grove_confinement`
+
+## Fix Initial User Message (2026-03-04, fix-20260304-initial-message-fields)
+- **EventHandlers v18.0 (451 lines)**: Sends XML-tagged initial message with all prompt fields
+  - Builds user prompt via `PromptFieldManager.build_prompts_from_fields(%{provided: agent_fields, injected: %{}, transformed: %{}})`
+  - Includes `<task>`, `<immediate_context>`, `<success_criteria>`, `<approach_guidance>` XML tags
+  - Falls back to bare `task_description` when user_prompt is empty
+  - Replaces bare `task_description` send (bug: fields were being discarded since Jan 2026 user_prompt removal refactor)
+
+Test coverage: 51 dashboard_live_test (48 base + 3 new R6-R9), 16 dashboard_delete_integration_test, 16 dashboard_3panel_integration_test, 16 buffer_integration_test (UI persistence R17-R24, R35-R42), 28+ grove_integration_test (R69 grove_confinement threading), 2 dashboard_create_task_integration_test (R71-R76 initial message acceptance tests)

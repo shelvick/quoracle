@@ -14,6 +14,7 @@ defmodule Quoracle.Fields.FieldTransformerTest do
   use ExUnitProperties
 
   alias Quoracle.Fields.FieldTransformer
+  alias Quoracle.Models.ConfigModelSettings
 
   describe "summarize_narrative/2" do
     # R1: Narrative Combination - UNIT
@@ -202,8 +203,9 @@ defmodule Quoracle.Fields.FieldTransformerTest do
 
     # R8: WHEN summarization model not configured IF narrative exceeds limit THEN raises RuntimeError
     test "raises RuntimeError when summarization model not configured" do
-      # Ensure summarization_model is NOT configured
-      # (sandbox starts with empty DB)
+      # Clear any pre-existing summarization_model from test DB.
+      # This test uses ExUnit.Case (no sandbox), so pre-committed rows are visible.
+      Quoracle.Models.TableConsensusConfig.delete("summarization_model")
 
       # Verify not configured
       assert {:error, :not_configured} = ConfigModelSettings.get_summarization_model()

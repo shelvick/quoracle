@@ -256,14 +256,12 @@ defmodule Quoracle.Agent.Reflector do
     # Without this, ReqLLM injects LLMDB limits.output as max_tokens, which
     # for models like DeepSeek-V3.2 (128K output / 131K context) leaves
     # insufficient room for the input and causes HTTP 400 errors.
-    max_tokens = calculate_max_tokens(query_messages, model_id)
-    budget = token_budget_breakdown(query_messages, model_id)
+    {max_tokens, budget} = calculate_max_tokens(query_messages, model_id)
 
     Logger.debug(
       "Reflector query: model=#{model_id}, " <>
         "input_messages=#{length(messages)}, " <>
-        "max_tokens=#{max_tokens}, " <>
-        "token_budget=#{inspect(budget)}"
+        "max_tokens=#{max_tokens}, token_budget=#{inspect(budget)}"
     )
 
     # Fail fast when context is already exhausted. max_tokens=1 produces
@@ -288,8 +286,13 @@ defmodule Quoracle.Agent.Reflector do
 
       case Quoracle.Models.ModelQuery.query_models(query_messages, [model_id], query_opts) do
         {:ok, %{successful_responses: [response | _rest]}} ->
-          # Extract text from first response
           text = extract_text_from_response(response)
+
+          Logger.debug(
+            "Reflector response received: model=#{model_id}, " <>
+              "extracted_text=#{summarize_content(text)}"
+          )
+
           {:ok, text}
 
         {:ok, %{successful_responses: []} = result} ->
@@ -312,36 +315,28 @@ defmodule Quoracle.Agent.Reflector do
 
   # Dynamic max_tokens: min(context_window - buffered_input, output_limit)
   # Mirrors PerModelQuery.calculate_max_tokens/2 for the Reflector code path.
-  # Safety margin absorbs tokenizer variance (cl100k_base undercounts for DeepSeek ~1-5%).
-  @token_safety_margin 0.05
+  # Safety margin absorbs tokenizer variance (up to ~9% for GLM), per-message
+  # overhead (~1-2%), and LLMDB context window inaccuracies (~1%).
+  @token_safety_margin 0.12
 
-  @spec calculate_max_tokens(list(map()), String.t()) :: pos_integer()
+  @spec calculate_max_tokens(list(map()), String.t()) :: {pos_integer(), map()}
   defp calculate_max_tokens(messages, model_id) do
-    context_window = TokenManager.get_model_context_limit(model_id)
-    input_tokens = TokenManager.estimate_all_messages_tokens(messages)
-    output_limit = TokenManager.get_model_output_limit(model_id)
-
-    buffered_input = ceil(input_tokens * (1 + @token_safety_margin))
-
-    min(context_window - buffered_input, output_limit)
-    |> max(1)
-  end
-
-  # Diagnostic breakdown for debug logging
-  defp token_budget_breakdown(messages, model_id) do
     context_window = TokenManager.get_model_context_limit(model_id)
     input_tokens = TokenManager.estimate_all_messages_tokens(messages)
     output_limit = TokenManager.get_model_output_limit(model_id)
     buffered_input = ceil(input_tokens * (1 + @token_safety_margin))
     available = context_window - buffered_input
+    max_tokens = max(min(available, output_limit), 1)
 
-    %{
+    budget = %{
       context_window: context_window,
       input_tokens: input_tokens,
       buffered_input: buffered_input,
       output_limit: output_limit,
       available_output: available
     }
+
+    {max_tokens, budget}
   end
 
   @doc false
@@ -401,40 +396,43 @@ defmodule Quoracle.Agent.Reflector do
 
   defp extract_from_reqllm_response(response) do
     text = ReqLLM.Response.text(response)
+    thinking = ReqLLM.Response.thinking(response)
 
-    if is_binary(text) and text != "" do
-      text
-    else
-      # Response.text() only returns :text content parts.
-      # Try :object (structured output), then :thinking (reasoning models
-      # like DeepSeek/GLM put output in reasoning_content, not content).
-      cond do
-        response.object ->
-          Jason.encode!(response.object)
+    Logger.debug(
+      "Reflector extraction: model=#{response.model}, " <>
+        "finish=#{inspect(response.finish_reason)}, " <>
+        "text=#{summarize_content(text)}, thinking=#{summarize_content(thinking)}, " <>
+        "object=#{response.object != nil}, parts=#{inspect_content_parts(response)}, " <>
+        "usage=#{inspect(response.usage)}"
+    )
 
-        # Non-streaming decode path (decode_response_body_openai_format) does not
-        # set response.object, but stores pure JSON as %{type: :object} content
-        # parts when response_format: json_object triggers looks_like_json?.
-        (obj = extract_object_from_content_parts(response)) != nil ->
-          Jason.encode!(obj)
+    # Only use text directly if it could plausibly contain JSON (has "{").
+    # Reasoning models (DeepSeek) sometimes emit garbage tokens ("package", "#")
+    # in content while putting real output in reasoning_content/thinking.
+    {path, result} =
+      if is_binary(text) and text != "" and String.contains?(text, "{") do
+        {:text, text}
+      else
+        cond do
+          response.object ->
+            {:response_object, Jason.encode!(response.object)}
 
-        # Thinking content from reasoning models (e.g. DeepSeek) is chain-of-thought
-        # prose, NOT the final JSON output. Only use it if it actually contains
-        # valid reflection JSON with "lessons" and "state" keys.
-        is_binary(thinking = ReqLLM.Response.thinking(response)) and thinking != "" ->
-          extract_reflection_json_from_thinking(thinking, response)
+          (obj = extract_object_from_content_parts(response)) != nil ->
+            {:object_content_part, Jason.encode!(obj)}
 
-        true ->
-          Logger.warning(
-            "Reflector: all extraction paths empty " <>
-              "(model=#{response.model}, finish=#{inspect(response.finish_reason)}, " <>
-              "usage=#{inspect(response.usage)}, " <>
-              "content_parts=#{inspect_content_parts(response)})"
-          )
+          is_binary(thinking) and thinking != "" ->
+            {:thinking, extract_reflection_json_from_thinking(thinking, response)}
 
-          ""
+          is_binary(text) and text != "" ->
+            {:text_no_json, text}
+
+          true ->
+            {:empty, ""}
+        end
       end
-    end
+
+    Logger.debug("Reflector extraction path=#{path}, result=#{summarize_content(result)}")
+    result
   end
 
   defp extract_object_from_content_parts(%ReqLLM.Response{message: %{content: parts}})
@@ -474,6 +472,16 @@ defmodule Quoracle.Agent.Reflector do
 
         ""
     end
+  end
+
+  # Truncated content summary for debug logging
+  defp summarize_content(nil), do: "nil"
+  defp summarize_content(""), do: "empty"
+
+  defp summarize_content(s) when is_binary(s) do
+    len = byte_size(s)
+    preview = s |> String.slice(0, 80) |> String.replace(~r/[\n\r]+/, " ")
+    "#{len}b #{inspect(preview)}"
   end
 
   # Uses Map.get to safely handle :object content parts (plain maps without :text key)

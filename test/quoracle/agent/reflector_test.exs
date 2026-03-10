@@ -672,6 +672,23 @@ defmodule Quoracle.Agent.ReflectorTest do
     }
   end
 
+  defp build_response_with_text_and_thinking(text, thinking_text) do
+    %ReqLLM.Response{
+      id: "test-text-and-thinking",
+      model: "azure:deepseek-v3.2",
+      context: %ReqLLM.Context{messages: []},
+      message: %ReqLLM.Message{
+        role: :assistant,
+        content: [
+          %ReqLLM.Message.ContentPart{type: :thinking, text: thinking_text},
+          %ReqLLM.Message.ContentPart{type: :text, text: text}
+        ],
+        tool_calls: nil,
+        metadata: %{}
+      }
+    }
+  end
+
   defp build_response_with_object(object_map) do
     # :object content parts are plain maps (not ContentPart structs) —
     # created by ResponseBuilder.build_content_parts when looks_like_json? is true.
@@ -805,6 +822,54 @@ defmodule Quoracle.Agent.ReflectorTest do
       assert_receive {:result, {:error, :malformed_response_after_retries}}
       # 1 initial + 1 retry = 2 calls
       assert :counters.get(call_count, 1) == 2
+    end
+  end
+
+  describe "R34: Garbage text with valid thinking JSON" do
+    test "extracts reflection JSON from thinking when text is garbage tokens" do
+      # DeepSeek sometimes emits garbage tokens ("package", "#") in content
+      # while putting the real reflection JSON in reasoning_content/thinking.
+      valid_json =
+        Jason.encode!(%{
+          "lessons" => [%{"type" => "factual", "content" => "API requires bearer auth"}],
+          "state" => [%{"summary" => "Debugging auth module"}]
+        })
+
+      response = build_response_with_text_and_thinking("package", valid_json)
+
+      result = Reflector.extract_text_from_response(response)
+
+      assert {:ok, data} = Jason.decode(result)
+      assert Map.has_key?(data, "lessons")
+      assert Map.has_key?(data, "state")
+    end
+
+    test "returns empty when both text and thinking lack JSON" do
+      response =
+        build_response_with_text_and_thinking(
+          "#",
+          "Let me think about this carefully..."
+        )
+
+      result = Reflector.extract_text_from_response(response)
+
+      # Thinking branch matches (non-empty) but has no reflection JSON → ""
+      assert result == ""
+    end
+
+    test "text containing { is used directly without checking thinking" do
+      text_with_json = ~s({"lessons": [], "state": []})
+
+      response =
+        build_response_with_text_and_thinking(
+          text_with_json,
+          "Some thinking content"
+        )
+
+      result = Reflector.extract_text_from_response(response)
+
+      # Text contains { so it's used directly (PATH 1)
+      assert result == text_with_json
     end
   end
 

@@ -17,13 +17,7 @@ defmodule Quoracle.Agent.Core.ChildrenTracker do
     if Enum.any?(state.children, &(&1.agent_id == data.agent_id)) do
       {:noreply, state}
     else
-      child_data = %{
-        agent_id: data.agent_id,
-        spawned_at: data.spawned_at,
-        budget_allocated: Map.get(data, :budget_allocated)
-      }
-
-      {:noreply, %{state | children: [child_data | state.children]}}
+      {:noreply, %{state | children: [build_child_data(data) | state.children]}}
     end
   end
 
@@ -40,18 +34,20 @@ defmodule Quoracle.Agent.Core.ChildrenTracker do
   @doc """
   Handle child_restored GenServer cast - add restored child to children list.
   Used during task restoration to rebuild parent's children list.
-  Identical logic to handle_child_spawned - explicit message for clarity.
   """
   @spec handle_child_restored(map(), map()) :: {:noreply, map()}
   def handle_child_restored(data, state) do
-    child_data = %{
+    {:noreply, %{state | children: [build_child_data(data) | state.children]}}
+  end
+
+  # Builds a normalized child data map from spawn/restore cast data.
+  @spec build_child_data(map()) :: map()
+  defp build_child_data(data) do
+    %{
       agent_id: data.agent_id,
       spawned_at: data.spawned_at,
       budget_allocated: Map.get(data, :budget_allocated)
     }
-
-    new_children = [child_data | state.children]
-    {:noreply, %{state | children: new_children}}
   end
 
   @doc """
