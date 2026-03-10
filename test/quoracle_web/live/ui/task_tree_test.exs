@@ -841,7 +841,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
       # Submit the form - should not crash
       html =
         view
-        |> element("#new-task-modal form")
+        |> element("#new-task-form")
         |> render_submit(%{"prompt" => "Test task prompt"})
 
       # Should still render after submit (verifies no crash)

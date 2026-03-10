@@ -51,6 +51,64 @@ defmodule Quoracle.Agent.ConfigManagerTest do
 
       assert is_integer(normalized.started_at)
     end
+
+    test "R24: preserves grove_schemas from config" do
+      grove_schemas = [
+        %{
+          "name" => "output-schema",
+          "definition" => "schemas/output.json",
+          "validate_on" => "file_write",
+          "path_pattern" => "data/**/*.json"
+        }
+      ]
+
+      config = %{
+        agent_id: "schema-config-agent",
+        test_mode: true,
+        model_pool: ["test-model-1"],
+        grove_schemas: grove_schemas
+      }
+
+      normalized = ConfigManager.normalize_config(config)
+
+      assert Map.has_key?(normalized, :grove_schemas)
+      assert normalized.grove_schemas == grove_schemas
+    end
+
+    test "R25: preserves grove_workspace from config" do
+      grove_workspace =
+        Path.join(
+          System.tmp_dir!(),
+          "config_manager_workspace_#{System.unique_integer([:positive])}"
+        )
+
+      config = %{
+        agent_id: "workspace-config-agent",
+        test_mode: true,
+        model_pool: ["test-model-1"],
+        grove_workspace: grove_workspace
+      }
+
+      normalized = ConfigManager.normalize_config(config)
+
+      assert Map.has_key?(normalized, :grove_workspace)
+      assert normalized.grove_workspace == grove_workspace
+    end
+
+    test "R26: grove_schemas and grove_workspace nil when not provided" do
+      config = %{
+        agent_id: "schema-defaults-agent",
+        test_mode: true,
+        model_pool: ["test-model-1"]
+      }
+
+      normalized = ConfigManager.normalize_config(config)
+
+      assert Map.has_key?(normalized, :grove_schemas)
+      assert Map.has_key?(normalized, :grove_workspace)
+      assert is_nil(normalized.grove_schemas)
+      assert is_nil(normalized.grove_workspace)
+    end
   end
 
   describe "register_agent/1 - atomic registration" do

@@ -3,7 +3,7 @@
 ## Modules
 
 **PromptBuilder System** (3-module architecture):
-- PromptBuilder: Orchestration (289 lines, build_system_prompt/0,1,2)
+- PromptBuilder: Orchestration (250 lines, build_system_prompt/0,1,2, REFACTOR: removed text-parsing forbidden_actions extraction — now handled by ConsensusHandler)
 - PromptBuilder.SchemaFormatter: JSON schema generation (336 lines, XOR oneOf structures)
 - PromptBuilder.Sections: Content assembly (350 lines, optimal section ordering)
 
@@ -85,6 +85,10 @@ ActionParser:
 - All tests passing with module extraction
 
 ## Recent Changes
+
+**Mar 4, 2026 - Grove Action Block (WorkGroupID: feat-20260304-action-block-hard-rules)**:
+- PromptBuilder REFACTOR: Removed 5 text-parsing functions (`extract_hard_rule_forbidden_actions/1`, `extract_action_names_from_line/1`, `to_existing_action_atom/1`, `normalize_forbidden_actions/1`, `filter_*`). Forbidden actions now passed as `:forbidden_actions` in `prompt_opts` by ConsensusHandler. PromptBuilder only consumes the list.
+- `build_system_prompt_with_context/1`: Receives `:forbidden_actions` directly in opts (was extracting from governance_rules text)
 
 **v9.0/v8.0/v2.0 - Per-Profile Max Refinement Rounds (Feb 8, 2026, WorkGroupID: feat-20260208-210722)**:
 - Aggregator v9.0: Final round hint from context[:max_refinement_rounds] (replaces Manager call)

@@ -41,11 +41,14 @@
 - router_batch_async_test.exs: 9 Router integration tests for batch_async - Added 2026-01-26
 - shared/batch_validation_test.exs: 11 tests (R1-R11 shared validation) - Added 2026-01-26
 - spawn_budget_test.exs: R52, R57 (2 tests) - Budget enforcement for budgeted parents (2026-02-11)
-- dismiss_child_reconciliation_test.exs: R22-R30 (9 tests) - Budget reconciliation on dismissal (2026-02-11)
+- dismiss_child_reconciliation_test.exs: R22-R52 (76 tests: 74 tests + 2 properties) - Budget reconciliation on dismissal (2026-02-11), v6.0 atomic absorption R43-R52 + sentinel model_spec R34/R45 (2026-03-02, fix-20260301-cost-decrease-on-dismiss)
 - adjust_budget_timeout_test.exs: R1-R5, R8, R15, R17 (10 tests) - Cast-based budget update, unified code path, busy-child acceptance (2026-02-17)
 - mcp_test.exs: 31 tests (22 base + 9 retry/timeout v3.0) - Updated 2026-02-20 (error format assertions for action field wrapping)
 - mcp_system_test.exs: 3 system tests (R14, R38, retry acceptance) - Added 2026-02-20 (fix-20260219-mcp-reliability audit gaps)
 - router_mcp_helpers_test.exs: 2 tests - Added 2026-02-20 (MCP helper log level verification)
+- shell_enforcement_test.exs: 10 tests (R202-R207) - Shell hard rule enforcement + working dir confinement (NEW: wip-20260302-grove-hard-enforcement)
+- file_read_confinement_test.exs: 5 tests - FileRead filesystem confinement enforcement (NEW: wip-20260302-grove-hard-enforcement)
+- file_write_confinement_test.exs: 7 tests - FileWrite filesystem confinement enforcement (NEW: wip-20260302-grove-hard-enforcement)
 
 ## Coverage
 execute/2,/3,/4 delegation, target resolution, PubSub/Registry injection, wait parameter flow, error handling, nested map validation, enum constraints, action priorities, HTTP GET, HTML→Markdown conversion, redirect tracking, SSRF protection, error status mapping, Shell notification protocol (Router-mediated Core notification with action_id propagation), consistent action field in all action returns (answer_engine, wait, orient, spawn, shell), model_used field in answer_engine

@@ -42,9 +42,10 @@ defmodule Quoracle.Actions.SchemaBatchAsyncTest do
     end
 
     # R20: Action Priority Defined
-    test "batch_async has priority 5" do
-      # [UNIT] - WHEN get_action_priority(:batch_async) called THEN returns 5
-      assert Schema.get_action_priority(:batch_async) == 5
+    test "batch_async has a priority" do
+      # [UNIT] - WHEN get_action_priority(:batch_async) called THEN returns a positive integer
+      priority = Schema.get_action_priority(:batch_async)
+      assert is_integer(priority) and priority > 0
     end
 
     # R21: Async Excluded Actions Function

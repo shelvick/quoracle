@@ -41,6 +41,9 @@ config :logger, :console,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# LLM request timeout (default was 30s, too low for large prompts)
+config :req_llm, receive_timeout: 300_000
+
 # Configure your database
 config :quoracle, Quoracle.Repo,
   username: "postgres",

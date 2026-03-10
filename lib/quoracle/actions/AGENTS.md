@@ -11,28 +11,30 @@
 - Schema.ApiSchemas: API/integration actions (395 lines: answer_engine, execute_shell, fetch_web, call_api, call_mcp, generate_secret, search_secrets, file_read, file_write)
 - Schema.Metadata: LLM descriptions with WHEN/HOW guidance, priorities
 
-**Validator**: Parameter validation (408 lines, XOR enforcement, enum validation, boolean type support, default_fields nested map with :all_optional)
+**Validator** (270 lines, v12.0): Parameter validation, XOR enforcement, enum validation, boolean type support, default_fields nested map with :all_optional, `spawn_profile_optional?/2` for topology-based profile optionality, `validate_params/3` with opts for grove_topology threading
 
 **Action Implementations**:
 - Orient: 12-field strategic reflection (144 lines)
-- Spawn: Child agent spawning with downstream_constraints (475 lines, ConfigBuilder 273 lines, Helpers 82 lines, BudgetValidation 113 lines), dismissing flag check (v11.0), child_spawned notification (v12.0), profile parameter (v14.0), budget enforcement for budgeted parents (v17.0: :budget_required error), v19.0 removes Core.update_budget_committed callback (deadlock fix)
+- Spawn: Child agent spawning with grove spawn contracts (471 lines, v21.0), ConfigBuilder 273 lines, Helpers 82 lines, BudgetValidation 113 lines, TopologyResolver 137 lines (NEW, extracted for 500-line limit), dismissing flag check (v11.0), profile parameter (v14.0), budget enforcement (v17.0), TopologyResolver.apply_spawn_contract/2 consults grove topology edges at spawn time
 - Wait: Unified wait parameter (142 lines, true/false/number support, interruptible)
 - SendMessage: Parent/child messaging (3-arity)
-- DismissChild: Recursive child termination (374 lines, v5.0), async background dispatch to TreeTerminator, child_dismissed notification, budget reconciliation with per-model absorption records and escrow-first release ordering
+- DismissChild: Recursive child termination (378 lines, v6.0), async background dispatch to TreeTerminator, child_dismissed notification, budget reconciliation with atomic batch absorption (Recorder.record_batch/2), sentinel "(external)" model_spec for non-model costs, escrow-first release ordering, absorption_ctx map for clean parameter passing
 - Answer (263 lines): Gemini grounding search
   - Model from ConfigModelSettings.get_answer_engine_model!() (config-driven)
   - Raises RuntimeError if answer engine model not configured
 - Web: HTML fetch with html2markdown
-- Shell: Command execution with status checking (249 lines, 4 sub-modules: Execution, StatusCheck, Termination, ShellHandlers)
+- Shell: Command execution with status checking (366 lines, 4 sub-modules: Execution, StatusCheck, Termination, ShellHandlers)
   - StatusCheck: Split API - execute/2 (external) vs execute_with_state/3 (Router deadlock prevention)
   - Termination: wait_for_port_death after SIGKILL prevents Task hang (v29.0)
+  - v4.0: `enforce_grove_policies/3` pre-execution checks (hard rules + working dir confinement)
+  - v4.0: Extracts `grove_hard_rules`, `grove_confinement`, `skill_name` from `opts[:parent_config]`
 - Todo: Task list management
 - GenerateSecret: Random password generation
 - SearchSecrets: Search secret names by terms (48 lines, no access control)
 - API: External API calls (289 lines, REST/GraphQL/JSON-RPC, see api/AGENTS.md for sub-components)
 - MCP: Model Context Protocol tool calling (203 lines, 3 modes: connect/call/terminate), v3.0 retry with exponential backoff, v3.1 action field + response truncation
-- FileRead: File reading with line numbers (152 lines), offset/limit support, binary detection
-- FileWrite: File creation and editing (196 lines), Claude Code edit semantics, exact string matching
+- FileRead: File reading with line numbers (162 lines, v2.0), offset/limit support, binary detection, v2.0 confinement check via `HardRuleEnforcer.check_file_access(path, :read, confinement, skill_name)` in with-chain
+- FileWrite: File creation and editing (224 lines, v3.0), Claude Code edit semantics, exact string matching, grove schema validation hook via `validate_schema/3` delegates to `SchemaValidator.validate_file_write/5`, v3.0 `validate_confinement/3` checks before schema validation and filesystem write
 - BatchSync: Batched action execution (87 lines), delegates batchable_actions() to ActionList, sequential with early termination
 - BatchAsync: Parallel batch execution (127 lines), fire-and-forget with wait:false, per-action Router spawning
 
@@ -40,8 +42,16 @@
 - Shared.BatchValidation: DRY validation for batch_sync and batch_async (110 lines)
 
 **Validator Sub-modules** (extracted for 500-line limit):
+- Validator.TypeValidation: All type validation logic (262 lines, NEW — wip-20260228-spawn-contracts), validate_param_types/2, validate_type/2, nested map, enum, union types
 - Validator.BatchSync: batch_sync validation (98 lines) - nested action list validation
 - Validator.BatchAsync: batch_async validation (delegates to Shared.BatchValidation)
+
+**Spawn Sub-modules**:
+- Spawn.ConfigBuilder: Agent config construction (324 lines), build_config/6, inheritable_keys whitelist includes grove_topology + grove_path + grove_schemas + grove_workspace (v22.0), accumulated_narrative de-duplication regex, stores :initial_message in config (v24.0)
+- Spawn.BudgetValidation: Budget enforcement (113 lines)
+- Spawn.Helpers: Shared helpers (82 lines)
+- Spawn.TopologyResolver: Grove topology consultation (137 lines, NEW — wip-20260228-spawn-contracts), apply_spawn_contract/2, resolve_profile_data/2, resolve_grove_skills_path/1
+- Spawn.ConfigBuilder v23.0: Added `:grove_confinement` to `inheritable_keys` whitelist (child agents inherit confinement)
 
 **Router**: Action dispatch with access control (480 lines, ClientAPI 139 lines), autonomy permission check via ActionGate (v23.0)
 - terminate/2: 30s safety timeout for shell_task cleanup (v29.0), prevents indefinite hang
@@ -92,6 +102,57 @@ Actions → Schema for parameter definitions
 
 ## Recent Changes
 
+**Mar 4, 2026 - Grove Action Block Enforcement (WorkGroupID: feat-20260304-action-block-hard-rules)**:
+- **Router.ClientAPI v33.0 (173 lines)**: Grove-level action blocking in execution pipeline
+  - `validate_action_hard_rules/2`: Extracts grove_hard_rules + skill_name from opts[:parent_config], delegates to HardRuleEnforcer.check_action/3
+  - `parent_config_value/2`: Dual atom/string key lookup helper (shared pattern with Shell, FileRead, FileWrite)
+  - Check ordering: AFTER Schema.validate_action_type + ActionGate.check, BEFORE execute_with_validation
+  - Merged `do_execute_with_access_and_autonomy` into `execute_with_access_and_autonomy` (REFACTOR)
+
+**Mar 4, 2026 - Fix Child Initial Message (WorkGroupID: fix-20260304-initial-message-fields)**:
+- **Spawn v24.0 (471 lines)**: Uses `config[:initial_message]` for `Core.send_user_message` (was bare `task_string`)
+  - `initial_message = Map.get(config, :initial_message, task_string)` — fallback preserves backward compat
+  - Broadcast at line 269 still uses `task_string` (UI display unchanged)
+- **Spawn.ConfigBuilder v24.0 (324 lines)**: Captures and stores XML-tagged initial message
+  - `user_prompt` no longer discarded (was `_user_prompt`)
+  - Stores `:initial_message` in config map alongside `:system_prompt`
+  - Accumulated_narrative de-duplication: regex strips child's `<accumulated_narrative>` tag, re-injects parent's authoritative version
+  - REFACTOR: 14-line block comment documenting the regex logic
+
+**Mar 3, 2026 - Grove Hard Enforcement (WorkGroupID: wip-20260302-grove-hard-enforcement)**:
+- **Shell v4.0 (366 lines)**: Pre-execution hard rule enforcement + working dir confinement
+  - `enforce_grove_policies/3`: Checks hard_rules then confinement before execute_command
+  - Extracts `grove_hard_rules`, `grove_confinement`, `skill_name` from `opts[:parent_config]`
+  - Status checks (check_id path) bypass enforcement
+- **FileRead v2.0 (162 lines)**: Filesystem confinement enforcement
+  - `HardRuleEnforcer.check_file_access(path, :read, confinement, skill_name)` in with-chain
+  - Extracts confinement/skill_name from `opts[:parent_config]`
+- **FileWrite v3.0 (224 lines)**: Filesystem confinement enforcement
+  - `validate_confinement/3`: Checks before schema validation and filesystem write
+  - `HardRuleEnforcer.check_file_access(path, :write, confinement, skill_name)`
+- **Spawn.ConfigBuilder v23.0 (290 lines)**: Added `:grove_confinement` to `inheritable_keys` whitelist
+
+**Mar 2, 2026 - Grove Schema Validation (WorkGroupID: wip-20260301-grove-schema-validation)**:
+- **FileWrite v2.0 (204 lines)**: Grove schema validation hook for file writes
+  - `validate_schema/3`: Extracts grove config from opts, delegates to `SchemaValidator.validate_file_write/5`
+  - `execute_mode/4`: Now accepts opts (was 3-arity), calls schema validation before write
+  - `build_edited_content/3`: Extracted edit logic to separate content computation from writing
+  - Schema validation runs after content computation, before filesystem write, for both `:write` and `:edit` modes
+- **Spawn v22.0**: Added `:grove_schemas` + `:grove_workspace` to ConfigBuilder inheritable_keys whitelist
+
+**Mar 1, 2026 - Grove Spawn Contracts (WorkGroupID: wip-20260228-spawn-contracts)**:
+- **Spawn v21.0 (471 lines)**: Grove topology auto-injection at spawn time
+  - TopologyResolver extracted to `spawn/topology_resolver.ex` (137 lines, 500-line limit)
+  - Profile precedence fix: removed `Map.delete(params, :profile)` — LLM-explicit now wins via `SpawnContractResolver.choose_profile/2`
+  - Unmatched-edge `Logger.info` for observability (non-blocking)
+  - Inheritable keys whitelist now includes `:grove_topology` + `:grove_path`
+- **Validator v12.0 (270 lines)**: Spawn profile optionality + TypeValidation extraction
+  - `spawn_profile_optional?/2`: Returns true when topology edge provides `auto_inject.profile`
+  - `validate_params/3`: Added `opts \\ []` for grove_topology threading
+  - TypeValidation extracted to `validator/type_validation.ex` (262 lines, 500-line limit)
+- **Validator.TypeValidation v1.0 (262 lines)**: All type validation logic extracted from Validator
+- **Spawn.TopologyResolver v1.0 (137 lines)**: Grove topology consultation extracted from Spawn
+
 **Feb 12, 2026 - Action Deadlock Fix (WorkGroupID: fix-20260212-action-deadlock)**:
 - **Spawn v19.0 (475 lines)**: Removed `Core.update_budget_committed(parent_pid, budget_result.escrow_amount)` call from background task (deadlock cause). Budget committed now updated by Core via ActionResultHandler when processing spawn result.
 - **AdjustBudget v2.0 (179 lines)**: `get_parent_state/3` checks `opts[:parent_config]` first with agent_id pin match, falls back to Registry. New `do_adjust/4` dispatcher and `adjust_child_directly/3` for direct calls outside ActionExecutor.
@@ -132,6 +193,16 @@ Actions → Schema for parameter definitions
 - **Schema v27.0**: Added file_read, file_write actions (21 actions total)
 - **Router**: Added file_read, file_write routing via ActionMapper
 - **CapabilityGroups**: file_read, file_write groups (allowed for all except restricted)
+
+**Mar 2, 2026 - Fix Cost Decrease on Dismiss (WorkGroupID: fix-20260301-cost-decrease-on-dismiss)**:
+- **DismissChild v6.0 (378 lines)**: Atomic batch absorption + sentinel model_spec
+  - `create_absorption_records/3`: Accepts `absorption_ctx` map (child_id, task_id, tree_spent, per_model, pubsub), filters zero-cost rows, validates task_id, dispatches to `record_absorption_batch/2`
+  - `reconcile_child_budget/4`: Simplified from 8 params using absorption_ctx
+  - `build_absorption_metadata/4`: Always includes sentinel `"(external)"` for nil model_spec (makes external costs visible in Aggregator IS NOT NULL filter)
+  - `record_absorption_batch/2`: Routes to `Recorder.record_batch/2` (with pubsub) or `Recorder.record_silent_batch/1` (nil pubsub)
+  - `validate_absorption_batch/1`: Pre-check ensures all records have binary task_id before DB insert
+  - `log_absorption_batch_warning/3`: Dual warn+error logging (test env logger level is :error)
+- **ActionExecutor**: `task_id: Map.get(state, :task_id)` — removed fallback to agent_id (prevents non-UUID task_id poisoning cost records)
 
 **Feb 23, 2026 - Cost Display & Budget Timeout Fix (WorkGroupID: fix-20260223-cost-display-budget-timeout)**:
 - **DismissChild v5.0 (374 lines)**: Per-model absorption records + escrow-first ordering

@@ -2,10 +2,15 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
   @moduledoc """
   Unit tests for ChildrenInjector module.
 
-  Tests formatting, injection, Registry filtering, and edge case handling.
+  Tests formatting, injection, Registry filtering, edge case handling,
+  and v2.0 message enrichment (latest_message_preview + latest_message_at).
 
-  WorkGroupID: feat-20251227-children-inject
-  Packet: 2 (Injection Logic)
+  WorkGroupID: feat-20260309-185610
+  Packet: 1 (Message Enrichment)
+
+  Requirements tested:
+  - R1-R8, R10-R11: Base injection behavior (v1.0)
+  - R20-R28: Message enrichment (v2.0)
   """
   use ExUnit.Case, async: true
 
@@ -21,6 +26,16 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
 
   defp make_message(content) do
     %{role: "user", content: content}
+  end
+
+  # NEW v2.0 helper: create inbox message from a sender
+  defp make_inbox_message(from, content, offset_seconds \\ 0) do
+    %{
+      from: from,
+      content: content,
+      timestamp: DateTime.add(~U[2025-12-27 02:00:00Z], offset_seconds, :second),
+      read: false
+    }
   end
 
   defp start_test_registry! do
@@ -40,13 +55,15 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
   end
 
   describe "R1: inject_children_context/2 with empty children" do
-    test "returns messages unchanged when children list empty" do
+    test "injects empty children signal when children list empty" do
       state = %{children: [], registry: nil}
       messages = [make_message("Hello")]
 
       result = ChildrenInjector.inject_children_context(state, messages)
 
-      assert result == messages
+      content = hd(result).content
+      assert content =~ "<children>No child agents running.</children>"
+      assert content =~ "Hello"
     end
   end
 
@@ -64,7 +81,11 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
 
   describe "R3-R4: format_children/1" do
     test "formats single child as JSON in children wrapper" do
-      children = [make_child("agent-abc123")]
+      # v2.0: enriched children include latest_message_preview and latest_message_at
+      children = [
+        make_child("agent-abc123")
+        |> Map.merge(%{latest_message_preview: nil, latest_message_at: nil})
+      ]
 
       result = ChildrenInjector.format_children(children)
 
@@ -73,11 +94,19 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
       assert result =~ "agent-abc123"
       # RFC 2822 format for LLM readability
       assert result =~ "Sat, 27 Dec 2025 01:00:00"
-      assert result =~ "active"
+      # v2.0: null fields present
+      assert result =~ ~s("latest_message_preview":null)
+      assert result =~ ~s("latest_message_at":null)
     end
 
     test "formats multiple children with comma separation" do
-      children = [make_child("agent-1"), make_child("agent-2", 60)]
+      # v2.0: enriched children include latest_message_preview and latest_message_at
+      children = [
+        make_child("agent-1")
+        |> Map.merge(%{latest_message_preview: nil, latest_message_at: nil}),
+        make_child("agent-2", 60)
+        |> Map.merge(%{latest_message_preview: nil, latest_message_at: nil})
+      ]
 
       result = ChildrenInjector.format_children(children)
 
@@ -98,7 +127,7 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
     test "limits injection to 20 children" do
       children = for i <- 1..25, do: make_child("agent-#{i}", i)
       registry = make_live_registry(children)
-      state = %{children: children, registry: registry}
+      state = %{children: children, registry: registry, messages: []}
       messages = [make_message("Hello")]
 
       result = ChildrenInjector.inject_children_context(state, messages)
@@ -123,7 +152,7 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
       registry = start_test_registry!()
       register_agent(registry, "agent-live")
 
-      state = %{children: children, registry: registry}
+      state = %{children: children, registry: registry, messages: []}
       messages = [make_message("Hello")]
 
       result = ChildrenInjector.inject_children_context(state, messages)
@@ -133,20 +162,21 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
       refute content =~ "agent-dead"
     end
 
-    test "returns messages unchanged when all children dead" do
+    test "injects empty children signal when all children dead" do
       dead_child = make_child("agent-dead")
       children = [dead_child]
 
       # Registry has no agents registered
       registry = start_test_registry!()
 
-      state = %{children: children, registry: registry}
+      state = %{children: children, registry: registry, messages: []}
       messages = [make_message("Hello")]
 
       result = ChildrenInjector.inject_children_context(state, messages)
 
-      # Messages unchanged since no live children
-      assert result == messages
+      content = hd(result).content
+      assert content =~ "<children>No child agents running.</children>"
+      refute content =~ "agent-dead"
     end
   end
 
@@ -154,7 +184,7 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
     test "prepends children block to last message content" do
       children = [make_child("agent-1")]
       registry = make_live_registry(children)
-      state = %{children: children, registry: registry}
+      state = %{children: children, registry: registry, messages: []}
       messages = [make_message("First"), make_message("Last")]
 
       result = ChildrenInjector.inject_children_context(state, messages)
@@ -170,7 +200,7 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
     test "handles single message correctly" do
       children = [make_child("agent-1")]
       registry = make_live_registry(children)
-      state = %{children: children, registry: registry}
+      state = %{children: children, registry: registry, messages: []}
       messages = [make_message("Only message")]
 
       result = ChildrenInjector.inject_children_context(state, messages)
@@ -192,16 +222,6 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
     end
   end
 
-  describe "R9: status always active" do
-    test "live children have status active" do
-      children = [make_child("agent-1")]
-
-      result = ChildrenInjector.format_children(children)
-
-      assert result =~ ~s("status":"active")
-    end
-  end
-
   describe "R10: Registry error fallback" do
     test "handles Registry errors gracefully" do
       children = [make_child("agent-1")]
@@ -209,12 +229,12 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
       state = %{children: children, registry: :invalid_registry}
       messages = [make_message("Hello")]
 
-      # Should not crash, should return messages unchanged (no live children)
+      # Should not crash, should inject empty children signal
       result = ChildrenInjector.inject_children_context(state, messages)
 
       assert is_list(result)
-      # Messages should be unchanged since registry lookup fails
-      assert result == messages
+      content = hd(result).content
+      assert content =~ "<children>No child agents running.</children>"
     end
 
     test "handles nil registry gracefully" do
@@ -243,7 +263,8 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
       state = %{
         children: children,
         todos: todos,
-        registry: registry
+        registry: registry,
+        messages: []
       }
 
       messages = [make_message("Original")]
@@ -266,7 +287,7 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
     test "preserves other message properties" do
       children = [make_child("agent-1")]
       registry = make_live_registry(children)
-      state = %{children: children, registry: registry}
+      state = %{children: children, registry: registry, messages: []}
       messages = [%{role: "user", content: "Test", metadata: %{id: 123}}]
 
       result = ChildrenInjector.inject_children_context(state, messages)
@@ -274,6 +295,169 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
       last_msg = hd(result)
       assert last_msg.role == "user"
       assert last_msg.metadata == %{id: 123}
+    end
+  end
+
+  # ===========================================================================
+  # R20-R28: Message Enrichment (v2.0)
+  # ===========================================================================
+
+  describe "R20-R28: message enrichment" do
+    test "R20: child with messages shows preview and timestamp" do
+      child = make_child("agent-1")
+      registry = make_live_registry([child])
+      inbox = [make_inbox_message("agent-1", "Here are the results")]
+
+      state = %{children: [child], registry: registry, messages: inbox}
+      messages = [make_message("Hello")]
+
+      result = ChildrenInjector.inject_children_context(state, messages)
+      content = hd(result).content
+
+      assert content =~ "Here are the results"
+      # latest_message_at in RFC 2822 format
+      assert content =~ ~r/[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2}/
+    end
+
+    test "R21: child without messages shows null preview and timestamp" do
+      child = make_child("agent-1")
+      registry = make_live_registry([child])
+
+      state = %{children: [child], registry: registry, messages: []}
+      messages = [make_message("Hello")]
+
+      result = ChildrenInjector.inject_children_context(state, messages)
+      content = hd(result).content
+
+      # JSON null values for both fields
+      assert content =~ ~s("latest_message_preview":null)
+      assert content =~ ~s("latest_message_at":null)
+    end
+
+    test "R22: preview truncated to 100 chars with ellipsis" do
+      child = make_child("agent-1")
+      registry = make_live_registry([child])
+      long_content = String.duplicate("x", 150)
+      inbox = [make_inbox_message("agent-1", long_content)]
+
+      state = %{children: [child], registry: registry, messages: inbox}
+      messages = [make_message("Hello")]
+
+      result = ChildrenInjector.inject_children_context(state, messages)
+      content = hd(result).content
+
+      # Should contain 100 x's followed by ...
+      assert content =~ String.duplicate("x", 100) <> "..."
+      # Should NOT contain 101+ x's without the ellipsis (truncated)
+      refute content =~ String.duplicate("x", 101)
+    end
+
+    test "R23: short messages are not truncated" do
+      child = make_child("agent-1")
+      registry = make_live_registry([child])
+      short_content = "Done!"
+      inbox = [make_inbox_message("agent-1", short_content)]
+
+      state = %{children: [child], registry: registry, messages: inbox}
+      messages = [make_message("Hello")]
+
+      result = ChildrenInjector.inject_children_context(state, messages)
+      content = hd(result).content
+
+      assert content =~ "Done!"
+      # No ellipsis appended
+      refute content =~ "Done!..."
+    end
+
+    test "R24: multiple messages from same child picks most recent by timestamp" do
+      child = make_child("agent-1")
+      registry = make_live_registry([child])
+
+      older_msg = make_inbox_message("agent-1", "First attempt", 0)
+      newer_msg = make_inbox_message("agent-1", "Updated answer", 60)
+      inbox = [older_msg, newer_msg]
+
+      state = %{children: [child], registry: registry, messages: inbox}
+      messages = [make_message("Hello")]
+
+      result = ChildrenInjector.inject_children_context(state, messages)
+      content = hd(result).content
+
+      assert content =~ "Updated answer"
+      refute content =~ "First attempt"
+    end
+
+    test "R25: messages from non-children are ignored" do
+      child = make_child("agent-1")
+      registry = make_live_registry([child])
+      inbox = [make_inbox_message("agent-stranger", "I am not your child")]
+
+      state = %{children: [child], registry: registry, messages: inbox}
+      messages = [make_message("Hello")]
+
+      result = ChildrenInjector.inject_children_context(state, messages)
+      content = hd(result).content
+
+      # child-1 should show null (no messages from it)
+      assert content =~ ~s("latest_message_preview":null)
+      # stranger's message should not appear
+      refute content =~ "I am not your child"
+    end
+
+    test "R26: message timestamp uses RFC 2822 format" do
+      child = make_child("agent-1")
+      registry = make_live_registry([child])
+      inbox = [make_inbox_message("agent-1", "Result")]
+
+      state = %{children: [child], registry: registry, messages: inbox}
+      messages = [make_message("Hello")]
+
+      result = ChildrenInjector.inject_children_context(state, messages)
+      content = hd(result).content
+
+      # Extract both timestamps — they should use the same format
+      # spawned_at: "Sat, 27 Dec 2025 01:00:00 +0000"
+      # latest_message_at: "Sat, 27 Dec 2025 02:00:00 +0000"
+      # Both match RFC 2822 pattern
+      spawned_matches =
+        Regex.scan(~r/\w{3}, \d{2} \w{3} \d{4} \d{2}:\d{2}:\d{2} \+0000/, content)
+
+      assert length(spawned_matches) >= 2, "Both timestamps should be RFC 2822"
+    end
+
+    test "R27: empty inbox yields null fields for all children" do
+      children = [make_child("agent-1"), make_child("agent-2", 10)]
+      registry = make_live_registry(children)
+
+      state = %{children: children, registry: registry, messages: []}
+      messages = [make_message("Hello")]
+
+      result = ChildrenInjector.inject_children_context(state, messages)
+      content = hd(result).content
+
+      # Both children should have null latest_message_preview
+      null_count = length(Regex.scan(~r/"latest_message_preview":null/, content))
+      assert null_count == 2
+    end
+
+    test "R28: mixed children show independent message status" do
+      child_with_msg = make_child("agent-talker")
+      child_without = make_child("agent-silent", 10)
+      children = [child_with_msg, child_without]
+      registry = make_live_registry(children)
+
+      inbox = [make_inbox_message("agent-talker", "Here is my answer")]
+
+      state = %{children: children, registry: registry, messages: inbox}
+      messages = [make_message("Hello")]
+
+      result = ChildrenInjector.inject_children_context(state, messages)
+      content = hd(result).content
+
+      # agent-talker should have a message
+      assert content =~ "Here is my answer"
+      # There should still be one null latest_message_preview (for agent-silent)
+      assert content =~ ~s("latest_message_preview":null)
     end
   end
 end

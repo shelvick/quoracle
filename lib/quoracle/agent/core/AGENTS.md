@@ -9,7 +9,7 @@
 - MessageInfoHandler: Info message dispatch (333 lines), handle_trigger_consensus/1, handle_down/4, handle_spawn_failed/2
 - TodoHandler: Per-agent task list management (57 lines)
 - BudgetHandler: Budget GenServer callbacks (247 lines), adjust_child_budget/4 (v37.0: cast-based, no child calls), handle_set_budget_allocated/2, release_child_budget/3
-- ChildrenTracker: Children state management (63 lines), handle_child_spawned/2, handle_child_dismissed/2
+- ChildrenTracker: Children state management (64 lines), handle_child_spawned/2 (idempotent), handle_child_dismissed/2, handle_child_restored/2, build_child_data/1 (DRY shared helper)
 - TestActionHandler: Test-only action handler (191 lines), synchronous Router.execute for integration tests
 
 ## TestActionHandler (v25.0)
@@ -18,6 +18,7 @@
 - spawn_and_monitor_router/4: Spawn + monitor + active_routers tracking (mirrors ActionExecutor)
 - shell_routers keyed by command_id from result (not action_id)
 - Matches Shell's actual async Phase 1 pattern: `{:ok, %{command_id: _, status: :running, sync: false}}`
+- Passes `parent_config` in opts including `grove_hard_rules` for governance child filtering
 
 ## MessageInfoHandler Key Handlers
 - handle_trigger_consensus/1: Unified consensus trigger with staleness check

@@ -7,6 +7,7 @@ defmodule Quoracle.Actions.Shell do
   require Logger
 
   alias Quoracle.Actions.Shell.{StatusCheck, Termination}
+  alias Quoracle.Groves.HardRuleEnforcer
   alias Quoracle.Utils.ResponseTruncator
 
   @smart_mode_threshold_ms 100
@@ -27,7 +28,7 @@ defmodule Quoracle.Actions.Shell do
   ## Raises
   - ArgumentError if agent_pid not in opts
   """
-  @spec execute(map(), String.t(), keyword()) :: {:ok, map()} | {:error, atom()}
+  @spec execute(map(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   # XOR validation: reject if both command and check_id are present
   def execute(%{command: _, check_id: _}, _agent_id, _opts) do
     {:error, :xor_violation}
@@ -49,7 +50,13 @@ defmodule Quoracle.Actions.Shell do
 
     case validate_working_dir(working_dir) do
       :ok ->
-        execute_command(command, working_dir, agent_id, agent_pid, pubsub, router_pid, opts)
+        case enforce_grove_policies(command, working_dir, opts) do
+          :ok ->
+            execute_command(command, working_dir, agent_id, agent_pid, pubsub, router_pid, opts)
+
+          {:error, _} = error ->
+            error
+        end
 
       {:error, reason} ->
         {:error, reason}
@@ -87,6 +94,24 @@ defmodule Quoracle.Actions.Shell do
       {:error, :invalid_working_dir}
     end
   end
+
+  defp enforce_grove_policies(command, working_dir, opts)
+       when is_binary(command) and is_list(opts) do
+    parent_config = Keyword.get(opts, :parent_config, %{})
+    hard_rules = parent_config_value(parent_config, :grove_hard_rules)
+    confinement = parent_config_value(parent_config, :grove_confinement)
+    skill_name = parent_config_value(parent_config, :skill_name)
+
+    with :ok <- HardRuleEnforcer.check_shell_command(command, hard_rules, skill_name) do
+      HardRuleEnforcer.check_shell_working_dir(working_dir, confinement, skill_name)
+    end
+  end
+
+  defp parent_config_value(parent_config, key) when is_map(parent_config) and is_atom(key) do
+    Map.get(parent_config, key, Map.get(parent_config, Atom.to_string(key)))
+  end
+
+  defp parent_config_value(_parent_config, _key), do: nil
 
   # Execute command with smart mode detection
   # CRITICAL: Opens port ONCE, never kills and restarts (prevents duplicate execution)

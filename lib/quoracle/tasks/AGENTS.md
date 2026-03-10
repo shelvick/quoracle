@@ -51,6 +51,29 @@
 
 ## Recent Changes
 
+**Mar 4, 2026 - Fix Initial User Message (fix-20260304-initial-message-fields)**:
+- **TaskManager**: Now computes `initial_message` from `PromptFieldManager.build_prompts_from_fields/1` and stores in `agent_config`
+  - `initial_message` contains XML-tagged user prompt (`<task>`, `<immediate_context>`, `<success_criteria>`, `<approach_guidance>`)
+  - Falls back to bare `task_description` when user_prompt is empty
+  - Stored for agent state persistence/restoration
+
+**Mar 3, 2026 - Grove Hard Enforcement (wip-20260302-grove-hard-enforcement)**:
+- **TaskManager v12.0 (472 lines)**: Forwards `grove_confinement` to agent spawn config via `maybe_put/3`
+  - `:grove_confinement` (per-skill filesystem boundaries for hard enforcement)
+- Field sourced from opts passed by EventHandlers.handle_submit_prompt/2
+
+**Feb 28, 2026 - Grove Governance Integration (wip-20260226-grove-governance)**:
+- **TaskManager v9.0**: Forwards 3 governance fields to agent spawn config via `maybe_put/3`
+  - `:governance_rules` (pre-formatted string for PromptBuilder)
+  - `:governance_config` (raw grove struct for child propagation via ACTION_Spawn)
+  - `:grove_hard_rules` (raw map for child hard rules filtering)
+- Fields sourced from opts passed by EventHandlers.handle_submit_prompt/2
+
+**Feb 22, 2026 - Grove Bootstrap Integration (wip-20260222-grove-bootstrap)**:
+- **TaskManager v8.0**: resolve_skills/2 now extracts and forwards :grove_skills_path from opts to SkillLoader
+- Skills flow with groves: form → FieldProcessor → task_fields.skills → TaskManager (grove_skills_path) → SkillLoader (grove-first) → active_skills → agent
+- {:skill_load_error, ...} error propagation for unreadable skill manifests
+
 **Feb 5, 2026 - Root Skills Feature (feat-20260205-root-skills)**:
 - **FieldProcessor v3.0**: Added skills field to task_fields, parses comma-separated skill names
 - **TaskManager v7.0**: Added resolve_skills/2 for skill resolution via SkillLoader before spawn

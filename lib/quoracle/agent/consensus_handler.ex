@@ -6,7 +6,7 @@ defmodule Quoracle.Agent.ConsensusHandler do
 
   require Logger
   alias Quoracle.Agent.ImageDetector
-  alias Quoracle.Agent.StateUtils
+  alias Quoracle.Agent.{StateUtils, TokenManager}
 
   alias Quoracle.Agent.Consensus.MessageBuilder
 
@@ -15,6 +15,7 @@ defmodule Quoracle.Agent.ConsensusHandler do
     ActionExecutor,
     BudgetInjector,
     ChildrenInjector,
+    Helpers,
     LogHelper,
     TodoInjector
   }
@@ -91,7 +92,11 @@ defmodule Quoracle.Agent.ConsensusHandler do
         # Pass simulate_failure for test error scenarios
         simulate_failure: Map.get(state, :simulate_failure, false),
         # Pass force_condense for test isolation (bypasses token threshold check)
-        force_condense: Map.get(state, :force_condense, false)
+        force_condense: Map.get(state, :force_condense, false),
+        # Force real token-management path in test mode when history already exceeds context.
+        force_token_management:
+          Map.get(state, :force_token_management, false) ||
+            token_management_required?(state, models_list)
       )
 
     consensus_opts =
@@ -111,7 +116,11 @@ defmodule Quoracle.Agent.ConsensusHandler do
       profile_description: Map.get(state, :profile_description),
       capability_groups: Map.get(state, :capability_groups, []),
       active_skills: Map.get(state, :active_skills, []),
-      skills_path: Map.get(state, :skills_path)
+      skills_path: Map.get(state, :skills_path),
+      grove_skills_path: Map.get(state, :grove_skills_path),
+      grove_path: Map.get(state, :grove_path),
+      governance_rules: Map.get(state, :governance_rules),
+      forbidden_actions: extract_forbidden_actions(state)
     ]
 
     # v38.0: Lazy-build and cache system prompt for reuse across consensus cycles.
@@ -236,6 +245,20 @@ defmodule Quoracle.Agent.ConsensusHandler do
     end
   end
 
+  defp token_management_required?(state, models_list) do
+    model_histories = Map.get(state, :model_histories, %{})
+
+    state_for_check =
+      if Map.has_key?(state, :model_histories),
+        do: state,
+        else: Map.put(state, :model_histories, model_histories)
+
+    Enum.any?(models_list, fn model_id ->
+      history = Map.get(model_histories, model_id, [])
+      history != [] and TokenManager.should_condense_for_model?(state_for_check, model_id)
+    end)
+  end
+
   @doc "Handles wait param: false/0=immediate, true=wait, int=timed wait, invalid=default to true."
   @spec handle_wait_parameter(map(), atom(), boolean() | integer() | String.t()) :: map()
   def handle_wait_parameter(state, _action, wait_value) do
@@ -267,4 +290,45 @@ defmodule Quoracle.Agent.ConsensusHandler do
         state
     end
   end
+
+  # Extracts forbidden action atoms from grove_hard_rules structured data.
+  # Uses structured rule maps directly instead of parsing governance text.
+  @spec extract_forbidden_actions(map()) :: [atom()]
+  defp extract_forbidden_actions(state) do
+    hard_rules = Map.get(state, :grove_hard_rules)
+    skill_name = Helpers.primary_skill_name(state)
+
+    case hard_rules do
+      rules when is_list(rules) and rules != [] ->
+        rules
+        |> Enum.filter(&action_block_applies?(&1, skill_name))
+        |> Enum.flat_map(fn rule -> Map.get(rule, "actions", []) end)
+        |> Enum.map(&safe_to_existing_atom/1)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.uniq()
+
+      _ ->
+        []
+    end
+  end
+
+  @spec action_block_applies?(map(), String.t() | nil) :: boolean()
+  defp action_block_applies?(%{"type" => "action_block"} = rule, skill_name) do
+    case Map.get(rule, "scope") do
+      "all" -> true
+      scope when is_list(scope) -> skill_name in scope
+      _ -> true
+    end
+  end
+
+  defp action_block_applies?(_, _), do: false
+
+  @spec safe_to_existing_atom(String.t()) :: atom() | nil
+  defp safe_to_existing_atom(action_name) when is_binary(action_name) do
+    String.to_existing_atom(action_name)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp safe_to_existing_atom(_), do: nil
 end

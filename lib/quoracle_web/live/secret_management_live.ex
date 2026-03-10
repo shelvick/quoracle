@@ -18,7 +18,8 @@ defmodule QuoracleWeb.SecretManagementLive do
     DataHelpers,
     ValidationHelpers,
     ModelConfigHelpers,
-    ProfileHelpers
+    ProfileHelpers,
+    SystemConfigHelpers
   }
 
   @impl true
@@ -71,7 +72,8 @@ defmodule QuoracleWeb.SecretManagementLive do
         profiles: Repo.all(TableProfiles),
         profile_changeset: TableProfiles.changeset(%TableProfiles{}, %{}),
         selected_profile: nil,
-        skills_path: model_settings.skills_path
+        skills_path: model_settings.skills_path,
+        groves_path: model_settings.groves_path
       )
       |> DataHelpers.load_items()
 
@@ -368,27 +370,18 @@ defmodule QuoracleWeb.SecretManagementLive do
   end
 
   def handle_event("save_system_config", %{"system_config" => params}, socket) do
-    skills_path = Map.get(params, "skills_path", "")
+    {socket, errors} =
+      {socket, []}
+      |> SystemConfigHelpers.save_with_errors(&SystemConfigHelpers.handle_skills_path/2, params)
+      |> SystemConfigHelpers.save_with_errors(&SystemConfigHelpers.handle_groves_path/2, params)
 
     socket =
-      case String.trim(skills_path) do
-        "" ->
-          ConfigModelSettings.delete_skills_path()
+      case errors do
+        [] ->
+          put_flash(socket, :info, "System configuration saved")
 
-          socket
-          |> assign(:skills_path, nil)
-          |> put_flash(:info, "System configuration saved")
-
-        path ->
-          case ConfigModelSettings.set_skills_path(path) do
-            {:ok, saved_path} ->
-              socket
-              |> assign(:skills_path, saved_path)
-              |> put_flash(:info, "System configuration saved")
-
-            {:error, reason} ->
-              put_flash(socket, :error, "Error saving config: #{inspect(reason)}")
-          end
+        _ ->
+          put_flash(socket, :error, "Error saving system configuration")
       end
 
     {:noreply, socket}
@@ -489,9 +482,7 @@ defmodule QuoracleWeb.SecretManagementLive do
 
   # Display helper for capability_groups (Packet 5, feat-20260107-capability-groups)
   # Returns "all", "none (base only)", or comma-separated list per spec Section 4.3
-  defp display_capability_groups(groups) when is_list(groups) do
-    ProfileHelpers.format_groups_display(groups)
+  defp display_capability_groups(groups) do
+    SystemConfigHelpers.display_capability_groups(groups)
   end
-
-  defp display_capability_groups(_), do: "none (base only)"
 end

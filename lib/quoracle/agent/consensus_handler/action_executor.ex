@@ -317,13 +317,14 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
     [
       action_id: action_id,
       agent_id: state.agent_id,
-      task_id: Map.get(state, :task_id) || state.agent_id,
+      task_id: Map.get(state, :task_id),
       agent_pid: agent_pid,
       pubsub: Map.get(state, :pubsub),
       registry: Map.get(state, :registry),
       dynsup: Map.get(state, :dynsup),
       mcp_client: Map.get(state, :mcp_client),
-      parent_config: state,
+      parent_config: build_parent_config(state),
+      grove_skills_path: Map.get(state, :grove_skills_path),
       # Pass dismissing state to avoid GenServer callback deadlock in Spawn
       dismissing: Map.get(state, :dismissing, false),
       # Pass capability_groups for permission enforcement in Router (v2.0 system)
@@ -336,6 +337,13 @@ defmodule Quoracle.Agent.ConsensusHandler.ActionExecutor do
     ]
     |> maybe_put(:sandbox_owner, Map.get(state, :sandbox_owner))
     |> maybe_put(:spawn_complete_notify, Map.get(state, :spawn_complete_notify))
+  end
+
+  @spec build_parent_config(map()) :: map()
+  defp build_parent_config(state) do
+    parent_config = if is_struct(state), do: Map.from_struct(state), else: state
+
+    Map.put(parent_config, :skill_name, Helpers.primary_skill_name(parent_config))
   end
 
   # Conditionally add a key to opts when the value is non-nil

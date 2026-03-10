@@ -1562,8 +1562,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
       dynsup: dynsup,
       sandbox_owner: sandbox_owner
     } do
-      # This test verifies graceful degradation if DB unavailable
-      # For now, we'll test that mount doesn't crash with empty DB
+      # This test verifies graceful degradation if DB unavailable.
+      # It asserts mount succeeds and renders the empty-state UI.
       {:ok, view, html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
           session: %{

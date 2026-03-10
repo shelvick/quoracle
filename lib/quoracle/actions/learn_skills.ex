@@ -61,15 +61,7 @@ defmodule Quoracle.Actions.LearnSkills do
   end
 
   defp skill_to_metadata(skill) do
-    %{
-      name: skill.name,
-      permanent: true,
-      loaded_at: DateTime.utc_now(),
-      description: skill.description,
-      path: skill.path,
-      metadata: skill.metadata,
-      content: skill.content
-    }
+    Quoracle.Skills.Loader.skill_to_metadata(skill, permanent: true)
   end
 
   defp format_skills_content(skills) do

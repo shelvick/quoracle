@@ -60,6 +60,13 @@ defmodule Quoracle.Skills.LoaderTest do
     Path.join([System.tmp_dir!(), base_name, name])
   end
 
+  # Helper to check if running as root (root ignores file permissions).
+  # Used by GAP-3/GAP-4 permission tests to gracefully skip when root.
+  defp running_as_root? do
+    {uid_str, 0} = System.cmd("id", ["-u"])
+    String.trim(uid_str) == "0"
+  end
+
   # Helper to create skill with raw content (for testing malformed YAML)
   defp create_skill_raw(base_name, name, raw_content) do
     File.mkdir_p!(Path.join([System.tmp_dir!(), base_name, name]))
@@ -549,6 +556,563 @@ defmodule Quoracle.Skills.LoaderTest do
 
       assert length(skills) == 1
       assert hd(skills).name == "real-skill"
+    end
+  end
+
+  # =============================================================================
+  # R21-R26: Grove-Local Skill Resolution (v3.0)
+  # =============================================================================
+  #
+  # These tests verify the v3.0 contract: when a grove_skills_path is provided
+  # in opts, skills are searched there FIRST before falling back to the global
+  # skills directory. This enables groves to bundle their own skill definitions
+  # that shadow global skills of the same name.
+  #
+  # The integration audit found:
+  # (HIGH) SkillLoader resolves a single skills_path, so grove-local selection
+  #        replaces global rather than grove-first with global fallback.
+  # (HIGH) EventHandlers/TaskManager forward one path, so valid global skills
+  #        fail when absent from grove-local scope.
+  # (MEDIUM) No acceptance test for same-name grove skill shadowing global,
+  #          and no test for fallback to global when grove-local skill is missing.
+
+  # Helper to create a skill in a grove-local skills directory.
+  # Creates a separate temp dir for grove skills (not under the global skills_path).
+  # Inlines System.tmp_dir!() directly in File.* calls (for git hook static analysis)
+  defp create_grove_skill(grove_base_name, name, opts) do
+    File.mkdir_p!(Path.join([System.tmp_dir!(), grove_base_name, name]))
+
+    description = Keyword.get(opts, :description, "Grove skill description for #{name}")
+    content = Keyword.get(opts, :content, "# #{name}\n\nGrove-local content for #{name}")
+
+    skill_content = """
+    ---
+    name: #{name}
+    description: #{description}
+    ---
+
+    #{content}
+    """
+
+    File.write!(Path.join([System.tmp_dir!(), grove_base_name, name, "SKILL.md"]), skill_content)
+    Path.join([System.tmp_dir!(), grove_base_name, name])
+  end
+
+  describe "grove-local skill resolution (v3.0)" do
+    setup %{base_name: base_name} do
+      # Create a separate grove-local skills directory (isolated from global)
+      grove_base = "grove_skills_test/#{System.unique_integer([:positive])}"
+      grove_skills_dir = Path.join(System.tmp_dir!(), grove_base)
+      File.mkdir_p!(grove_skills_dir)
+
+      on_exit(fn -> File.rm_rf!(grove_skills_dir) end)
+
+      %{
+        grove_skills_path: grove_skills_dir,
+        grove_base: grove_base,
+        global_base: base_name
+      }
+    end
+
+    @tag :r21
+    test "R21: load_skill finds skill in grove_skills_path first", %{
+      skills_path: global_path,
+      global_base: global_base,
+      grove_skills_path: grove_path,
+      grove_base: grove_base
+    } do
+      # R21: WHEN grove_skills_path provided AND skill exists in grove
+      # THEN returns grove skill (not global)
+      # Create the same skill in both grove and global with different content
+      create_skill(global_base, "deploy", content: "# Deploy\n\nGlobal deployment skill")
+
+      create_grove_skill(grove_base, "deploy",
+        content: "# Deploy\n\nGrove-local deployment skill"
+      )
+
+      # When grove_skills_path is provided, should find grove version first
+      {:ok, skill} =
+        Loader.load_skill("deploy",
+          skills_path: global_path,
+          grove_skills_path: grove_path
+        )
+
+      assert skill.name == "deploy"
+      assert skill.content =~ "Grove-local deployment skill"
+      refute skill.content =~ "Global deployment skill"
+    end
+
+    @tag :r22
+    test "R22: load_skill falls back to global when not in grove", %{
+      skills_path: global_path,
+      global_base: global_base,
+      grove_skills_path: grove_path,
+      grove_base: _grove_base
+    } do
+      # R22: WHEN grove_skills_path provided AND skill NOT in grove THEN returns global skill
+      create_skill(global_base, "code-review",
+        content: "# Code Review\n\nGlobal review checklist"
+      )
+
+      # Grove directory exists but does NOT contain "code-review"
+      {:ok, skill} =
+        Loader.load_skill("code-review",
+          skills_path: global_path,
+          grove_skills_path: grove_path
+        )
+
+      assert skill.name == "code-review"
+      assert skill.content =~ "Global review checklist"
+    end
+
+    @tag :r23
+    test "R23: load_skill without grove_skills_path uses global only", %{
+      skills_path: global_path,
+      global_base: global_base
+    } do
+      # R23: WHEN grove_skills_path not in opts THEN behavior identical to v2.0
+      create_skill(global_base, "deploy", content: "# Deploy\n\nGlobal deploy content")
+
+      {:ok, skill} = Loader.load_skill("deploy", skills_path: global_path)
+
+      assert skill.name == "deploy"
+      assert skill.content =~ "Global deploy content"
+    end
+
+    @tag :r25
+    test "R25: non-existent grove_skills_path falls back to global", %{
+      skills_path: global_path,
+      global_base: global_base
+    } do
+      # R25: WHEN grove_skills_path points to non-existent directory THEN silently uses global only
+      nonexistent_grove = "/nonexistent/grove/skills/#{System.unique_integer([:positive])}"
+
+      create_skill(global_base, "deploy", content: "# Deploy\n\nGlobal deploy fallback")
+
+      {:ok, skill} =
+        Loader.load_skill("deploy",
+          skills_path: global_path,
+          grove_skills_path: nonexistent_grove
+        )
+
+      assert skill.name == "deploy"
+      assert skill.content =~ "Global deploy fallback"
+
+      # list_skills should also work with nonexistent grove path
+      {:ok, skills} =
+        Loader.list_skills(
+          skills_path: global_path,
+          grove_skills_path: nonexistent_grove
+        )
+
+      assert Enum.any?(skills, &(&1.name == "deploy"))
+    end
+
+    @tag :r24
+    test "R24: list_skills merges grove and global with grove priority", %{
+      skills_path: global_path,
+      global_base: global_base,
+      grove_skills_path: grove_path,
+      grove_base: grove_base
+    } do
+      # R24: WHEN grove and global both have skills
+      # THEN list returns union with grove taking precedence for same-name skills
+      # Global has: deploy, code-review
+      create_skill(global_base, "deploy", description: "Global deploy")
+
+      create_skill(global_base, "code-review", description: "Global code review")
+
+      # Grove has: deploy (shadows global), testing (new)
+      create_grove_skill(grove_base, "deploy", description: "Grove deploy")
+
+      create_grove_skill(grove_base, "testing", description: "Grove testing")
+
+      {:ok, skills} =
+        Loader.list_skills(
+          skills_path: global_path,
+          grove_skills_path: grove_path
+        )
+
+      skill_names = Enum.map(skills, & &1.name) |> Enum.sort()
+
+      # Should have all 3 unique skills: code-review (global), deploy (grove), testing (grove)
+      assert "code-review" in skill_names
+      assert "deploy" in skill_names
+      assert "testing" in skill_names
+      assert length(skills) == 3
+
+      # deploy should be grove version (description = "Grove deploy")
+      deploy_skill = Enum.find(skills, &(&1.name == "deploy"))
+      assert deploy_skill.description == "Grove deploy"
+    end
+
+    @tag :r26
+    @tag :acceptance
+    test "R26: grove skill shadows global skill of same name", %{
+      skills_path: global_path,
+      global_base: global_base,
+      grove_skills_path: grove_path,
+      grove_base: grove_base
+    } do
+      # R26 [SYSTEM]: WHEN grove and global both have a skill named "deploy"
+      # with different content THEN load_skill returns grove version content
+      # AND list_skills shows grove version for that name
+      #
+      # This is the acceptance test verifying the complete v3.0 contract:
+      # grove-local skills shadow same-name globals, AND global skills
+      # remain available as fallback when not present in grove-local scope.
+
+      # Global has: deploy (v1) and code-review
+      create_skill(global_base, "deploy",
+        description: "Global deployment v1",
+        content: "# Deploy\n\nGlobal deployment instructions v1"
+      )
+
+      create_skill(global_base, "code-review",
+        description: "Global code review",
+        content: "# Code Review\n\nGlobal review checklist"
+      )
+
+      # Grove has: deploy (v2) -- shadows global deploy
+      create_grove_skill(grove_base, "deploy",
+        description: "Grove deployment v2",
+        content: "# Deploy\n\nGrove-specific deployment for this project"
+      )
+
+      opts = [skills_path: global_path, grove_skills_path: grove_path]
+
+      # 1. load_skill("deploy") returns grove version (shadow)
+      {:ok, deploy} = Loader.load_skill("deploy", opts)
+      assert deploy.content =~ "Grove-specific deployment"
+      refute deploy.content =~ "Global deployment instructions"
+
+      # 2. load_skill("code-review") returns global version (fallback)
+      {:ok, review} = Loader.load_skill("code-review", opts)
+      assert review.content =~ "Global review checklist"
+
+      # 3. list_skills returns merged set with grove priority
+      {:ok, all_skills} = Loader.list_skills(opts)
+      names = Enum.map(all_skills, & &1.name) |> Enum.sort()
+      assert names == ["code-review", "deploy"]
+
+      # 4. deploy in listing is grove version
+      listed_deploy = Enum.find(all_skills, &(&1.name == "deploy"))
+      assert listed_deploy.description == "Grove deployment v2"
+      refute listed_deploy.description =~ "Global"
+
+      # 5. code-review in listing is global version (no grove version exists)
+      listed_review = Enum.find(all_skills, &(&1.name == "code-review"))
+      assert listed_review.description == "Global code review"
+    end
+
+    test "load_skills resolves skills from both grove and global", %{
+      skills_path: global_path,
+      global_base: global_base,
+      grove_skills_path: grove_path,
+      grove_base: grove_base
+    } do
+      # Integration: load_skills/2 (multi-skill) should also respect grove priority
+      create_skill(global_base, "deploy", content: "# Deploy\n\nGlobal deploy")
+
+      create_skill(global_base, "code-review", content: "# Code Review\n\nGlobal review")
+
+      create_grove_skill(grove_base, "deploy", content: "# Deploy\n\nGrove deploy")
+
+      {:ok, skills} =
+        Loader.load_skills(["deploy", "code-review"],
+          skills_path: global_path,
+          grove_skills_path: grove_path
+        )
+
+      assert length(skills) == 2
+
+      deploy = Enum.find(skills, &(&1.name == "deploy"))
+      review = Enum.find(skills, &(&1.name == "code-review"))
+
+      assert deploy.content =~ "Grove deploy"
+      assert review.content =~ "Global review"
+    end
+  end
+
+  # =============================================================================
+  # GAP-3: Bang File Operations - Permission Denied Handling (MEDIUM)
+  # =============================================================================
+  #
+  # Integration audit found that:
+  # - list_skills_in_dir/1 (line 168) uses File.ls!/1 which crashes on permission-denied
+  # - load_skill_from_dir/1 (line 193) uses File.read!/1 which crashes on unreadable SKILL.md
+  # - load_skill_metadata/2 (line 218) uses File.read!/1 which crashes on unreadable SKILL.md
+  #
+  # These should return {:error, _} tuples instead of crashing, enabling graceful
+  # degradation when filesystem permissions are restrictive.
+  #
+  # NOTE: These tests use File.chmod to make files/directories unreadable. This
+  # requires the test process to NOT be running as root (root ignores permissions).
+  # The tests skip gracefully if running as root.
+
+  describe "bang file operations - permission denied (GAP-3)" do
+    @tag :gap3
+    test "GAP-3a: list_skills graceful on unreadable directory",
+         %{base_name: base_name} do
+      # GAP-3a: WHEN list_skills/1 called with a directory that exists but has
+      # no read permission THEN returns {:ok, []} instead of crashing.
+      #
+      # Current behavior: File.ls!/1 raises %File.Error{reason: :eacces}
+      # Expected behavior: {:ok, []} graceful empty list
+
+      # Uses System.tmp_dir!() inline for git hook static analysis
+      sub = "#{base_name}/gap3a"
+      dir = Path.join(System.tmp_dir!(), sub)
+      File.mkdir_p!(Path.join([System.tmp_dir!(), sub, "some-skill"]))
+
+      File.write!(Path.join([System.tmp_dir!(), sub, "some-skill", "SKILL.md"]), """
+      ---
+      name: some-skill
+      description: A skill that should not be reachable
+      ---
+      Content
+      """)
+
+      # Remove read permission from the directory
+      File.chmod!(Path.join(System.tmp_dir!(), sub), 0o000)
+
+      on_exit(fn ->
+        File.chmod!(Path.join(System.tmp_dir!(), sub), 0o755)
+        File.rm_rf!(Path.join(System.tmp_dir!(), sub))
+      end)
+
+      if running_as_root?() do
+        assert true
+      else
+        # Currently crashes with File.Error from File.ls!/1 (line 168)
+        assert {:ok, _skills} = Loader.list_skills(skills_path: dir)
+      end
+    end
+
+    @tag :gap3
+    test "GAP-3b: load_skill graceful on unreadable SKILL.md",
+         %{base_name: base_name} do
+      # GAP-3b: WHEN load_skill/2 is called for a skill whose SKILL.md has no
+      # read permission THEN returns {:error, _} instead of crashing.
+      #
+      # Current behavior: File.read!/1 raises %File.Error{reason: :eacces}
+
+      sub = "#{base_name}/gap3b"
+      dir = Path.join(System.tmp_dir!(), sub)
+      File.mkdir_p!(Path.join([System.tmp_dir!(), sub, "locked-skill"]))
+
+      File.write!(Path.join([System.tmp_dir!(), sub, "locked-skill", "SKILL.md"]), """
+      ---
+      name: locked-skill
+      description: A skill with unreadable manifest
+      ---
+      Content that cannot be read
+      """)
+
+      File.chmod!(Path.join([System.tmp_dir!(), sub, "locked-skill", "SKILL.md"]), 0o000)
+
+      on_exit(fn ->
+        File.chmod!(Path.join([System.tmp_dir!(), sub, "locked-skill", "SKILL.md"]), 0o644)
+        File.rm_rf!(Path.join(System.tmp_dir!(), sub))
+      end)
+
+      if running_as_root?() do
+        assert true
+      else
+        result = Loader.load_skill("locked-skill", skills_path: dir)
+
+        assert match?({:error, _}, result),
+               "Expected {:error, _} when SKILL.md is unreadable, " <>
+                 "got: #{inspect(result)}."
+      end
+    end
+
+    @tag :gap3
+    test "GAP-3c: list_skills skips unreadable individual SKILL.md",
+         %{base_name: base_name} do
+      # GAP-3c: WHEN one skill's SKILL.md is unreadable but others are fine
+      # THEN returns the readable skills (graceful degradation).
+      #
+      # Current behavior: load_skill_metadata/2 calls File.read!/1 which raises
+
+      sub = "#{base_name}/gap3c"
+      dir = Path.join(System.tmp_dir!(), sub)
+
+      # Create readable skill
+      File.mkdir_p!(Path.join([System.tmp_dir!(), sub, "readable-skill"]))
+
+      File.write!(Path.join([System.tmp_dir!(), sub, "readable-skill", "SKILL.md"]), """
+      ---
+      name: readable-skill
+      description: This skill is readable
+      ---
+      Readable content
+      """)
+
+      # Create unreadable skill
+      File.mkdir_p!(Path.join([System.tmp_dir!(), sub, "locked-skill"]))
+
+      File.write!(Path.join([System.tmp_dir!(), sub, "locked-skill", "SKILL.md"]), """
+      ---
+      name: locked-skill
+      description: This skill has no read permission
+      ---
+      Locked content
+      """)
+
+      File.chmod!(Path.join([System.tmp_dir!(), sub, "locked-skill", "SKILL.md"]), 0o000)
+
+      on_exit(fn ->
+        File.chmod!(Path.join([System.tmp_dir!(), sub, "locked-skill", "SKILL.md"]), 0o644)
+        File.rm_rf!(Path.join(System.tmp_dir!(), sub))
+      end)
+
+      if running_as_root?() do
+        assert true
+      else
+        # Currently crashes with File.Error from File.read!/1 (line 218)
+        {:ok, skills} = Loader.list_skills(skills_path: dir)
+
+        assert Enum.any?(skills, &(&1.name == "readable-skill")),
+               "Expected readable-skill in results"
+
+        refute Enum.any?(skills, &(&1.name == "locked-skill")),
+               "Unreadable skill should be excluded"
+      end
+    end
+  end
+
+  # =============================================================================
+  # GAP-4: Resilience Tests for Unreadable Skill Manifests (MEDIUM)
+  # =============================================================================
+  #
+  # Extended resilience tests covering additional permission scenarios.
+  # These tests verify graceful degradation rather than crashes.
+
+  describe "resilience - unreadable skill manifests (GAP-4)" do
+    @tag :gap4
+    test "GAP-4a: list_skills with all-unreadable skills",
+         %{base_name: base_name} do
+      # GAP-4a: WHEN ALL skills have unreadable SKILL.md files
+      # THEN returns {:ok, []} instead of crashing.
+
+      sub = "#{base_name}/gap4a"
+      dir = Path.join(System.tmp_dir!(), sub)
+
+      for name <- ["locked-a", "locked-b"] do
+        File.mkdir_p!(Path.join([System.tmp_dir!(), sub, name]))
+
+        File.write!(Path.join([System.tmp_dir!(), sub, name, "SKILL.md"]), """
+        ---
+        name: #{name}
+        description: #{name} description
+        ---
+        Content for #{name}
+        """)
+
+        File.chmod!(Path.join([System.tmp_dir!(), sub, name, "SKILL.md"]), 0o000)
+      end
+
+      on_exit(fn ->
+        for name <- ["locked-a", "locked-b"] do
+          File.chmod!(Path.join([System.tmp_dir!(), sub, name, "SKILL.md"]), 0o644)
+        end
+
+        File.rm_rf!(Path.join(System.tmp_dir!(), sub))
+      end)
+
+      if running_as_root?() do
+        assert true
+      else
+        result = Loader.list_skills(skills_path: dir)
+
+        assert match?({:ok, []}, result),
+               "Expected {:ok, []} when all SKILL.md files are unreadable, " <>
+                 "got: #{inspect(result)}."
+      end
+    end
+
+    @tag :gap4
+    test "GAP-4b: search/2 graceful on unreadable directory",
+         %{base_name: base_name} do
+      # GAP-4b: WHEN search/2 is called with an unreadable directory
+      # THEN returns [] instead of crashing.
+
+      sub = "#{base_name}/gap4b"
+      dir = Path.join(System.tmp_dir!(), sub)
+      File.mkdir_p!(Path.join([System.tmp_dir!(), sub, "some-skill"]))
+
+      File.write!(Path.join([System.tmp_dir!(), sub, "some-skill", "SKILL.md"]), """
+      ---
+      name: some-skill
+      description: Test skill
+      ---
+      Content
+      """)
+
+      File.chmod!(Path.join(System.tmp_dir!(), sub), 0o000)
+
+      on_exit(fn ->
+        File.chmod!(Path.join(System.tmp_dir!(), sub), 0o755)
+        File.rm_rf!(Path.join(System.tmp_dir!(), sub))
+      end)
+
+      if running_as_root?() do
+        assert true
+      else
+        result = Loader.search(["test"], skills_path: dir)
+
+        assert result == [],
+               "Expected empty search results for unreadable directory, " <>
+                 "got: #{inspect(result)}"
+      end
+    end
+
+    @tag :gap4
+    test "GAP-4c: load_skills/2 graceful when one skill unreadable",
+         %{base_name: base_name} do
+      # GAP-4c: WHEN load_skills/2 has one unreadable SKILL.md
+      # THEN returns {:error, _} instead of crashing.
+
+      sub = "#{base_name}/gap4c"
+      dir = Path.join(System.tmp_dir!(), sub)
+
+      File.mkdir_p!(Path.join([System.tmp_dir!(), sub, "good-skill"]))
+
+      File.write!(Path.join([System.tmp_dir!(), sub, "good-skill", "SKILL.md"]), """
+      ---
+      name: good-skill
+      description: Readable skill
+      ---
+      Good content
+      """)
+
+      File.mkdir_p!(Path.join([System.tmp_dir!(), sub, "bad-skill"]))
+
+      File.write!(Path.join([System.tmp_dir!(), sub, "bad-skill", "SKILL.md"]), """
+      ---
+      name: bad-skill
+      description: Unreadable skill
+      ---
+      Bad content
+      """)
+
+      File.chmod!(Path.join([System.tmp_dir!(), sub, "bad-skill", "SKILL.md"]), 0o000)
+
+      on_exit(fn ->
+        File.chmod!(Path.join([System.tmp_dir!(), sub, "bad-skill", "SKILL.md"]), 0o644)
+        File.rm_rf!(Path.join(System.tmp_dir!(), sub))
+      end)
+
+      if running_as_root?() do
+        assert true
+      else
+        result = Loader.load_skills(["good-skill", "bad-skill"], skills_path: dir)
+
+        assert match?({:error, _}, result),
+               "Expected {:error, _} when one skill is unreadable, " <>
+                 "got: #{inspect(result)}."
+      end
     end
   end
 end

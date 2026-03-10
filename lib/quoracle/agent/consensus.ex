@@ -5,6 +5,7 @@ defmodule Quoracle.Agent.Consensus do
   Treats actions and parameters as atomic units throughout.
   """
 
+  alias Quoracle.Actions.Validator
   alias Quoracle.Models.ModelQuery
   alias Quoracle.Consensus.{ActionParser, Aggregator, Manager, Result, Temperature}
 
@@ -119,7 +120,14 @@ defmodule Quoracle.Agent.Consensus do
             end
 
             non_nil_responses = Enum.filter(parsed_responses, &(&1 != nil))
-            {valid_responses, invalid_count} = filter_invalid_responses(non_nil_responses)
+
+            validator_opts = [
+              parent_config: updated_state,
+              grove_topology: Map.get(updated_state, :grove_topology)
+            ]
+
+            {valid_responses, invalid_count} =
+              filter_invalid_responses(non_nil_responses, validator_opts)
 
             cond do
               valid_responses == [] and invalid_count > 0 ->
@@ -233,7 +241,7 @@ defmodule Quoracle.Agent.Consensus do
 
         non_nil_responses = Enum.filter(parsed_responses, &(&1 != nil))
 
-        # Filter invalid responses before clustering
+        # Filter invalid responses before clustering (no topology context on messages path)
         {valid_responses, invalid_count} = filter_invalid_responses(non_nil_responses)
 
         cond do
@@ -257,8 +265,32 @@ defmodule Quoracle.Agent.Consensus do
   defdelegate extract_prompt_for_context(messages), to: Quoracle.Agent.Consensus.MessageUtils
 
   @doc false
-  @spec filter_invalid_responses([map()]) :: {[map()], non_neg_integer()}
-  defdelegate filter_invalid_responses(responses), to: Quoracle.Agent.Consensus.MessageUtils
+  @spec filter_invalid_responses([map()], keyword()) :: {[map()], non_neg_integer()}
+  def filter_invalid_responses(responses, validator_opts \\ []) do
+    # Use reduce to both filter AND apply validated/coerced params
+    # Bug fix: Previously discarded coerced params (e.g., %{} -> [] for lists)
+    {valid_reversed, invalid_count} =
+      Enum.reduce(responses, {[], 0}, fn response, {valid_acc, inv_count} ->
+        action = response.action
+        params = response.params
+
+        case Validator.validate_params(action, params, validator_opts) do
+          {:ok, validated_params} ->
+            # Use validated params with coercions applied (e.g., %{} -> [] for list types)
+            updated_response = %{response | params: validated_params}
+            {[updated_response | valid_acc], inv_count}
+
+          {:error, reason} ->
+            Logger.warning(
+              "Filtered invalid consensus response: action=#{action}, reason=#{inspect(reason)}"
+            )
+
+            {valid_acc, inv_count + 1}
+        end
+      end)
+
+    {Enum.reverse(valid_reversed), invalid_count}
+  end
 
   defp execute_consensus_process(responses, context, round) do
     clusters = Aggregator.cluster_responses(responses)
@@ -404,29 +436,12 @@ defmodule Quoracle.Agent.Consensus do
     else
       case ModelQuery.query_models(messages, model_pool, build_query_options(opts)) do
         {:ok, result} ->
-          maybe_log_responses(result, opts)
+          ResponseLogger.maybe_log_responses(result, opts)
           {:ok, result.successful_responses}
 
         {:error, reason} ->
           {:error, reason}
       end
-    end
-  end
-
-  defp maybe_log_responses(result, opts) do
-    if opts[:agent_id] && opts[:pubsub] do
-      Quoracle.PubSub.AgentEvents.broadcast_log(
-        opts[:agent_id],
-        :debug,
-        "Received #{length(result.successful_responses)} LLM responses",
-        %{
-          raw_responses: ResponseLogger.slim_responses_for_logging(result.successful_responses),
-          failed_models: result.failed_models,
-          total_latency_ms: result.total_latency_ms,
-          aggregate_usage: result.aggregate_usage
-        },
-        opts[:pubsub]
-      )
     end
   end
 

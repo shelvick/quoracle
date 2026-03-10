@@ -30,39 +30,7 @@ defmodule Quoracle.Agent.TokenManager do
 
   def estimate_history_tokens(history) when is_list(history) do
     Enum.reduce(history, 0, fn entry, acc ->
-      content =
-        case entry do
-          # DB-format: string keys from PostgreSQL/Ecto JSON storage
-          %{"content" => %{"action" => _, "params" => params, "reasoning" => reasoning}} ->
-            "#{inspect(params)} #{reasoning}"
-
-          %{"content" => content} when is_binary(content) ->
-            content
-
-          %{"content" => nil} ->
-            ""
-
-          %{"content" => content} ->
-            inspect(content)
-
-          # In-memory format: atom keys (backward compatibility)
-          %{content: %{action: _, params: params, reasoning: reasoning}} ->
-            "#{inspect(params)} #{reasoning}"
-
-          %{content: content} when is_binary(content) ->
-            content
-
-          %{content: nil} ->
-            ""
-
-          %{content: content} ->
-            inspect(content)
-
-          _ ->
-            ""
-        end
-
-      acc + estimate_tokens(content)
+      acc + estimate_tokens(extract_entry_content(entry))
     end)
   end
 
@@ -228,6 +196,11 @@ defmodule Quoracle.Agent.TokenManager do
         new_rest = tl(rest)
 
         cond do
+          new_total > total_tokens and removed == [] ->
+            # v9.0 progress guarantee: always make forward progress for non-empty history.
+            # If the oldest entry alone exceeds the cap, force-include it instead of returning [].
+            {:halt, {new_removed, new_total, new_rest}}
+
           new_total > total_tokens ->
             # Would exceed cap — stop WITHOUT this entry
             {:halt, {removed, tokens_so_far, rest}}
@@ -286,41 +259,27 @@ defmodule Quoracle.Agent.TokenManager do
 
   # Estimate tokens for a single history entry
   # Supports both string keys (DB-format) and atom keys (in-memory)
-  defp estimate_entry_tokens(entry) do
-    content =
-      case entry do
-        # DB-format: string keys from PostgreSQL/Ecto JSON storage
-        %{"content" => %{"action" => _, "params" => params, "reasoning" => reasoning}} ->
-          "#{inspect(params)} #{reasoning}"
+  defp estimate_entry_tokens(entry), do: estimate_tokens(extract_entry_content(entry))
 
-        %{"content" => content} when is_binary(content) ->
-          content
+  # Extract text content from a history entry for token estimation.
+  # Supports both string keys (DB-format from PostgreSQL/Ecto JSON storage)
+  # and atom keys (in-memory format for backward compatibility).
+  defp extract_entry_content(%{
+         "content" => %{"action" => _, "params" => params, "reasoning" => reasoning}
+       }),
+       do: "#{inspect(params)} #{reasoning}"
 
-        %{"content" => nil} ->
-          ""
+  defp extract_entry_content(%{"content" => content}) when is_binary(content), do: content
+  defp extract_entry_content(%{"content" => nil}), do: ""
+  defp extract_entry_content(%{"content" => content}), do: inspect(content)
 
-        %{"content" => content} ->
-          inspect(content)
+  defp extract_entry_content(%{content: %{action: _, params: params, reasoning: reasoning}}),
+    do: "#{inspect(params)} #{reasoning}"
 
-        # In-memory format: atom keys (backward compatibility)
-        %{content: %{action: _, params: params, reasoning: reasoning}} ->
-          "#{inspect(params)} #{reasoning}"
-
-        %{content: content} when is_binary(content) ->
-          content
-
-        %{content: nil} ->
-          ""
-
-        %{content: content} ->
-          inspect(content)
-
-        _ ->
-          ""
-      end
-
-    estimate_tokens(content)
-  end
+  defp extract_entry_content(%{content: content}) when is_binary(content), do: content
+  defp extract_entry_content(%{content: nil}), do: ""
+  defp extract_entry_content(%{content: content}), do: inspect(content)
+  defp extract_entry_content(_), do: ""
 
   @doc """
   Gets the context limit for a model from LLMDB.
@@ -371,13 +330,15 @@ defmodule Quoracle.Agent.TokenManager do
     end)
   end
 
-  # Find a model in LLMDB by its spec string
-  defp find_model_by_spec(model_spec) do
-    LLMDB.models()
-    |> Enum.find(fn model -> LLMDB.Model.spec(model) == model_spec end)
-    |> case do
-      nil -> :error
-      model -> {:ok, Map.from_struct(model)}
+  # Find a model in LLMDB by its spec string.
+  # Uses LLMDB.model/1 which normalizes provider names (e.g., "google-vertex" → :google_vertex)
+  # preventing mismatches between hyphenated credential specs and underscored LLMDB atoms.
+  defp find_model_by_spec(model_spec) when is_binary(model_spec) do
+    case LLMDB.model(model_spec) do
+      {:ok, model} -> {:ok, Map.from_struct(model)}
+      {:error, _} -> :error
     end
   end
+
+  defp find_model_by_spec(_), do: :error
 end

@@ -5,10 +5,10 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
   Extracted from AGENT_Consensus to maintain <500 line modules.
   """
 
-  alias Quoracle.Models.ModelQuery
   alias Quoracle.Agent.{ContextManager, TokenManager}
   alias Quoracle.Agent.Consensus.MessageBuilder
-  alias Quoracle.Agent.Consensus.PerModelQuery.{Condensation, Helpers}
+  alias Quoracle.Agent.Consensus.PerModelQuery.{Condensation, Helpers, StateMerge}
+  alias Quoracle.Agent.Core.Persistence
   alias Quoracle.Consensus.{ActionParser, Aggregator, Result, Temperature}
   alias Quoracle.Utils.JsonExtractor
 
@@ -18,9 +18,10 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
   @output_floor 4096
 
   # Safety margin for token estimation variance across tokenizers.
-  # cl100k_base undercounts for non-GPT models (e.g., GLM, DeepSeek) by ~1-5%.
-  # Combined with LLMDB context window inaccuracies, this prevents overflow rejections.
-  @token_safety_margin 0.05
+  # cl100k_base undercounts for non-GPT models by up to ~9% (observed 8.7% for GLM-5).
+  # Per-message overhead (~4 tokens/msg for role markers) adds ~1-2% unaccounted.
+  # Combined with LLMDB context window inaccuracies (up to ~1%), 12% absorbs all three.
+  @token_safety_margin 0.12
 
   # Delegate helper functions
   defdelegate context_length_error?(error), to: Helpers
@@ -54,7 +55,7 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
   end
 
   defp query_model_with_retry_logic(state, model_id, opts) do
-    lightweight? = lightweight_test_query?(opts)
+    lightweight? = Helpers.lightweight_test_query?(opts)
 
     # Skip token counting in message builder for lightweight mode
     build_opts =
@@ -77,8 +78,10 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
 
     query_opts = build_query_options(model_id, Keyword.put(opts, :max_tokens, dynamic_max_tokens))
 
-    # Support injectable model_query_fn for testing
-    query_fn = Keyword.get(opts, :model_query_fn, &ModelQuery.query_models/3)
+    # Support injectable model_query_fn for testing.
+    # In test mode without an injected query function, use deterministic mock responses
+    # instead of hitting external providers.
+    query_fn = Helpers.resolve_query_fn(opts)
 
     case query_fn.(messages_with_system, [model_id], query_opts) do
       {:ok, %{successful_responses: [response | _]}} ->
@@ -147,31 +150,49 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
           {list(map()), map()}
   defp maybe_proactive_condense(messages, state, model_id, opts) do
     context_window = TokenManager.get_model_context_limit(model_id)
-    input_tokens = TokenManager.estimate_all_messages_tokens(messages)
-    buffered_input = ceil(input_tokens * (1 + @token_safety_margin))
-    available_output = context_window - buffered_input
+    available_output = available_output_budget(messages, context_window)
 
     if available_output < @output_floor do
-      # Condense and rebuild messages
-      condensed_state = condense_model_history_with_reflection(state, model_id, opts)
-      rebuilt_messages = build_query_messages(condensed_state, model_id, opts)
+      condense_until_floor_or_stable(messages, state, model_id, opts, context_window)
+    else
+      {messages, state}
+    end
+  end
 
-      # Check if condensation was sufficient
-      post_input_tokens = TokenManager.estimate_all_messages_tokens(rebuilt_messages)
-      post_buffered = ceil(post_input_tokens * (1 + @token_safety_margin))
-      post_available = context_window - post_buffered
+  defp condense_until_floor_or_stable(_messages, state, model_id, opts, context_window) do
+    condensed_state = condense_model_history_with_reflection(state, model_id, opts)
+    rebuilt_messages = build_query_messages(condensed_state, model_id, opts)
+    post_available = available_output_budget(rebuilt_messages, context_window)
 
-      if post_available < @output_floor do
+    if post_available >= @output_floor do
+      {rebuilt_messages, condensed_state}
+    else
+      old_len = state.model_histories |> Map.get(model_id, []) |> length()
+      new_len = condensed_state.model_histories |> Map.get(model_id, []) |> length()
+
+      if new_len < old_len do
+        condense_until_floor_or_stable(
+          rebuilt_messages,
+          condensed_state,
+          model_id,
+          opts,
+          context_window
+        )
+      else
         Logger.warning(
           "Dynamic max_tokens: available output #{post_available} still below " <>
             "floor #{@output_floor} after condensation for model #{model_id}"
         )
-      end
 
-      {rebuilt_messages, condensed_state}
-    else
-      {messages, state}
+        {rebuilt_messages, condensed_state}
+      end
     end
+  end
+
+  defp available_output_budget(messages, context_window) do
+    input_tokens = TokenManager.estimate_all_messages_tokens(messages)
+    buffered_input = ceil(input_tokens * (1 + @token_safety_margin))
+    context_window - buffered_input
   end
 
   @doc """
@@ -198,65 +219,71 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
   @spec query_models_with_per_model_histories(map(), list(String.t()), keyword()) ::
           {:ok, list(), map()} | {:error, atom()}
   def query_models_with_per_model_histories(state, model_pool, opts) do
+    # In test mode, preserve test-specific hooks and limits from state as a defensive fallback.
+    # This prevents option loss when callers construct consensus opts manually.
+    opts = Helpers.merge_state_test_opts(state, opts)
+
     # Use production path when model_query_fn is provided (allows test message capture)
     has_custom_query_fn = Keyword.has_key?(opts, :model_query_fn)
 
-    if test_mode?(opts) && !has_custom_query_fn do
+    if Helpers.test_mode?(opts) && !has_custom_query_fn &&
+         !Keyword.get(opts, :force_token_management, false) do
       # Check for simulate_failure flag first
-      if Keyword.get(opts, :simulate_failure, false) do
-        {:error, :all_models_failed}
-      else
-        # In test mode, return mock results with proper JSON format
-        # Thread state through condensation for each model
-        {results, final_state} =
-          Enum.map_reduce(model_pool, state, fn model_id, acc_state ->
-            # Check condensation first (updates state if needed)
-            updated_state = maybe_condense_for_model(acc_state, model_id, opts)
+      # When simulate_failure is an atom (e.g., :all_responses_invalid),
+      # return that specific error. When it's `true`, default to :all_models_failed.
+      case Keyword.get(opts, :simulate_failure, false) do
+        false ->
+          # In test mode, return mock results with proper JSON format
+          # Thread state through condensation for each model
+          {results, final_state} =
+            Enum.map_reduce(model_pool, state, fn model_id, acc_state ->
+              # Check condensation first (updates state if needed)
+              updated_state = maybe_condense_for_model(acc_state, model_id, opts)
 
-            # Build messages from this model's history (still exercised in test mode)
-            _messages = ContextManager.build_conversation_messages(updated_state, model_id)
+              # Build messages from this model's history (still exercised in test mode)
+              _messages = ContextManager.build_conversation_messages(updated_state, model_id)
 
-            # Return mock response with valid JSON content
-            response_json =
-              Jason.encode!(%{
-                "action" => "orient",
-                "params" => %{
-                  "current_situation" => "Processing task",
-                  "goal_clarity" => "Clear objectives",
-                  "available_resources" => "Full capabilities",
-                  "key_challenges" => "None identified",
-                  "delegation_consideration" => "none"
-                },
-                "reasoning" => "Mock reasoning for #{model_id}",
-                "wait" => true
-              })
+              {Helpers.mock_successful_response(model_id), updated_state}
+            end)
 
-            {%{model: model_id, content: response_json}, updated_state}
-          end)
+          {:ok, results, final_state}
 
-        {:ok, results, final_state}
+        true ->
+          {:error, :all_models_failed}
+
+        error_atom when is_atom(error_atom) ->
+          {:error, error_atom}
       end
     else
-      # Production path - query each model, threading state through
-      lightweight? = lightweight_test_query?(opts)
+      # Production path - query models concurrently
+      lightweight? = Helpers.lightweight_test_query?(opts)
+
+      # Suppress per-model persistence during parallel queries
+      # (each model's condensation would write ALL models' state to the same DB row,
+      # causing lost-update race conditions). Single persist after merge.
+      parallel_opts = Keyword.put(opts, :persist_fn, fn _state -> :ok end)
 
       {results, final_state} =
-        Enum.map_reduce(model_pool, state, fn model_id, acc_state ->
-          # Skip condensation check for lightweight test queries (no tiktoken/LLMDB)
-          pre_query_state =
-            if lightweight?,
-              do: acc_state,
-              else: maybe_condense_for_model(acc_state, model_id, opts)
+        if length(model_pool) == 1 do
+          # Single model: skip Task overhead, call directly
+          # Uses parallel_opts (no-op persist_fn) so the deferred persist below
+          # is the only persist call — same as the multi-model path.
+          [model_id] = model_pool
 
-          # Query returns state to propagate any condensation from retry path
-          {result, post_query_state} =
-            case query_single_model_with_retry(pre_query_state, model_id, opts) do
-              {:ok, response, new_state} -> {{:ok, model_id, response}, new_state}
-              {:error, reason, new_state} -> {{:error, model_id, reason}, new_state}
-            end
+          {result, post_state} =
+            query_single_model_in_pool(state, model_id, lightweight?, parallel_opts)
 
-          {result, post_query_state}
-        end)
+          {[result], post_state}
+        else
+          # Multiple models: parallel fan-out
+          query_models_parallel(state, model_pool, lightweight?, parallel_opts)
+        end
+
+      # Persist ACE state once after all models complete (if any condensation occurred)
+      if StateMerge.state_changed?(state, final_state) do
+        persist_fn = Keyword.get(opts, :persist_fn, &Persistence.persist_ace_state/1)
+        persist_fn.(final_state)
+      end
 
       # Log failures before filtering them out
       failed = Enum.filter(results, &match?({:error, _, _}, &1))
@@ -274,6 +301,58 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
       else
         {:ok, responses, final_state}
       end
+    end
+  end
+
+  # Parallel fan-out: spawn a Task per model, await all, merge state slices.
+  # Traps exits to prevent linked Task crashes from killing the caller before
+  # Task.await_many can handle them, then restores the original trap_exit flag.
+  @spec query_models_parallel(map(), list(String.t()), boolean(), keyword()) ::
+          {list(), map()}
+  defp query_models_parallel(state, model_pool, lightweight?, opts) do
+    sandbox_owner = Keyword.get(opts, :sandbox_owner)
+    old_trap = Process.flag(:trap_exit, true)
+
+    tasks =
+      Enum.map(model_pool, fn model_id ->
+        Task.async(fn ->
+          if sandbox_owner do
+            Ecto.Adapters.SQL.Sandbox.allow(Quoracle.Repo, sandbox_owner, self())
+          end
+
+          query_single_model_in_pool(state, model_id, lightweight?, opts)
+        end)
+      end)
+
+    task_results =
+      try do
+        Task.await_many(tasks, :infinity)
+      catch
+        :exit, reason ->
+          Enum.each(tasks, &Task.shutdown(&1, :brutal_kill))
+          Process.flag(:trap_exit, old_trap)
+          StateMerge.unwrap_task_exit(reason)
+      end
+
+    Process.flag(:trap_exit, old_trap)
+
+    # Merge: each task returns {result_tuple, per_model_state}
+    # Per-model state slices are disjoint (each model only modifies its own key)
+    StateMerge.merge_parallel_results(state, task_results)
+  end
+
+  # Query a single model within the pool (shared by both single-model and parallel paths).
+  @spec query_single_model_in_pool(map(), String.t(), boolean(), keyword()) ::
+          {{:ok | :error, String.t(), any()}, map()}
+  defp query_single_model_in_pool(state, model_id, lightweight?, opts) do
+    pre_query_state =
+      if lightweight?,
+        do: state,
+        else: maybe_condense_for_model(state, model_id, opts)
+
+    case query_single_model_with_retry(pre_query_state, model_id, opts) do
+      {:ok, response, new_state} -> {{:ok, model_id, response}, new_state}
+      {:error, reason, new_state} -> {{:error, model_id, reason}, new_state}
     end
   end
 
@@ -311,7 +390,7 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
       |> maybe_put(:plug, opts[:plug])
 
     if opts[:test_mode] do
-      Map.merge(base_opts, build_test_options(opts))
+      Map.merge(base_opts, Helpers.build_test_options(opts))
     else
       base_opts
     end
@@ -382,28 +461,4 @@ defmodule Quoracle.Agent.Consensus.PerModelQuery do
   end
 
   defp extract_raw_response_map(_), do: %{}
-
-  defp test_mode?(opts), do: Keyword.get(opts, :test_mode, false)
-
-  # Lightweight query path: test mode with injected query fn.
-  # Skips tiktoken BPE encoding, LLMDB scans, and condensation checks
-  # since test query functions don't depend on accurate token management.
-  # Tests that specifically verify token management pass force_token_management: true.
-  defp lightweight_test_query?(opts) do
-    test_mode?(opts) && Keyword.has_key?(opts, :model_query_fn) &&
-      !Keyword.get(opts, :force_token_management, false)
-  end
-
-  defp build_test_options(opts) do
-    %{
-      test_mode: true,
-      seed: Keyword.get(opts, :seed),
-      simulate_tie: Keyword.get(opts, :simulate_tie, false),
-      simulate_no_consensus: Keyword.get(opts, :simulate_no_consensus, false),
-      simulate_refinement_agreement: Keyword.get(opts, :simulate_refinement_agreement, false),
-      simulate_timeout: Keyword.get(opts, :simulate_timeout, false),
-      simulate_all_models_fail: Keyword.get(opts, :simulate_all_models_fail, false),
-      simulate_failure: Keyword.get(opts, :simulate_failure, false)
-    }
-  end
 end

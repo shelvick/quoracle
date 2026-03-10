@@ -1,7 +1,8 @@
 # lib/quoracle_web/live/ui/
 
 ## Pure Display Components (no subscriptions)
-- TaskTree: Tree display, expand/collapse, select_agent→parent, enhanced modal with 10-field form, inline message forms (2025-11), budget_input field (2025-12)
+- TaskTree: Tree display, expand/collapse, select_agent→parent, enhanced modal with 10-field form, inline message forms (2025-11), budget_input field (2025-12), grove selector dropdown (2026-02)
+- GroveSelector: Grove dropdown component (2026-02), renders `<select>` with grove names from assigns, `for="grove-select"` label + `id="grove-select"` select (accessibility), emits `grove_selected` event
 - TaskFormFields: Reusable form components (text, textarea, enum_dropdown, list_input, budget_input), 250 lines
 - TaskBudgetEditor: Modal for editing task budget limits (2025-12), validates against spent+committed minimum
 - LogView: Log display, min_level filter, auto-scroll
@@ -40,11 +41,21 @@
 - format_character_count/2: Returns HTML span with count and color
 
 ## TaskTree Modal (2025-11, updated 2026-02)
-- 11-field form in 3 sections: Agent Identity, Task Work, Budget
+- 13-field form in 3 sections: Agent Identity, Task Work, Budget
 - Skills field added (2026-02): list_input for comma-separated skill names
+- Grove selector dropdown (2026-02): GroveSelector component, pre-fills all fields on selection
+- GrovePrefill JS hook on `#new-task-form`: handles `grove_prefill` push_event, populates/clears 13 fields
 - Uses TaskFormFields components for all inputs
 - handle_event("create_task"): Sends {:submit_prompt, params} to parent
 - No local validation (handled by Dashboard via FieldProcessor)
+
+## TaskTree.GroveHandlers (2026-02, updated 2026-03-06)
+- handle_grove_selected/2: Loads grove via Loader.load_grove/2, resolves bootstrap via BootstrapResolver.resolve_from_grove/1, nil→"" conversion, push_event("grove_prefill", fields)
+- Sends {:grove_skills_path_updated, path} AND {:loaded_grove_updated, grove} to parent Dashboard
+- Passes grove struct directly from Loader (confinement paths remain Sanitizer-expanded, no denormalization)
+- handle_grove_cleared/2: push_event("grove_prefill", %{clear: true}), sends {:loaded_grove_updated, nil} to Dashboard
+- **Does NOT resolve governance** — governance deferred to submit time (skills unknown until form submit)
+- Error path also sends {:loaded_grove_updated, nil} to clear cached grove
 
 ## TaskTree Direct Message (2025-11)
 - Inline message forms for alive root agents (function component pattern)
@@ -65,7 +76,7 @@
 - Enum validation against Schemas module
 
 ## Test Coverage
-- TaskTree: 18 tests + 19 modal tests (13 original + 6 skills R41-R46) + 3 direct message tests
+- TaskTree: 18 tests + 19 modal tests (13 original + 6 skills R41-R46) + 3 direct message tests + grove integration tests
 - TaskFormFields: 21 tests
 - LogView: 22 tests, Mailbox: 24 tests
 - AgentNode: 28 tests + 6 direct message tests = 34 total (then refactored to 44 tests)

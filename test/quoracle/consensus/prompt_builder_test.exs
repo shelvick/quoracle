@@ -3,6 +3,7 @@ defmodule Quoracle.Consensus.PromptBuilderTest do
   use ExUnitProperties
 
   alias Quoracle.Consensus.PromptBuilder
+  alias Quoracle.Consensus.PromptBuilder.{Context, Sections}
   alias Quoracle.Actions.Schema
 
   # All capability groups to include all actions in prompts
@@ -122,6 +123,104 @@ defmodule Quoracle.Consensus.PromptBuilderTest do
 
       # Verify old value 5000 is not present in wait context
       refute prompt =~ ~s("wait": 5000)
+    end
+  end
+
+  describe "governance section injection (packet 2 R19-R22)" do
+    setup do
+      base_name = "prompt_builder_governance_#{System.unique_integer([:positive])}"
+      skills_path = Path.join([System.tmp_dir!(), base_name])
+
+      create_skill_fixture(base_name, "available-skill", "Available skill for ordering checks")
+
+      on_exit(fn -> File.rm_rf!(skills_path) end)
+
+      %{skills_path: skills_path, base_name: base_name}
+    end
+
+    test "R19: governance section injected after Identity and before Available Skills", %{
+      skills_path: skills_path
+    } do
+      prompt =
+        Sections.build_integrated_prompt(
+          %{system_prompt: "IDENTITY_MARKER"},
+          minimal_action_ctx(),
+          minimal_profile_ctx(),
+          skills_path: skills_path,
+          governance_rules: "## Governance Rules\n\nDo not use pkill."
+        )
+
+      identity_pos = position_of(prompt, "IDENTITY_MARKER")
+      governance_pos = position_of(prompt, "Governance Rules")
+      available_skills_pos = position_of(prompt, "## Available Skills")
+
+      assert identity_pos >= 0
+      assert governance_pos >= 0
+      assert available_skills_pos >= 0
+      assert identity_pos < governance_pos
+      assert governance_pos < available_skills_pos
+    end
+
+    test "R20: nil governance_rules produces no governance section", %{skills_path: skills_path} do
+      prompt_without_governance =
+        Sections.build_integrated_prompt(
+          %{system_prompt: "Agent identity."},
+          minimal_action_ctx(),
+          minimal_profile_ctx(),
+          skills_path: skills_path,
+          governance_rules: nil
+        )
+
+      prompt_with_governance =
+        Sections.build_integrated_prompt(
+          %{system_prompt: "Agent identity."},
+          minimal_action_ctx(),
+          minimal_profile_ctx(),
+          skills_path: skills_path,
+          governance_rules: "## Governance Rules\n\nInjected text"
+        )
+
+      refute prompt_without_governance =~ "Governance Rules"
+      assert prompt_with_governance =~ "Governance Rules"
+    end
+
+    test "R21: empty string governance_rules produces no governance section", %{
+      skills_path: skills_path
+    } do
+      prompt_without_governance =
+        Sections.build_integrated_prompt(
+          %{system_prompt: "Agent identity."},
+          minimal_action_ctx(),
+          minimal_profile_ctx(),
+          skills_path: skills_path,
+          governance_rules: ""
+        )
+
+      prompt_with_governance =
+        Sections.build_integrated_prompt(
+          %{system_prompt: "Agent identity."},
+          minimal_action_ctx(),
+          minimal_profile_ctx(),
+          skills_path: skills_path,
+          governance_rules: "## Governance Rules\n\nInjected text"
+        )
+
+      refute prompt_without_governance =~ "Governance Rules"
+      assert prompt_with_governance =~ "Governance Rules"
+    end
+
+    test "R22: governance content wrapped in InjectionProtection", %{skills_path: skills_path} do
+      prompt =
+        Sections.build_integrated_prompt(
+          %{system_prompt: "Agent identity."},
+          minimal_action_ctx(),
+          minimal_profile_ctx(),
+          skills_path: skills_path,
+          governance_rules: "## Governance Rules\n\nImportant rules here."
+        )
+
+      assert prompt =~ "NO_EXECUTE_"
+      assert prompt =~ "Important rules here"
     end
   end
 
@@ -574,6 +673,40 @@ defmodule Quoracle.Consensus.PromptBuilderTest do
 
       # Should be the same structure (NO_EXECUTE IDs may differ)
       assert normalize.(prompt1) == normalize.(prompt2)
+    end
+  end
+
+  defp create_skill_fixture(base_name, skill_name, description) do
+    File.mkdir_p!(Path.join([System.tmp_dir!(), base_name, skill_name]))
+
+    File.write!(Path.join([System.tmp_dir!(), base_name, skill_name, "SKILL.md"]), """
+    ---
+    name: #{skill_name}
+    description: #{description}
+    ---
+
+    # #{skill_name}
+    """)
+  end
+
+  defp minimal_action_ctx do
+    %Context.Action{
+      schemas: "",
+      untrusted_docs: "",
+      trusted_docs: "",
+      allowed_actions: [],
+      format_secrets_fn: fn -> "" end
+    }
+  end
+
+  defp minimal_profile_ctx do
+    %Context.Profile{}
+  end
+
+  defp position_of(text, substring) do
+    case :binary.match(text, substring) do
+      {pos, _len} -> pos
+      :nomatch -> -1
     end
   end
 end

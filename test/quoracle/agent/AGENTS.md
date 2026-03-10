@@ -113,6 +113,26 @@
   - R16: No-op on identical payload
   - R17-R18: Rapid successive updates, termination safety
 
+## Condensation Progress Guarantee Tests (Added 2026-03-01)
+- token_manager_ace_test.exs: Extended with R34-R39 (6 tests + 1 property), async: true
+  - Unit (R34-R37): Progress guarantee for oversized oldest entry, normal cap regression, non-empty discard invariant, ordering contract
+  - Property (R38): StreamData — non-empty discard for any non-empty history + positive cap
+  - System (R39): Acceptance — oversized entry condensation restores positive output budget
+- consensus/per_model_query_condensation_regression_test.exs: 19 tests (R29-R47), 875+ lines, async: true
+  - Unit (R29-R30): Single/multiple batch creation, backward compatibility
+  - Integration (R31, R33): Lesson accumulation across batches, state updates
+  - Unit (R32, R34): Batch failure isolation, chronological ordering
+  - Integration (R35, R38): Pre-summarization of oversized entries, summarization model resolution
+  - Unit (R36-R37): Recursive summarization depth, hierarchical content splitting (@semantic_delimiters)
+  - Unit (R39-R40): Summarization depth limit fallback, model-not-configured fallback
+  - Unit (R41-R42): Fallback artifact creation and shape (type: :factual, confidence: 0)
+  - Integration (R43): No-discard-without-artifact invariant
+  - Unit (R44-R45): History update with to_keep, persist called once (via persist_fn injection)
+  - System (R46): Large history (10x context) condensation restores positive output budget
+  - System (R47): Oversized entry summarized and output budget restored
+- consensus/per_model_query_ace_test.exs: Updated ACE R40 assertion for fallback artifact behavior
+- consensus_per_model_test.exs: Updated R17 for fallback artifact behavior + vacuous assertion fix
+
 ## Removed Files
 core_injection_test.exs, config_manager_injection_test.exs, dyn_sup_injection_test.exs (redundant after isolation)
 

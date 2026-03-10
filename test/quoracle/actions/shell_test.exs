@@ -421,6 +421,8 @@ defmodule Quoracle.Actions.ShellTest do
 
     test "slow commands return async results", %{opts: opts} do
       # [BEHAVIORAL] Slow commands should return immediately with command_id
+      # Force async via smart_threshold: 0 to avoid timing dependency under load
+      opts = Keyword.put(opts, :smart_threshold, 0)
       result = Shell.execute(%{command: "sleep 0.2 && echo 'slow'"}, "agent-1", opts)
       assert {:ok, %{status: :running, command_id: cmd_id}} = result
       assert is_binary(cmd_id)

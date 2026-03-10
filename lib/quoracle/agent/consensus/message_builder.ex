@@ -15,6 +15,7 @@ defmodule Quoracle.Agent.Consensus.MessageBuilder do
   5. Inject children context into LAST message (current state)
   6. Add system prompts (includes profile, action schemas, etc.)
   7. Inject budget context into LAST message (current state)
+  7.5. Inject correction feedback into LAST message (prepended last, appears first)
   8. Inject context token count at END of LAST user message (meta context)
   """
 
@@ -26,6 +27,7 @@ defmodule Quoracle.Agent.Consensus.MessageBuilder do
     BudgetInjector,
     ChildrenInjector,
     ContextInjector,
+    CorrectionInjector,
     TodoInjector
   }
 
@@ -75,6 +77,9 @@ defmodule Quoracle.Agent.Consensus.MessageBuilder do
 
     # Step 7: Inject budget context (after system prompt injection)
     messages = BudgetInjector.inject_budget_context(state, messages)
+
+    # Step 7.5: Inject correction feedback (prepended last, appears first in last user message)
+    messages = CorrectionInjector.inject_correction_feedback(state, messages, model_id)
 
     # Step 8: Inject context token count LAST (at end of last user message)
     # Counts all non-system message tokens from steps 1-7

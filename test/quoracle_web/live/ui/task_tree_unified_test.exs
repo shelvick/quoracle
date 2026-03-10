@@ -330,7 +330,7 @@ defmodule QuoracleWeb.UI.TaskTreeUnifiedTest do
 
       # Submit the create task form
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{"prompt" => "New task to create"})
 
       # Component should send message to parent

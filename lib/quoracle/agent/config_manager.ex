@@ -4,7 +4,7 @@ defmodule Quoracle.Agent.ConfigManager do
   Handles various config formats and initializes agent state.
   """
 
-  alias Quoracle.Agent.ConfigManager.{ModelPoolInit, TestGuards}
+  alias Quoracle.Agent.ConfigManager.{ConfigHelpers, ModelPoolInit, TestGuards}
   alias Quoracle.PubSub.AgentEvents
   require Logger
 
@@ -105,6 +105,15 @@ defmodule Quoracle.Agent.ConfigManager do
       started_at: System.monotonic_time(),
       prompt_fields: Map.get(config, :prompt_fields),
       system_prompt: Map.get(config, :system_prompt),
+      governance_rules: Map.get(config, :governance_rules),
+      governance_config: Map.get(config, :governance_config),
+      grove_hard_rules: Map.get(config, :grove_hard_rules),
+      grove_confinement: Map.get(config, :grove_confinement),
+      grove_topology: Map.get(config, :grove_topology),
+      grove_path: Map.get(config, :grove_path),
+      grove_skills_path: Map.get(config, :grove_skills_path),
+      grove_schemas: Map.get(config, :grove_schemas),
+      grove_workspace: Map.get(config, :grove_workspace),
       temperature: Map.get(config, :temperature),
       max_tokens: Map.get(config, :max_tokens),
       timeout: Map.get(config, :timeout),
@@ -358,6 +367,15 @@ defmodule Quoracle.Agent.ConfigManager do
       # Field-based prompt system (v3.0)
       prompt_fields: config[:prompt_fields],
       system_prompt: config[:system_prompt],
+      governance_rules: config[:governance_rules],
+      governance_config: config[:governance_config],
+      grove_hard_rules: config[:grove_hard_rules],
+      grove_confinement: config[:grove_confinement],
+      grove_topology: config[:grove_topology],
+      grove_path: config[:grove_path],
+      grove_skills_path: config[:grove_skills_path],
+      grove_schemas: config[:grove_schemas],
+      grove_workspace: config[:grove_workspace],
       # Preserve arbitrary config fields (temperature, max_tokens, etc.)
       temperature: config[:temperature],
       max_tokens: config[:max_tokens],
@@ -416,60 +434,18 @@ defmodule Quoracle.Agent.ConfigManager do
     state
   end
 
-  @doc """
-  Build agent configuration with dependency injection.
-  Requires pubsub and registry in deps - no defaults.
-  """
+  # Delegates to extracted ConfigHelpers module (keeps ConfigManager under 500 lines)
   @spec build_agent_config(map(), map()) :: map()
-  def build_agent_config(base_config, deps) do
-    unless deps[:pubsub], do: raise("pubsub is required in deps")
-    unless deps[:registry], do: raise("registry is required in deps")
+  defdelegate build_agent_config(base_config, deps), to: ConfigHelpers
 
-    # Use Map.put_new to avoid overwriting existing values
-    base_config
-    |> Map.put_new(:pubsub, deps[:pubsub])
-    |> Map.put_new(:registry, deps[:registry])
-    |> Map.put_new(:dynsup, deps[:dynsup])
-  end
-
-  @doc """
-  Inject dependencies into configuration.
-  """
   @spec inject_dependencies(map(), map()) :: map()
-  def inject_dependencies(config, deps) do
-    # Use Map.put_new to avoid overwriting
-    Enum.reduce(deps, config, fn {key, value}, acc ->
-      Map.put_new(acc, key, value)
-    end)
-  end
+  defdelegate inject_dependencies(config, deps), to: ConfigHelpers
 
-  @doc """
-  Propagate parent configuration to child.
-  """
   @spec propagate_to_children(map(), map()) :: map()
-  def propagate_to_children(parent_config, child_base) do
-    # Child can override inherited values
-    parent_config
-    |> Map.take([:pubsub, :registry, :dynsup])
-    |> Map.merge(child_base)
-  end
+  defdelegate propagate_to_children(parent_config, child_base), to: ConfigHelpers
 
-  @doc """
-  Validate configuration including pubsub.
-  """
   @spec validate_config(map()) :: :ok | {:error, atom()}
-  def validate_config(config) do
-    cond do
-      not Map.has_key?(config, :agent_id) ->
-        {:error, :missing_agent_id}
-
-      config[:pubsub] && not is_atom(config[:pubsub]) ->
-        {:error, :invalid_pubsub}
-
-      true ->
-        :ok
-    end
-  end
+  defdelegate validate_config(config), to: ConfigHelpers
 
   @doc """
   Generates a unique agent ID.

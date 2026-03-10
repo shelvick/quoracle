@@ -87,6 +87,7 @@ defmodule Quoracle.Tasks.TaskManager do
       {:error, :profile_required} -> {:error, :profile_required}
       {:error, :profile_not_found} -> {:error, :profile_not_found}
       {:error, {:skill_not_found, _name}} = error -> error
+      {:error, {:skill_load_error, _name, _reason}} = error -> error
     end
   end
 
@@ -103,23 +104,26 @@ defmodule Quoracle.Tasks.TaskManager do
 
   defp resolve_skills(skill_names, opts) do
     skills_path = Keyword.get(opts, :skills_path)
-    load_opts = if skills_path, do: [skills_path: skills_path], else: []
+    grove_skills_path = Keyword.get(opts, :grove_skills_path)
+
+    load_opts =
+      []
+      |> then(fn o -> if skills_path, do: [{:skills_path, skills_path} | o], else: o end)
+      |> then(fn o ->
+        if grove_skills_path, do: [{:grove_skills_path, grove_skills_path} | o], else: o
+      end)
 
     Enum.reduce_while(skill_names, {:ok, []}, fn name, {:ok, acc} ->
       case Quoracle.Skills.Loader.load_skill(name, load_opts) do
         {:ok, skill} ->
-          # Convert to metadata format for agent consumption
-          metadata = %{
-            name: skill.name,
-            description: skill.description,
-            content: skill.content,
-            metadata: skill.metadata
-          }
-
+          metadata = Quoracle.Skills.Loader.skill_to_metadata(skill)
           {:cont, {:ok, acc ++ [metadata]}}
 
         {:error, :not_found} ->
           {:halt, {:error, {:skill_not_found, name}}}
+
+        {:error, reason} ->
+          {:halt, {:error, {:skill_load_error, name, reason}}}
       end
     end)
   end
@@ -163,9 +167,11 @@ defmodule Quoracle.Tasks.TaskManager do
         }
       }
 
-      # Convert prompt_fields to system_prompt (user_prompt removed in Packet 2)
-      {system_prompt, _user_prompt} =
+      {system_prompt, user_prompt} =
         Quoracle.Fields.PromptFieldManager.build_prompts_from_fields(prompt_fields)
+
+      initial_message =
+        if user_prompt == "", do: Map.get(agent_fields, :task_description, ""), else: user_prompt
 
       # Base agent config
       agent_config = %{
@@ -174,6 +180,7 @@ defmodule Quoracle.Tasks.TaskManager do
         test_mode: test_mode,
         prompt_fields: prompt_fields,
         system_prompt: system_prompt,
+        initial_message: initial_message,
         budget_data: build_budget_data(task.budget_limit),
         active_skills: active_skills
       }
@@ -187,6 +194,17 @@ defmodule Quoracle.Tasks.TaskManager do
         |> maybe_put(:sandbox_owner, sandbox_owner)
         |> maybe_put(:registry, registry)
         |> maybe_put(:pubsub, pubsub)
+        |> maybe_put(:skip_auto_consensus, Keyword.get(opts, :skip_auto_consensus))
+        |> maybe_put(:governance_rules, Keyword.get(opts, :governance_rules))
+        |> maybe_put(:governance_config, Keyword.get(opts, :governance_config))
+        |> maybe_put(:grove_hard_rules, Keyword.get(opts, :grove_hard_rules))
+        |> maybe_put(:grove_confinement, Keyword.get(opts, :grove_confinement))
+        |> maybe_put(:grove_skills_path, Keyword.get(opts, :grove_skills_path))
+        |> maybe_put(:grove_topology, Keyword.get(opts, :grove_topology))
+        |> maybe_put(:grove_path, Keyword.get(opts, :grove_path))
+        |> maybe_put(:grove_schemas, Keyword.get(opts, :grove_schemas))
+        |> maybe_put(:grove_workspace, Keyword.get(opts, :grove_workspace))
+        |> maybe_put(:model_pool, Keyword.get(opts, :model_pool))
         |> maybe_put(:force_init_error, Keyword.get(opts, :force_init_error))
         |> maybe_put(:test_opts, Keyword.get(opts, :test_opts))
         |> maybe_put(:force_persist, Keyword.get(opts, :force_persist))

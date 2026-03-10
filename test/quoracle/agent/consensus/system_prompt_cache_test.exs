@@ -286,7 +286,14 @@ defmodule Quoracle.Agent.Consensus.SystemPromptCacheTest do
       assert is_binary(state_with_cache.cached_system_prompt),
              "Cache should be populated after consensus"
 
-      # Cast learn_skills to the agent
+      # Drain the consensus continuation query: orient is self-contained so wait:true
+      # is auto-corrected to wait:false, and the action result triggers another consensus
+      # cycle via maybe_schedule_consensus. We must drain this query to prevent the
+      # consensus loop from rebuilding the cache after learn_skills clears it.
+      assert_receive {:query_messages, "test-model-1", _}, 5_000
+
+      # Cast learn_skills immediately — arrives at Core before the second Task's
+      # action_result (Task needs process spawn + Router call + cast overhead).
       skill_metadata = [
         %{
           name: "test_skill",
@@ -338,6 +345,10 @@ defmodule Quoracle.Agent.Consensus.SystemPromptCacheTest do
       [{_model, _prompt_before}] = trigger_consensus_and_capture(agent_pid)
       {:ok, state_1} = Core.get_state(agent_pid)
       assert is_binary(state_1.cached_system_prompt)
+
+      # Drain consensus continuation query (same race fix as R4 — orient self-contained
+      # action result triggers another consensus via maybe_schedule_consensus)
+      assert_receive {:query_messages, "test-model-1", _}, 5_000
 
       # Learn a new skill (invalidates cache)
       skill_metadata = [

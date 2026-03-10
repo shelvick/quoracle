@@ -1,36 +1,40 @@
 # lib/quoracle/agent/
 
 ## Modules
-- Core: Event-driven GenServer (497 lines), delegates message handling, stores prompt_fields + dismissing flag + capability_groups + shell_routers + cached_system_prompt in state, v20.0 extracts adjust_child_budget/update_budget_data to ClientAPI, adds route_to_shell_router/3 helper, v35.0 adds spawn_failed delegation to MessageInfoHandler, v37.0 adds handle_cast({:set_budget_allocated, ...}) delegation to BudgetHandler, v38.0 adds invalidate_cached_system_prompt/1 private helper (learn_skills invalidation)
+- Core: Event-driven GenServer (497 lines), delegates message handling, stores prompt_fields + dismissing flag + capability_groups + shell_routers + cached_system_prompt + governance_rules + governance_config + grove_hard_rules + grove_topology + grove_path + grove_confinement + correction_feedback in state, v20.0 extracts adjust_child_budget/update_budget_data to ClientAPI, adds route_to_shell_router/3 helper, v35.0 adds spawn_failed delegation to MessageInfoHandler, v37.0 adds handle_cast({:set_budget_allocated, ...}) delegation to BudgetHandler, v38.0 adds invalidate_cached_system_prompt/1 private helper (learn_skills invalidation), v39.0 adds governance_rules + governance_config + grove_hard_rules to Core.State (3 fields in defstruct, @type t(), and new/1), v40.0 adds grove_topology + grove_path to Core.State for spawn contract resolution, v41.0 adds grove_confinement to Core.State for filesystem confinement enforcement, v43.0 adds correction_feedback to Core.State for consensus retry pipeline
 - Core.ClientAPI: GenServer wrappers (209 lines, 17 functions with @spec), v20.0 adds adjust_child_budget/4, update_budget_data/2, v34.0 adds release_child_budget/3
 - Core.TodoHandler: Todo list state management (57 lines), extracted for 500-line limit
 - Core.BudgetHandler: Budget GenServer callbacks (247 lines), adjust_child_budget/4 (v37.0: cast-based, no child calls, spent-only decrease validation), handle_set_budget_allocated/2 (v37.0), handle_release_child_budget/3 (v34.0), update_over_budget_status/1 (non-monotonic since v34.0)
-- Core.ChildrenTracker: Children state management (63 lines), handle_child_spawned/2, handle_child_dismissed/2, handle_child_restored/2 (v2.1)
+- Core.ChildrenTracker: Children state management (64 lines), handle_child_spawned/2 (idempotent), handle_child_dismissed/2, handle_child_restored/2, build_child_data/1 (DRY shared helper)
 - Core.Initialization: Init and DB setup (154 lines), extracted for 500-line limit (2025-10-17)
 - Core.Persistence: DB persistence (149 lines), extract_parent_agent_id with Registry→state.parent_id fallback (v36.0), delegates ACE to submodule
 - Core.Persistence.ACEState: ACE state serialization (332 lines), context_lessons + model_states + model_histories (v5.0), extracted for 500-line limit
 - Core.MessageInfoHandler: Info message dispatch (333 lines), handle_wait_expired/2 with v21.0 staleness check, handle_trigger_consensus/1 (v19.0 unified handler), handle_agent_message_2tuple/3tuple, handle_down/4 (v38.0: MCP client DOWN clears state.mcp_client), handle_exit/3, handle_spawn_failed/2 (v35.0: logs warning, records failure in history, removes child, schedules consensus)
 - RegistryQueries: Registry queries (77 lines), composite value extraction
-- MessageHandler: Message processing (377 lines, was 591 before ActionResultHandler extraction), timer cancellation (R11-R13), consensus integration, NO_EXECUTE action_type tracking, delegates to ConsensusHandler (v9.0), routes images via ImageDetector (v11.0), message queueing (v12.0), v13.0 handles 3-tuple via StateUtils.merge_consensus_state, v15.0 unified run_consensus_cycle/2, handle_consensus_error/4 DRY helper, v16.0 deferred consensus via consensus_scheduled flag, v18.0 deferred consensus for idle agents, v24.0 delegates handle_action_result/4 to ActionResultHandler
+- MessageHandler: Message processing (470 lines, was 591 before ActionResultHandler extraction), timer cancellation (R11-R13), consensus integration, NO_EXECUTE action_type tracking, delegates to ConsensusHandler (v9.0), routes images via ImageDetector (v11.0), message queueing (v12.0), v13.0 handles 3-tuple via StateUtils.merge_consensus_state, v15.0 unified run_consensus_cycle/2, handle_consensus_error/4 DRY helper, v16.0 deferred consensus via consensus_scheduled flag, v18.0 deferred consensus for idle agents, v24.0 delegates handle_action_result/4 to ActionResultHandler, v29.0 correction feedback lifecycle (generate/clear/notify) + root agent stall notification
 - MessageHandler.ActionResultHandler: Action result processing (383 lines, extracted REFACTOR 2026-02-13), handle_action_result/4 with extended wait parameter handling, handle_batch_action_result/4, flush_queued_messages/1, format_sender_id/1, maybe_track_child/3 (spawn_child tracking), maybe_update_budget_committed/3 (replaces Core.update_budget_committed callback), v25.0: maybe_track_shell_router/3 (shell_routers population), error-aware continuation guard, v26.0: async_shell_phase1?/1 shared predicate (pending_actions guard + shell_routers tracking), v27.0: maybe_schedule_consensus/1 DRY helper for consensus deferral when self_contained actions pending, v28.0: LogHelper.log_action_error wiring for server-side error logging
 - ImageDetector: Image detection from action results (167 lines), converts MCP screenshots to multimodal content, supports base64 and URL images
-- Consensus: Multi-LLM consensus (495 lines), pre-clustering validation filter (v7.0), per-model refinement context (v10.0), system prompt injection fix, v19.0 threads max_refinement_rounds from state to context. v18.0 cache via opts passthrough
-- Consensus.ResponseLogger: Response logging helpers (40 lines), slim_responses_for_logging/1 (extracted from Consensus in REFACTOR fix-20260223-cost-display-budget-timeout for 500-line limit)
-- TokenManager: Token counting (376 lines), tiktoken integration via Tiktoken.CL100K for accurate BPE tokenization (v5.0), v8.0 adds history_tokens_for_model/2 helper, v16.0 adds estimate_all_messages_tokens/1 (all messages including system) and get_model_output_limit/1 (LLMDB limits.output)
+- Consensus: Multi-LLM consensus (495 lines), pre-clustering validation filter (v7.0), per-model refinement context (v10.0), system prompt injection fix, v19.0 threads max_refinement_rounds from state to context. v18.0 cache via opts passthrough; `filter_invalid_responses/2` (v18.0, was 1-arity) accepts `validator_opts \\ []` for `:parent_config` + `:grove_topology` threading to Validator.spawn_profile_optional?/2
+- Consensus.ResponseLogger: Response logging helpers (40 lines), maybe_log_responses/2 + slim_responses_for_logging/1 (extracted from Consensus for 500-line limit)
+- TokenManager: Token counting (342 lines), tiktoken integration via Tiktoken.CL100K for accurate BPE tokenization (v5.0), v8.0 adds history_tokens_for_model/2 helper, v16.0 adds estimate_all_messages_tokens/1 (all messages including system) and get_model_output_limit/1 (LLMDB limits.output), v9.0 progress guarantee in tokens_to_condense/2, DRY extract_entry_content/1 (REFACTOR)
 - ContextManager: History summarization (274 lines), builds field-based prompts for consensus, JSON formatting for :decision/:result entries (v2.0), 1-arity build_conversation_messages DELETED (v5.0), v7.0 ACE injection removed (now in AceInjector)
-- ConfigManager: Config normalization (500 lines), atomic registration, ModelPoolInit submodule extracted, v5.0 preserves model_histories from restoration config, v8.0 extracts capability_groups, v11.0 extracts max_refinement_rounds
+- ConfigManager: Config normalization (464 lines), atomic registration, ModelPoolInit submodule extracted, ConfigHelpers submodule extracted (REFACTOR 2026-03-04), v5.0 preserves model_histories from restoration config, v8.0 extracts capability_groups, v11.0 extracts max_refinement_rounds + grove_confinement, v12.0 extracts governance_rules + governance_config + grove_hard_rules (3 fields in 2 locations: base_config and state_config), v13.0 extracts grove_topology + grove_path (2 fields in 2 locations: base_config and state_config)
+- ConfigManager.ConfigHelpers: Extracted config helpers (64 lines), build_agent_config/2, inject_dependencies/2, propagate_to_children/2, validate_config/1 (extracted from ConfigManager for 500-line limit, REFACTOR 2026-03-04)
 - ConfigManager.ModelPoolInit: Model pool initialization (37 lines), get_model_pool_for_init/2, initialize_model_histories/1
-- ConsensusHandler: Consensus execution (269 lines), v20.0 single prompt_opts for UI/LLM consistency (fix-20260113-skill-injection), extracts active_skills + skills_path from state, v27.0 lazy-build system prompt cache with fast-path guard
-- ConsensusHandler.Helpers: Helper functions (116 lines), normalize_sibling_context/1, self_contained_actions/0, has_pending_self_contained?/1 (v26.0), coerce_wait_value/1 (v34.0 DRY extraction), prepend_to_content/2, extract_shell_check_id/2 (v25.0 shared helper for shell routing)
+- ConsensusHandler: Consensus execution (332 lines), v20.0 single prompt_opts for UI/LLM consistency (fix-20260113-skill-injection), extracts active_skills + skills_path from state, v27.0 lazy-build system prompt cache with fast-path guard, v28.0 includes governance_rules in prompt_opts (only governance_rules, not governance_config), v33.0 adds `forbidden_actions: extract_forbidden_actions(state)` to prompt_opts for grove action blocking. ActionExecutor timeout: :infinity for adjust_budget
+  - `extract_forbidden_actions/1` (private): Extracts forbidden action atoms from `state.grove_hard_rules` structured data using `action_block_applies?/2` for scope filtering and `safe_to_existing_atom/1` for atom safety
+  - `action_block_applies?/2` (private): Scope filtering for action_block rules (scope "all" → true, list → membership check, missing → true)
+  - `safe_to_existing_atom/1` (private): `String.to_existing_atom/1` with rescue → nil (prevents atom table pollution)
+- ConsensusHandler.Helpers: Helper functions (133 lines), normalize_sibling_context/1, self_contained_actions/0, has_pending_self_contained?/1 (v26.0), coerce_wait_value/1 (v34.0 DRY extraction), prepend_to_content/2, extract_shell_check_id/2 (v25.0 shared helper for shell routing), primary_skill_name/1 (REFACTOR DRY extraction from ActionExecutor)
 - ConsensusHandler.LogHelper: Logging helpers (63 lines), safe_broadcast_log/5, log_action_error/1 (v28.0: {:error, _} unwrap, {:action_crashed, tuple} clause, extended @warning_errors with transient network errors)
 - ConsensusHandler.TodoInjector: TODO injection (82 lines), inject_todo_context/2, format_todos_as_xml/1, escape_xml/1
-- ConsensusHandler.ChildrenInjector: Children context injection (78 lines), inject_children_context/2, format_children/1, Registry-based status check
+- ConsensusHandler.ChildrenInjector: Children context injection (150 lines), inject_children_context/2, format_children/1, Registry-based status check, v2.0: enrich_with_messages/2 cross-references state.messages for latest_message + latest_message_at per child
 - ConsensusHandler.AceInjector: ACE context injection (82 lines, v1.0), inject_ace_context/3 into FIRST user message (historical knowledge), format_ace_context/2
 - ConsensusHandler.ContextInjector: Context token injection (95 lines, v2.0), inject_context_tokens/1 counts fully-built messages (excluding system prompt), format_context_tokens/1 with comma separators
 - StateUtils: State manipulation helpers (145 lines), action_type tracking for NO_EXECUTE, v3.0 adds merge_consensus_state/2 for ACE state merging (extracted from MessageHandler/ConsensusContinuationHandler), v5.0 adds cancel_wait_timer/1 for DRY timer cancellation (4 pattern-matched clauses), v6.0 adds schedule_consensus_continuation/1 for DRY "set flag + send trigger" pattern, v38.0 adds :cached_system_prompt to merge_keys
 - ConsensusContinuationHandler: Continuation handling (59 lines), v4.0 delegates to MessageHandler.run_consensus_cycle/2 for unified message flush, v5.0 delegates cancel_wait_timer to StateUtils
 - DynSup: DynamicSupervisor wrapper (185 lines), 2-arity terminate for tests, v3.0 restore_agent prefers ace_state.model_histories, v7.0 restores max_refinement_rounds from profile
-- Reflector: LLM-based lesson/state extraction (321 lines), self-reflection pattern, JSON parsing with validation, v2.1 uses ContentStringifier for multimodal prompts, v3.0 retries malformed LLM responses (empty/non-JSON/invalid schema) with shared budget via retry_ctx map
+- Reflector: LLM-based lesson/state extraction (497 lines), self-reflection pattern, JSON parsing with validation, v2.1 uses ContentStringifier for multimodal prompts, v3.0 retries malformed LLM responses (empty/non-JSON/invalid schema) with shared budget via retry_ctx map
 - LessonManager: Embedding-based lesson deduplication (175 lines), cosine similarity (0.90 threshold), O(n) accumulation
 - TreeTerminator: Recursive agent tree termination (235 lines, v2.0), BFS collection, bottom-up termination, DB cleanup including agent_costs deletion (prevents double-counting after budget absorption)
 - HistoryTransfer: History and ACE state transfer during model pool switching (226 lines, v1.0), select_source_model/2, condense_until_fits/4, transfer_state_to_new_pool/3
@@ -50,7 +54,7 @@
 - MessageHandler: handle_agent_message/3 (queues when pending, R1-R2), handle_action_result/4 (delegates to ActionResultHandler), handle_message/2 (R13), cancel_wait_timer/1, run_consensus_cycle/2 (v15.0 unified entry point), handle_consensus_error/4 (private DRY helper)
 - ActionResultHandler: handle_action_result/4, handle_batch_action_result/4, flush_queued_messages/1, format_sender_id/1, maybe_track_child/3, maybe_update_budget_committed/3, handle_action_result_continuation/3
 - ConsensusHandler: get_action_consensus/1 (v8.0 - state only), execute_consensus_action/3, handle_wait_parameter/3, inject_todo_context/2 (delegated to TodoInjector)
-- Consensus: get_consensus/2, get_consensus_with_state/2, filter_invalid_responses/1 (v7.0), ensure_system_prompt/1, build_refinement_messages/2
+- Consensus: get_consensus/2, get_consensus_with_state/2, filter_invalid_responses/2 (v18.0, was /1, added validator_opts), ensure_system_prompt/1, build_refinement_messages/2
 - ConfigManager: normalize_config/1, register_agent/2, setup_agent/1,/2
 - StateUtils: add_history_entry/3, add_history_entry_with_action/4 (NO_EXECUTE tracking), find_last_decision/1, find_result_for_action/2, merge_consensus_state/2 (v3.0 - ACE field merging), cancel_wait_timer/1 (v5.0 - DRY timer cancellation), schedule_consensus_continuation/1 (v6.0 - DRY consensus trigger)
 - DynSup: start_agent/2,/3, terminate_agent/1,/2
@@ -80,8 +84,9 @@
 - ConsensusHandler.ChildrenInjector: inject_children_context/2 (up to 20 children, Registry-filtered)
 - Spawn action: Casts `{:child_spawned, %{agent_id, spawned_at}}` to parent after success
 - DismissChild action: Casts `{:child_dismissed, child_id}` to parent after dispatch
-- XML format: `<children>{"agent_id":"...", "spawned_at":"...", "status":"active"}</children>`
+- XML format: `<children>{"agent_id":"...", "spawned_at":"...", "latest_message":"...", "latest_message_at":"..."}</children>` (v2.0: enriched with message preview)
 - Injection order: children→todos→content (children prepended last, appears first)
+- v2.0 enrichment: Cross-references state.messages at injection time, truncates latest_message to 100 chars, RFC 2822 timestamps
 
 ## Patterns
 - Full dependency injection (registry/dynsup/pubsub via opts)
@@ -130,6 +135,7 @@
 - ContextManager: Uses all histories combined for message building and summarization
 - StateUtils: `append_to_all_histories/2` adds entries to all model histories (broadcast pattern)
 - Consensus: Each model queried with its own history via `query_models_with_per_model_histories/3`
+- v20.0 Parallel queries: Multi-model pools use Task.async fan-out (single-model skips Task overhead), deferred persist_ace_state after merge, StateMerge submodule for state merging
 - Per-model condensation: `maybe_condense_for_model/3` checks each model's history against its context limit
 - Test isolation: ActionList must be loaded for isolated tests (ensures :orient atom exists)
 
@@ -194,13 +200,17 @@
 - ConsensusContinuationHandler v4.0: Delegates to MessageHandler.run_consensus_cycle/2
 - Test coverage: 26 tests in message_batching_test.exs (v3.0), 2 acceptance tests in message_batching_acceptance_test.exs, 8 in message_flush_test.exs, event_batching_test.exs (v16.0), 26 in consensus_staleness_test.exs (v19.0)
 
-## Consensus Retry on Transient Failures (2026-01-29)
+## Consensus Retry on Transient Failures (2026-01-29, updated 2026-03-06)
 - Core.State.consensus_retry_count: non_neg_integer(), defaults to 0, tracks consecutive consensus failures
+- Core.State.correction_feedback: map(), defaults to %{}, per-model correction strings for retry pipeline (v43.0)
 - MessageHandler.handle_consensus_error/4: Retries retryable errors (:all_responses_invalid, :all_models_failed) up to 3 total attempts via schedule_consensus_continuation/1
-- notify_parent_of_stall/3: Sends {:agent_message, agent_id, message} to parent when retries exhausted
-- Counter reset to 0 on successful consensus in both run_consensus_cycle/2 and handle_message_impl/2
-- Uses cond with retryable? boolean for 3-branch control flow (retry / notify+stall / stall)
-- Test coverage: 13 tests in consensus_retry_test.exs (R1-R12, R73)
+- MessageHandler.reset_consensus_retry_state/1: DRY helper resets both consensus_retry_count→0 and correction_feedback→%{}, called on success in run_consensus_cycle/2 and handle_message_impl/2, and on new external message in handle_agent_message/3
+- MessageHandler.generate_correction_feedback/2: Builds per-model correction strings on retryable failure, stores in state.correction_feedback
+- MessageHandler.correction_message_for/1: 3 clauses — :all_models_failed, :all_responses_invalid, catch-all. Forward-looking wording (no "previous response" references)
+- MessageHandler.notify_parent_or_self_of_stall/3: Child agents send {:agent_message, agent_id, message} to parent. Root agents (nil parent_pid) add stall message to own state.messages and broadcast via PubSub with from: :system
+- CorrectionInjector: Injects per-model correction at MessageBuilder step 7.5 (after budget, before context tokens). inject_correction_feedback/3 prepends "[SYSTEM] CORRECTION:" to last user message content
+- Uses cond with retryable? boolean for 3-branch control flow (retry+feedback / notify+stall / stall)
+- Test coverage: 34 tests in consensus_retry_test.exs (R1-R12, R73, R100-R112, CI-R1 through CI-R7, R410)
 
 ## user_prompt Removal (2026-01-06, fix-20260106-user-prompt-removal)
 - **Problem solved**: Initial user message was stored separately in `user_prompt` field, re-injected at query time, causing duplicate/stale context after condensation
@@ -235,4 +245,4 @@
 - **v25.0 Regression fixes** (fix-20260214-action-executor-regressions): ActionExecutor monitors Routers + tracks in active_routers, routes check_id through existing shell Router, passes router_pid in result_opts. ActionResultHandler error-aware continuation guard (`match?({:ok, _}, result)`), populates shell_routers via maybe_track_shell_router/3. Shared `Helpers.extract_shell_check_id/2` replaces duplicated private helpers.
 - Test coverage: 7 action_executor tests, 13 budget_callback tests, 6 system-level deadlock prevention tests, 15 regression tests, 5851 total tests + 74 properties
 
-Test coverage: 55 Core tests (37 base + 7 consensus + 11 TODO), 12 ContextManager (+ 4 field integration), 18 MessageFormatter, 18 Reflector, 25 LessonManager, 15 TreeTerminator, 15 HistoryTransfer, 15 ModelPoolSwitch, all async: true
+Test coverage: 55 Core tests (37 base + 7 consensus + 11 todo-handler), 12 ContextManager (+ 4 field integration), 18 MessageFormatter, 18 Reflector, 25 LessonManager, 15 TreeTerminator, 15 HistoryTransfer, 15 ModelPoolSwitch, 34 ConsensusRetry (13 v1.0 + 21 v2.0 correction feedback), all async: true

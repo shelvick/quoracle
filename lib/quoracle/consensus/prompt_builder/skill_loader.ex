@@ -29,9 +29,9 @@ defmodule Quoracle.Consensus.PromptBuilder.SkillLoader do
   end
 
   # Use stored content if available (preferred - avoids disk I/O)
-  defp load_single_skill(%{content: content, name: name})
+  defp load_single_skill(%{content: content, name: name} = skill)
        when is_binary(content) and content != "" do
-    wrap_with_skill_tag(name, content)
+    wrap_with_skill_tag(name, content, Map.get(skill, :path))
   end
 
   # Fallback: re-read from file (for legacy metadata without content)
@@ -41,19 +41,20 @@ defmodule Quoracle.Consensus.PromptBuilder.SkillLoader do
 
     case File.read(skill_file) do
       {:ok, content} ->
-        wrap_with_skill_tag(name, extract_body_content(content))
+        wrap_with_skill_tag(name, extract_body_content(content), path)
 
       {:error, _} ->
         # Graceful degradation - show placeholder for missing files
-        wrap_with_skill_tag(name, "[Skill '#{name}' content unavailable]")
+        wrap_with_skill_tag(name, "[Skill '#{name}' content unavailable]", path)
     end
   end
 
   defp load_single_skill(_invalid), do: ""
 
   # Wrap skill content with XML tags so LLMs can identify skill boundaries
-  defp wrap_with_skill_tag(name, content) do
-    "<skill name=\"#{name}\">\n#{content}\n</skill>"
+  defp wrap_with_skill_tag(name, content, path) do
+    path_attr = if path, do: " path=\"#{path}\"", else: ""
+    "<skill name=\"#{name}\"#{path_attr}>\n#{content}\n</skill>"
   end
 
   # Extract body content from SKILL.md (after YAML frontmatter)

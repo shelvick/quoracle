@@ -63,6 +63,17 @@ defmodule QuoracleWeb.DashboardLive do
     # Load profiles from database (needed for both connected and not connected)
     profiles = load_profiles()
 
+    # Load groves from groves_path (session-injected for tests, fallback for production)
+    groves_path = session["groves_path"] || session[:groves_path]
+    groves_opts = if groves_path, do: [groves_path: groves_path], else: []
+    groves = load_groves(groves_opts)
+
+    # Extract skills_path from session (test isolation for global skills directory)
+    skills_path = session["skills_path"] || session[:skills_path]
+
+    # Optional TaskManager test opts for route-level acceptance tests
+    task_manager_test_opts = session["task_manager_test_opts"] || session[:task_manager_test_opts]
+
     if connected?(socket) do
       # Subscribe to core topics (only when WebSocket is connected)
       Subscriptions.subscribe_to_core_topics(pubsub)
@@ -109,12 +120,19 @@ defmodule QuoracleWeb.DashboardLive do
          tasks: tasks,
          agents: agents,
          profiles: profiles,
+         groves: groves,
+         groves_path: groves_path,
+         skills_path: skills_path,
+         task_manager_test_opts: task_manager_test_opts,
          selected_agent_id: nil,
+         selected_grove: nil,
          logs: buffered_logs,
          messages: buffered_messages,
          subscribed_topics: subscribed_topics,
          agent_alive_map: agent_alive_map,
          costs_updated_at: System.monotonic_time(),
+         # Grove skills path (server-derived, SEC-2a)
+         grove_skills_path: nil,
          # Budget editor state (R44)
          budget_editor_visible: false,
          budget_editor_task_id: nil,
@@ -133,12 +151,19 @@ defmodule QuoracleWeb.DashboardLive do
          tasks: %{},
          agents: %{},
          profiles: profiles,
+         groves: groves,
+         groves_path: groves_path,
+         skills_path: skills_path,
+         task_manager_test_opts: task_manager_test_opts,
          selected_agent_id: nil,
+         selected_grove: nil,
          logs: %{},
          messages: [],
          subscribed_topics: MapSet.new(),
          agent_alive_map: %{},
          costs_updated_at: System.monotonic_time(),
+         # Grove skills path (server-derived, SEC-2a)
+         grove_skills_path: nil,
          # Budget editor state (R44)
          budget_editor_visible: false,
          budget_editor_task_id: nil,
@@ -153,6 +178,12 @@ defmodule QuoracleWeb.DashboardLive do
       timeout when is_integer(timeout) -> [agent_fetch_timeout: timeout]
       _ -> []
     end
+  end
+
+  # Loads grove metadata from groves directory
+  defp load_groves(opts) do
+    {:ok, groves} = Quoracle.Groves.Loader.list_groves(opts)
+    groves
   end
 
   # Loads profiles from database ordered by name
@@ -183,6 +214,8 @@ defmodule QuoracleWeb.DashboardLive do
           tasks={@tasks}
           agents={@agents}
           profiles={@profiles}
+          groves={@groves}
+          groves_path={@groves_path}
           selected_agent_id={@selected_agent_id}
           pubsub={@pubsub}
           registry={@registry}
@@ -385,6 +418,26 @@ defmodule QuoracleWeb.DashboardLive do
   # Direct message from AgentNode component
   def handle_info({:send_direct_message, agent_id, content}, socket),
     do: MessageHandlers.handle_send_direct_message(agent_id, content, socket)
+
+  # Handles selected grove updates from the TaskTree component.
+  def handle_info({:selected_grove_updated, grove_name}, socket) do
+    {:noreply, assign(socket, selected_grove: grove_name)}
+  end
+
+  # Caches loaded grove struct from TaskTree to avoid redundant file I/O on task creation.
+  def handle_info({:loaded_grove_updated, grove}, socket) do
+    {:noreply, assign(socket, loaded_grove: grove)}
+  end
+
+  # Grove skills path update from TaskTree component (SEC-2a)
+  def handle_info({:grove_skills_path_updated, path}, socket) do
+    {:noreply, assign(socket, grove_skills_path: path)}
+  end
+
+  # Grove error from TaskTree component
+  def handle_info({:grove_error, message}, socket) do
+    {:noreply, Phoenix.LiveView.put_flash(socket, :error, message)}
+  end
 
   # Test support messages - delegate to TestHelpers
   def handle_info({:render_log_entry, log}, socket),

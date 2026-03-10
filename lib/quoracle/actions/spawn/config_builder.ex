@@ -10,6 +10,7 @@ defmodule Quoracle.Actions.Spawn.ConfigBuilder do
   """
 
   alias Quoracle.Fields.PromptFieldManager
+  alias Quoracle.Groves.GovernanceResolver
   alias Quoracle.Profiles.Resolver, as: ProfileResolver
 
   @doc """
@@ -122,10 +123,12 @@ defmodule Quoracle.Actions.Spawn.ConfigBuilder do
 
     # Pass sandbox_owner for test DB access in LLM summarization Tasks
     # v16.0: Include cost context so FieldTransformer.maybe_add_cost_context/2 can record costs
+    parent_task_id = parent_config[:task_id]
+
     transform_opts = [
       sandbox_owner: Map.get(deps, :sandbox_owner),
       agent_id: Map.get(deps, :agent_id),
-      task_id: Map.get(deps, :task_id),
+      task_id: parent_task_id || Map.get(deps, :task_id),
       pubsub: Map.get(deps, :pubsub)
     ]
 
@@ -148,6 +151,28 @@ defmodule Quoracle.Actions.Spawn.ConfigBuilder do
     # Merge models - use child if specified, otherwise parent
     final_models = if models == [], do: parent_models, else: models
 
+    # Recompute child governance text from inherited config + child skills.
+    # This avoids leaking parent-specific governance text to children.
+    governance_config = Map.get(parent_config, :governance_config)
+
+    child_skill_names =
+      skills_metadata
+      |> Enum.map(&Map.get(&1, :name))
+      |> Enum.filter(&is_binary/1)
+
+    governance_rules =
+      case governance_config do
+        config when is_list(config) ->
+          GovernanceResolver.build_agent_governance(
+            config,
+            child_skill_names,
+            Map.get(parent_config, :grove_hard_rules)
+          )
+
+        _ ->
+          nil
+      end
+
     # WHITELIST: Only these specific fields should cascade from parent to child
     # Everything else is either set explicitly below or the child starts fresh
     # (Blacklist approach was dangerous - inherited huge model_histories, causing timeouts)
@@ -158,6 +183,15 @@ defmodule Quoracle.Actions.Spawn.ConfigBuilder do
       :timeout,
       :max_depth,
       :model_id,
+      # Grove governance context must propagate through spawn path
+      :governance_config,
+      :grove_hard_rules,
+      :grove_confinement,
+      :grove_topology,
+      :grove_path,
+      :grove_skills_path,
+      :grove_schemas,
+      :grove_workspace,
       # Test isolation - required for spawned children in tests
       :model_pool,
       :simulate_failure,
@@ -182,9 +216,40 @@ defmodule Quoracle.Actions.Spawn.ConfigBuilder do
 
     # Add prompt_fields and generate prompts from fields
     # Both field-based and legacy spawns have prompt_fields now
-    # user_prompt removed in Packet 2 - initial message flows through model_histories
-    {system_prompt, _user_prompt} =
+    {system_prompt, user_prompt} =
       PromptFieldManager.build_prompts_from_fields(prompt_fields)
+
+    # Build the child's initial message with accumulated narrative handling.
+    #
+    # When a parent has accumulated_narrative (a summarized history of ancestor work),
+    # the child's user_prompt from build_prompts_from_fields may already contain an
+    # <accumulated_narrative> tag derived from the CHILD's own transformed fields.
+    # However, the parent's narrative is the authoritative version (it includes the
+    # full chain of ancestor context). To prevent duplicate or stale narrative tags:
+    #
+    # 1. Strip any <accumulated_narrative>...</accumulated_narrative> tag that
+    #    build_prompts_from_fields inserted (regex with /s flag for multiline content)
+    # 2. Re-inject the parent's narrative as a fresh tag at the end of the message
+    #
+    # This ensures the child receives the parent's complete narrative context without
+    # duplication from PromptFieldManager's own narrative inclusion.
+    initial_message =
+      case get_in(parent_fields, [:transformed, :accumulated_narrative]) do
+        narrative when is_binary(narrative) and narrative != "" ->
+          user_prompt
+          |> String.replace(~r/<accumulated_narrative>.*?<\/accumulated_narrative>/s, "")
+          |> String.trim()
+          |> then(fn prompt ->
+            if prompt == "" do
+              "<accumulated_narrative>#{narrative}</accumulated_narrative>"
+            else
+              prompt <> "\n\n<accumulated_narrative>#{narrative}</accumulated_narrative>"
+            end
+          end)
+
+        _ ->
+          if user_prompt == "", do: task_string, else: user_prompt
+      end
 
     # v5.0: Field-based system_prompt flows through unchanged.
     # Contains XML tags (role, cognitive_style, constraints) from merged
@@ -194,6 +259,8 @@ defmodule Quoracle.Actions.Spawn.ConfigBuilder do
       config
       |> Map.put(:prompt_fields, prompt_fields)
       |> Map.put(:system_prompt, system_prompt)
+      |> Map.put(:initial_message, initial_message)
+      |> Map.put(:governance_rules, governance_rules)
 
     # v16.0: Merge profile fields using DRY helper (profile_data always present per R32-R37)
     config =
@@ -201,6 +268,16 @@ defmodule Quoracle.Actions.Spawn.ConfigBuilder do
         Map.merge(config, ProfileResolver.to_config_fields(profile_data))
       else
         config
+      end
+
+    # Spawn-contract profile overrides should win even when they don't map to a DB profile.
+    config =
+      case Map.get(normalized_params, :profile) do
+        profile when is_binary(profile) and profile != "" ->
+          Map.put(config, :profile_name, profile)
+
+        _ ->
+          config
       end
 
     # v15.0: Add skills metadata as active_skills

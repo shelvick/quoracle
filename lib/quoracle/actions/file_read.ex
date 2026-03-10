@@ -6,6 +6,8 @@ defmodule Quoracle.Actions.FileRead do
   Returns content with line numbers in "N\\tcontent" format.
   """
 
+  alias Quoracle.Groves.HardRuleEnforcer
+
   @default_limit 2000
   @max_line_length 2000
 
@@ -25,12 +27,16 @@ defmodule Quoracle.Actions.FileRead do
   - `{:error, reason}` - Validation or file access errors
   """
   @spec execute(map(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def execute(%{path: path} = params, _agent_id, _opts) when is_binary(path) do
+  def execute(%{path: path} = params, _agent_id, opts) when is_binary(path) do
     offset = Map.get(params, :offset, 1)
     limit = Map.get(params, :limit, @default_limit) |> min(@default_limit)
+    parent_config = Keyword.get(opts, :parent_config, %{})
+    confinement = parent_config_value(parent_config, :grove_confinement)
+    skill_name = parent_config_value(parent_config, :skill_name)
 
     with :ok <- validate_offset(offset),
          :ok <- validate_absolute_path(path),
+         :ok <- HardRuleEnforcer.check_file_access(path, :read, confinement, skill_name),
          :ok <- validate_not_directory(path),
          {:ok, raw_content} <- read_file(path),
          :ok <- validate_not_binary(raw_content, path) do
@@ -41,6 +47,12 @@ defmodule Quoracle.Actions.FileRead do
   def execute(_params, _agent_id, _opts) do
     {:error, :missing_required_param}
   end
+
+  defp parent_config_value(parent_config, key) when is_map(parent_config) and is_atom(key) do
+    Map.get(parent_config, key, Map.get(parent_config, Atom.to_string(key)))
+  end
+
+  defp parent_config_value(_parent_config, _key), do: nil
 
   defp validate_offset(offset) when is_integer(offset) and offset >= 1, do: :ok
   defp validate_offset(_), do: {:error, :invalid_offset}

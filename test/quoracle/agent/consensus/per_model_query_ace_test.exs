@@ -178,8 +178,13 @@ defmodule Quoracle.Agent.Consensus.PerModelQueryACETest do
           # Condensation should still complete
           assert is_map(result_state.model_histories)
 
-          # Existing ACE state should be preserved
-          assert result_state.context_lessons[model_id] == state.context_lessons[model_id]
+          # Existing ACE state should be preserved, plus fallback artifact appended
+          lessons = result_state.context_lessons[model_id]
+          assert Enum.any?(lessons, &(&1.content == "Pre-existing"))
+
+          assert Enum.any?(lessons, fn lesson ->
+                   String.contains?(lesson.content, "Unreflected content discarded")
+                 end)
         end)
 
       # May log warning about reflection failure

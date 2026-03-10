@@ -6,13 +6,17 @@ File-based knowledge management system. Skills are markdown files stored in `~/.
 
 ## Modules
 
-**Loader** (234 lines):
+**Loader** (234 lines, v3.0):
 - `skills_dir/1` - Returns skills directory with 3-tier fallback: opts > ConfigModelSettings DB > hardcoded default (v2.0)
   - Tilde expansion via Path.expand/1 on DB-configured paths
-- `list_skills/1` - Lists all skills (metadata only, no content)
-- `load_skill/2` - Loads single skill by name with full content
-- `load_skills/2` - Loads multiple skills, fails if any missing
+- `list_skills/1` - Lists all skills (metadata only, no content), grove-first with global fallback (v3.0)
+- `load_skill/2` - Loads single skill by name with full content, searches [grove_dir, global_dir] in order (v3.0)
+- `load_skills/2` - Loads multiple skills, returns `{:error, _}` if any fail (not crash)
 - `parse_skill_file/2` - Parses SKILL.md content into structured data
+- `resolve_skill_dirs/1` - Returns [grove_dir, global_dir] based on `:grove_skills_path` and `:skills_path` opts (v3.0)
+- `list_skills_in_dir/1` - Non-raising `File.ls/1` for single directory listing (v3.0)
+- `load_skill_from_dir/2` - Non-raising `File.read/1` for single skill load (v3.0)
+- All bang operations (`File.ls!/1`, `File.read!/1`) replaced with non-raising equivalents (v3.0)
 
 **Creator** (147 lines):
 - `create/2` - Creates new skill directory and SKILL.md file

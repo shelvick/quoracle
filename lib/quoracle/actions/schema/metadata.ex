@@ -8,7 +8,7 @@ defmodule Quoracle.Actions.Schema.Metadata do
     spawn_child:
       "Delegate work by creating a child agent. WHEN: Task has distinct subtasks, can take advantage of parallel work, or needs specialized focus. HOW: Provide clear task_description, success_criteria, immediate_context, approach_guidance, and/or other information. Child inherits your constraints and can spawn its own children. Use downstream_constraints to add rules that apply to this child and all its descendants.",
     wait:
-      "Pause execution for a specified duration. WHEN: Need to delay before retry, wait for external process, or rate-limit operations. HOW: Specify duration in seconds (can be fractional like 0.5 for 500ms). This is the ONLY action that doesn't require a 'wait' parameter.",
+      "Pause execution — LAST RESORT only when no productive action exists. WHEN: You have verified your conversation history contains no unprocessed child messages, async results, or recoverable errors. HOW: Specify duration in seconds (can be fractional like 0.5 for 500ms). WARNING: If actionable messages exist in your history, process them first — waiting will not produce new information. This is the ONLY action that doesn't require a 'wait' parameter.",
     send_message:
       "Communicate with parent or children. WHEN: Report progress/results to parent, coordinate with direct children, or request information. HOW: Set 'to' to 'parent', 'children' (direct only), 'announcement' (broadcast instructions/corrections to all descendants), or array of specific agent IDs. IMPORTANT: Use 'parent' for status updates and results - 'announcement' is ONLY for broadcasting directives, corrections, or critical information downward to your subtree. Never use 'announcement' for status reports.",
     orient:
@@ -54,17 +54,17 @@ defmodule Quoracle.Actions.Schema.Metadata do
   # Action priorities for tiebreaking (lower = more conservative, unique sequential)
   @action_priorities %{
     orient: 1,
-    wait: 2,
-    send_message: 3,
-    batch_sync: 4,
-    batch_async: 5,
-    fetch_web: 6,
-    file_read: 7,
-    search_secrets: 8,
-    learn_skills: 9,
-    answer_engine: 10,
-    todo: 11,
-    adjust_budget: 12,
+    send_message: 2,
+    batch_sync: 3,
+    batch_async: 4,
+    fetch_web: 5,
+    file_read: 6,
+    search_secrets: 7,
+    learn_skills: 8,
+    answer_engine: 9,
+    todo: 10,
+    adjust_budget: 11,
+    wait: 12,
     generate_secret: 13,
     generate_images: 14,
     record_cost: 15,

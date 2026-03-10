@@ -13,6 +13,7 @@ defmodule Quoracle.Models.ConfigModelSettings do
   @summarization_model_key "summarization_model"
   @image_generation_models_key "image_generation_models"
   @skills_path_key "skills_path"
+  @groves_path_key "groves_path"
 
   # =============================================================
   # Embedding Model (single model_id string)
@@ -238,6 +239,47 @@ defmodule Quoracle.Models.ConfigModelSettings do
   end
 
   # =============================================================
+  # Groves Path (single path string)
+  # =============================================================
+
+  @doc """
+  Gets the configured groves directory path.
+  Returns {:ok, path} or {:error, :not_configured}.
+  """
+  @spec get_groves_path() :: {:ok, String.t()} | {:error, :not_configured}
+  def get_groves_path do
+    case TableConsensusConfig.get(@groves_path_key) do
+      {:ok, %{value: %{"path" => path}}} when is_binary(path) and path != "" ->
+        {:ok, path}
+
+      _ ->
+        {:error, :not_configured}
+    end
+  end
+
+  @doc """
+  Sets the groves directory path.
+  Rejects empty strings.
+  """
+  @spec set_groves_path(String.t()) :: {:ok, String.t()} | {:error, :empty_path | term()}
+  def set_groves_path(""), do: {:error, :empty_path}
+
+  def set_groves_path(path) when is_binary(path) do
+    case TableConsensusConfig.upsert(@groves_path_key, %{"path" => path}) do
+      {:ok, _} -> {:ok, path}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc """
+  Deletes the groves path configuration.
+  """
+  @spec delete_groves_path() :: {:ok, term()} | {:error, :not_found}
+  def delete_groves_path do
+    TableConsensusConfig.delete(@groves_path_key)
+  end
+
+  # =============================================================
   # Bulk Operations
   # =============================================================
 
@@ -249,7 +291,8 @@ defmodule Quoracle.Models.ConfigModelSettings do
           answer_engine_model: String.t() | nil,
           summarization_model: String.t() | nil,
           image_generation_models: [String.t()] | nil,
-          skills_path: String.t() | nil
+          skills_path: String.t() | nil,
+          groves_path: String.t() | nil
         }
   def get_all do
     %{
@@ -257,7 +300,8 @@ defmodule Quoracle.Models.ConfigModelSettings do
       answer_engine_model: get_value_or_nil(get_answer_engine_model()),
       summarization_model: get_value_or_nil(get_summarization_model()),
       image_generation_models: get_value_or_nil(get_image_generation_models()),
-      skills_path: get_value_or_nil(get_skills_path())
+      skills_path: get_value_or_nil(get_skills_path()),
+      groves_path: get_value_or_nil(get_groves_path())
     }
   end
 

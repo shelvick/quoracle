@@ -63,6 +63,8 @@ defmodule Quoracle.Consensus.ActionParser do
     end
   end
 
+  defp validate_and_convert_action(_non_map), do: {:error, :missing_fields}
+
   defp extract_action(%{"action" => action}) when is_binary(action) do
     try do
       {:ok, String.to_existing_atom(action)}

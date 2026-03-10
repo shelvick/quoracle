@@ -13,9 +13,16 @@ defmodule QuoracleWeb.UI.TaskTree.NewTaskModal do
     * `:show_modal` - Whether the modal is visible
     * `:target` - The phx-target for form events
     * `:profiles` - List of profiles for selection
+    * `:groves` - List of grove metadata maps for grove selector
+    * `:selected_grove` - Currently selected grove name (nil if none)
   """
   @spec render(map()) :: Phoenix.LiveView.Rendered.t()
   def render(assigns) do
+    assigns =
+      assigns
+      |> Phoenix.Component.assign_new(:groves, fn -> [] end)
+      |> Phoenix.Component.assign_new(:selected_grove, fn -> nil end)
+
     ~H"""
     <div id="new-task-modal" class={if @show_modal, do: "fixed inset-0 z-50", else: "hidden"}>
       <%!-- Backdrop --%>
@@ -32,7 +39,16 @@ defmodule QuoracleWeb.UI.TaskTree.NewTaskModal do
           <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full p-6">
             <h3 class="text-lg font-semibold mb-4">Create New Task</h3>
 
-            <form id="new-task-form" phx-update="ignore" phx-submit="create_task" phx-target={@target}>
+            <%!-- Grove selector in its own form (LiveView requires phx-change inputs to have a form parent) --%>
+            <form id="grove-selector-form">
+              <QuoracleWeb.UI.GroveSelector.grove_dropdown
+                groves={@groves}
+                selected={@selected_grove}
+                target={@target}
+              />
+            </form>
+
+            <form id="new-task-form" phx-hook="GrovePrefill" phx-update="ignore" phx-submit="create_task" phx-target={@target}>
                 <div class="mb-6">
                   <h4 class="text-md font-medium mb-3">Profile</h4>
 

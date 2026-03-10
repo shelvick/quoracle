@@ -91,10 +91,20 @@ defmodule Quoracle.Consensus.PromptBuilder do
   def build_system_prompt_with_context(opts \\ []) do
     field_prompts = Keyword.get(opts, :field_prompts)
 
-    # Get allowed actions filtered by capability_groups
+    # Get allowed actions filtered by capability_groups and forbidden_actions (from grove hard rules)
     all_actions = Schema.list_actions()
     permission_check = get_permission_check(opts)
-    allowed_actions = ActionGate.filter_actions(all_actions, permission_check)
+
+    forbidden_actions =
+      opts
+      |> Keyword.get(:forbidden_actions, [])
+      |> List.wrap()
+      |> normalize_forbidden_actions()
+
+    allowed_actions =
+      all_actions
+      |> ActionGate.filter_actions(permission_check)
+      |> Kernel.--(forbidden_actions)
 
     # v19.0: Extract profile opts and build profile_context for system prompt
     profile_name = Keyword.get(opts, :profile_name)
@@ -205,6 +215,27 @@ defmodule Quoracle.Consensus.PromptBuilder do
   """
   @spec build_action_examples([atom()] | nil) :: String.t()
   defdelegate build_action_examples(allowed_actions \\ nil), to: Sections
+
+  @spec normalize_forbidden_actions([atom() | String.t()]) :: [atom()]
+  defp normalize_forbidden_actions(actions) when is_list(actions) do
+    actions
+    |> Enum.map(fn
+      action when is_atom(action) -> action
+      action when is_binary(action) -> safe_to_existing_atom(action)
+      _ -> nil
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  @spec safe_to_existing_atom(String.t()) :: atom() | nil
+  defp safe_to_existing_atom(action_name) when is_binary(action_name) and action_name != "" do
+    String.to_existing_atom(action_name)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp safe_to_existing_atom(_), do: nil
 
   @doc """
   Logs the system prompt if debug mode is enabled.

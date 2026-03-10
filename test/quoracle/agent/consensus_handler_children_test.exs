@@ -180,13 +180,15 @@ defmodule Quoracle.Agent.ConsensusHandlerChildrenTest do
       assert hd(result).content =~ "agent-1"
     end
 
-    test "returns messages unchanged when children empty" do
+    test "injects empty children signal when children empty" do
       state = %{children: [], registry: nil}
       messages = [%{role: "user", content: "Hello"}]
 
       result = ConsensusHandler.inject_children_context(state, messages)
 
-      assert result == messages
+      content = hd(result).content
+      assert content =~ "<children>No child agents running.</children>"
+      assert content =~ "Hello"
     end
   end
 end

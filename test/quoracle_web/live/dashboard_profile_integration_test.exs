@@ -183,7 +183,7 @@ defmodule QuoracleWeb.DashboardProfileIntegrationTest do
 
       # Submit form with profile
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{
         "task_description" => "Profile submit test",
         "profile" => profile.name
@@ -220,7 +220,7 @@ defmodule QuoracleWeb.DashboardProfileIntegrationTest do
 
       # Submit form without profile
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{
         "task_description" => "No profile test"
         # No profile field
@@ -242,7 +242,7 @@ defmodule QuoracleWeb.DashboardProfileIntegrationTest do
       view |> element("button", "New Task") |> render_click()
 
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{
         "task_description" => "Empty profile test",
         "profile" => ""
@@ -266,7 +266,7 @@ defmodule QuoracleWeb.DashboardProfileIntegrationTest do
       view |> element("button", "New Task") |> render_click()
 
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{
         "task_description" => "Non-existent profile test",
         "profile" => "nonexistent-profile-xyz"
@@ -308,7 +308,7 @@ defmodule QuoracleWeb.DashboardProfileIntegrationTest do
 
       # User action 3: Fill form and submit with profile
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{
         "task_description" => "Acceptance test task with profile",
         "profile" => profile.name,
@@ -358,7 +358,7 @@ defmodule QuoracleWeb.DashboardProfileIntegrationTest do
 
       # Try to submit without selecting profile
       view
-      |> element("#new-task-modal form")
+      |> element("#new-task-form")
       |> render_submit(%{
         "task_description" => "Task without profile"
         # profile not included

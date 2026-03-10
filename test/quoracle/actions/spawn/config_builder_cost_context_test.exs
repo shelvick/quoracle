@@ -32,6 +32,30 @@ defmodule Quoracle.Actions.Spawn.ConfigBuilderCostContextTest do
   end
 
   describe "[UNIT] cost context in transform_opts (R49-R51)" do
+    # R2117: Config stores initial_message for child initial send_user_message
+    test "build_config includes initial_message in config" do
+      deps = base_deps()
+
+      {:ok, config} =
+        ConfigBuilder.build_config(
+          {:field_based, "Audit stream offsets"},
+          %{
+            task_description: "Audit stream offsets",
+            success_criteria: "Detect every gap",
+            immediate_context: "Broker replay in progress",
+            approach_guidance: "Prefer deterministic checkpoints"
+          },
+          "parent-agent-id",
+          self(),
+          deps,
+          "child-id-r2117"
+        )
+
+      assert is_binary(config.initial_message)
+      assert config.initial_message =~ "<task>Audit stream offsets</task>"
+      assert config.initial_message =~ "<success_criteria>Detect every gap</success_criteria>"
+    end
+
     # R51: Backward Compatible Without Cost Context
     test "build_config works without cost context in deps" do
       # deps lacks agent_id/task_id/pubsub — should not crash

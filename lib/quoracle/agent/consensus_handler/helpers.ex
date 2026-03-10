@@ -104,6 +104,23 @@ defmodule Quoracle.Agent.ConsensusHandler.Helpers do
     |> Enum.any?(fn %{type: type} -> type in self_contained end)
   end
 
+  @doc """
+  Extracts the primary (first) skill name from agent state's active_skills list.
+
+  Used by ActionExecutor and TestActionHandler to set `:skill_name` in parent_config
+  for grove confinement and hard rule enforcement.
+  """
+  @spec primary_skill_name(map()) :: String.t() | nil
+  def primary_skill_name(state) do
+    state
+    |> Map.get(:active_skills, [])
+    |> Enum.find_value(fn
+      %{name: name} when is_binary(name) and name != "" -> name
+      %{"name" => name} when is_binary(name) and name != "" -> name
+      _ -> nil
+    end)
+  end
+
   @doc "Prepend text to message content, handling both binary and multimodal (list) formats."
   @spec prepend_to_content(String.t(), binary() | list()) :: binary() | list()
   def prepend_to_content(prefix, content) when is_list(content) do

@@ -68,18 +68,14 @@ defmodule Quoracle.Agent.Core.TestActionHandler do
       sandbox_owner: state.sandbox_owner,
       mcp_client: state.mcp_client,
       timeout: 5000,
+      grove_skills_path: Map.get(state, :grove_skills_path),
       # Pass dismissing state to avoid GenServer callback deadlock in Spawn
       dismissing: state.dismissing,
       # Pass capability_groups for permission enforcement in Router
       capability_groups: state.capability_groups,
-      # Parent config for child agent inheritance
-      parent_config: %{
-        models: state.models,
-        sandbox_owner: state.sandbox_owner,
-        test_mode: state.test_mode,
-        pubsub: state.pubsub,
-        skip_auto_consensus: state.skip_auto_consensus
-      }
+      # Parent config for child agent inheritance — pass full state (matches ActionExecutor pattern)
+      # to avoid field drift when new grove/config fields are added to Core.State
+      parent_config: build_parent_config(state)
     ]
 
     # Add spawn_complete_notify for spawn_child to support async pattern
@@ -172,6 +168,16 @@ defmodule Quoracle.Agent.Core.TestActionHandler do
       end
 
     {:reply, transformed_result, state}
+  end
+
+  # Build parent_config from state, matching ActionExecutor's pattern.
+  # Passes full state (struct → map) plus derived :skill_name to avoid
+  # manually listing fields (which caused missing grove_schemas/grove_workspace).
+  @spec build_parent_config(map()) :: map()
+  defp build_parent_config(state) do
+    parent_config = if is_struct(state), do: Map.from_struct(state), else: state
+
+    Map.put(parent_config, :skill_name, Helpers.primary_skill_name(parent_config))
   end
 
   # v25.0: Spawn a new Router and monitor it, adding to active_routers

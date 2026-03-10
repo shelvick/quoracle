@@ -12,6 +12,9 @@ defmodule Quoracle.Agent.TokenManagerACETest do
   - R14: Token Counting Accuracy - counts tokens not messages
   """
   use ExUnit.Case, async: true
+  use ExUnitProperties
+
+  import StreamData
 
   alias Quoracle.Agent.TokenManager
 
@@ -20,6 +23,15 @@ defmodule Quoracle.Agent.TokenManagerACETest do
   defp create_entry(id, word_count) do
     content = String.duplicate("word ", word_count) |> String.trim()
 
+    %{
+      id: id,
+      type: :user,
+      content: content,
+      timestamp: DateTime.utc_now()
+    }
+  end
+
+  defp create_entry_with_content(id, content) do
     %{
       id: id,
       type: :user,
@@ -297,6 +309,91 @@ defmodule Quoracle.Agent.TokenManagerACETest do
       # Single message: must remove it to meet >80% target
       assert length(to_remove) == 1
       assert to_keep == []
+    end
+  end
+
+  describe "v9.0 progress guarantee" do
+    test "R34: force-includes oldest entry when it exceeds cap" do
+      oversized_oldest =
+        create_entry_with_content(
+          1,
+          String.duplicate("./providers/vercel/models/deepseek/r1.toml ", 40)
+        )
+
+      # Newest-first storage: id=3 newest, id=1 oldest.
+      history = [create_entry(3, 5), create_entry(2, 5), oversized_oldest]
+
+      {to_remove, _to_keep} = TokenManager.tokens_to_condense(history, 50)
+
+      assert Enum.map(to_remove, & &1.id) == [1]
+    end
+
+    test "R35: normal cap behavior preserved when oldest entry fits" do
+      # Oldest (id=1) fits in cap, adding next oldest (id=2) exceeds cap.
+      history = [create_entry(3, 5), create_entry(2, 20), create_entry(1, 20)]
+
+      {to_remove, to_keep} = TokenManager.tokens_to_condense(history, 30)
+
+      assert Enum.map(to_remove, & &1.id) == [1]
+      assert Enum.map(to_keep, & &1.id) == [3, 2]
+    end
+
+    test "R36: non-empty history with positive cap always produces non-empty to_discard" do
+      oversized_oldest =
+        create_entry_with_content(
+          1,
+          String.duplicate("./providers/vercel/models/deepseek/r1.toml ", 30)
+        )
+
+      history = [create_entry(2, 3), oversized_oldest]
+
+      {to_remove, _to_keep} = TokenManager.tokens_to_condense(history, 20)
+
+      assert to_remove != []
+    end
+
+    test "R37: ordering contract maintained when force-including oversized oldest entry" do
+      oversized_oldest =
+        create_entry_with_content(
+          1,
+          String.duplicate("./providers/vercel/models/deepseek/r1.toml ", 35)
+        )
+
+      # Newest-first storage order.
+      history = [create_entry(4, 4), create_entry(3, 4), create_entry(2, 4), oversized_oldest]
+
+      {to_remove, to_keep} = TokenManager.tokens_to_condense(history, 25)
+
+      assert Enum.map(to_remove, & &1.id) == [1]
+      assert Enum.map(to_keep, & &1.id) == [4, 3, 2]
+    end
+
+    property "R38: non-empty discard for any non-empty history and positive total_tokens" do
+      check all(
+              total_tokens <- integer(1..200),
+              newer_word_counts <- list_of(integer(1..20), max_length: 5),
+              oversize_multiplier <- integer(2..4),
+              max_runs: 30
+            ) do
+        newer_entries =
+          Enum.with_index(newer_word_counts, 2)
+          |> Enum.map(fn {word_count, id} -> create_entry(id, word_count) end)
+
+        oversized_oldest =
+          create_entry_with_content(
+            1,
+            String.duplicate(
+              "./providers/vercel/models/deepseek/r1.toml ",
+              total_tokens * oversize_multiplier
+            )
+          )
+
+        history = newer_entries ++ [oversized_oldest]
+
+        {to_remove, _to_keep} = TokenManager.tokens_to_condense(history, total_tokens)
+
+        assert to_remove != []
+      end
     end
   end
 end
