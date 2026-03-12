@@ -194,13 +194,20 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
        when is_map(child_result) do
     if Keyword.get(opts, :action_atom) == :spawn_child and
          Map.has_key?(child_result, :agent_id) do
-      child_data = %{
-        agent_id: child_result.agent_id,
-        spawned_at: Map.get(child_result, :spawned_at, DateTime.utc_now()),
-        budget_allocated: Map.get(child_result, :budget_allocated)
-      }
+      child_id = child_result.agent_id
+      children = Map.get(state, :children, [])
 
-      Map.update(state, :children, [child_data], &[child_data | &1])
+      if Enum.any?(children, &(&1.agent_id == child_id)) do
+        state
+      else
+        child_data = %{
+          agent_id: child_id,
+          spawned_at: Map.get(child_result, :spawned_at, DateTime.utc_now()),
+          budget_allocated: Map.get(child_result, :budget_allocated)
+        }
+
+        Map.update(state, :children, [child_data], &[child_data | &1])
+      end
     else
       state
     end
@@ -208,8 +215,7 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
 
   defp maybe_track_child(state, _result, _opts), do: state
 
-  # v35.0 R67: Update budget_committed when spawn_child result includes budget_allocated
-  # Replaces the removed Core.update_budget_committed callback from Spawn (FIX_BudgetCallbackElimination)
+  # v35.0 R67: Update committed budget from successful spawn_child results
   defp maybe_update_budget_committed(state, {:ok, child_result}, opts)
        when is_map(child_result) do
     if Keyword.get(opts, :action_atom) == :spawn_child do

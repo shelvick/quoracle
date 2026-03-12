@@ -54,6 +54,43 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
     registry
   end
 
+  defp register_child_with_parent(registry, child_id, parent_pid) do
+    test_pid = self()
+
+    pid =
+      spawn(fn ->
+        Registry.register(registry, {:agent, child_id}, %{
+          pid: self(),
+          parent_pid: parent_pid,
+          registered_at: System.monotonic_time()
+        })
+
+        send(test_pid, {:registered, self()})
+
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    receive do
+      {:registered, ^pid} -> pid
+    after
+      1000 -> raise "Registry registration timeout for #{child_id}"
+    end
+  end
+
+  defp make_parent_registry_with_children(parent_agent_id, child_ids) do
+    registry = start_test_registry!()
+    Registry.register(registry, {:agent, parent_agent_id}, %{pid: self()})
+
+    child_pids =
+      Enum.map(child_ids, fn child_id ->
+        register_child_with_parent(registry, child_id, self())
+      end)
+
+    {registry, child_pids}
+  end
+
   describe "R1: inject_children_context/2 with empty children" do
     test "injects empty children signal when children list empty" do
       state = %{children: [], registry: nil}
@@ -123,9 +160,9 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
     end
   end
 
-  describe "R5: 20 children limit" do
-    test "limits injection to 20 children" do
-      children = for i <- 1..25, do: make_child("agent-#{i}", i)
+  describe "R5: no truncation" do
+    test "injects all children beyond the former 20-child limit" do
+      children = for i <- 1..30, do: make_child("agent-#{i}", i)
       registry = make_live_registry(children)
       state = %{children: children, registry: registry, messages: []}
       messages = [make_message("Hello")]
@@ -133,12 +170,9 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
       result = ChildrenInjector.inject_children_context(state, messages)
       content = hd(result).content
 
-      # Should have exactly 20 agent entries
-      assert length(Regex.scan(~r/"agent_id"/, content)) == 20
-      # Should have agent-1 through agent-20, not agent-21+
-      assert content =~ "agent-1"
-      assert content =~ "agent-20"
-      refute content =~ "agent-21"
+      assert length(Regex.scan(~r/"agent_id"/, content)) == 30
+      assert content =~ "agent-21"
+      assert content =~ "agent-30"
     end
   end
 
@@ -458,6 +492,123 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjectorTest do
       assert content =~ "Here is my answer"
       # There should still be one null latest_message_preview (for agent-silent)
       assert content =~ ~s("latest_message_preview":null)
+    end
+  end
+
+  describe "R30-R36: registry fallback" do
+    test "R30: discovers children from Registry when state.children is empty" do
+      parent_agent_id = "parent-r30-#{System.unique_integer([:positive])}"
+
+      {registry, child_pids} =
+        make_parent_registry_with_children(parent_agent_id, ["child-a", "child-b"])
+
+      on_exit(fn -> for pid <- child_pids, do: Process.exit(pid, :kill) end)
+
+      state = %{children: [], registry: registry, messages: [], agent_id: parent_agent_id}
+      messages = [make_message("What should I do?")]
+
+      result = ChildrenInjector.inject_children_context(state, messages)
+      content = hd(result).content
+
+      assert content =~ "<children>"
+      assert content =~ "child-a"
+      assert content =~ "child-b"
+    end
+
+    test "R32: Registry-only children have approximate spawned_at" do
+      parent_agent_id = "parent-r32-#{System.unique_integer([:positive])}"
+      {registry, child_pids} = make_parent_registry_with_children(parent_agent_id, ["child-new"])
+      on_exit(fn -> for pid <- child_pids, do: Process.exit(pid, :kill) end)
+
+      state = %{children: [], registry: registry, messages: [], agent_id: parent_agent_id}
+      messages = [make_message("Hello")]
+
+      result = ChildrenInjector.inject_children_context(state, messages)
+      content = hd(result).content
+
+      assert content =~ "child-new"
+
+      current_year = Date.utc_today().year |> to_string()
+      assert content =~ current_year
+    end
+
+    test "R31-R33: merges tracked children with Registry-only children without duplicates" do
+      parent_agent_id = "parent-r33-#{System.unique_integer([:positive])}"
+
+      {registry, child_pids} =
+        make_parent_registry_with_children(parent_agent_id, ["child-known", "child-new"])
+
+      on_exit(fn -> for pid <- child_pids, do: Process.exit(pid, :kill) end)
+
+      known_time = ~U[2025-12-27 01:00:00Z]
+
+      state = %{
+        children: [%{agent_id: "child-known", spawned_at: known_time}],
+        registry: registry,
+        messages: [],
+        agent_id: parent_agent_id
+      }
+
+      messages = [make_message("Hello")]
+
+      result = ChildrenInjector.inject_children_context(state, messages)
+      content = hd(result).content
+
+      assert content =~ "child-known"
+      assert content =~ "child-new"
+      assert content =~ "27 Dec 2025"
+      assert length(Regex.scan(~r/"child-known"/, content)) == 1
+    end
+
+    test "R34: invalid Registry causes graceful fallback to inject_empty_children" do
+      state = %{
+        children: [],
+        registry: :not_a_real_registry,
+        messages: [],
+        agent_id: "error-test-agent"
+      }
+
+      messages = [make_message("Hello")]
+
+      result = ChildrenInjector.inject_children_context(state, messages)
+      content = hd(result).content
+
+      assert content =~ "No child agents running"
+    end
+
+    test "R35: nil agent_id skips Registry discovery" do
+      registry = start_test_registry!()
+
+      state = %{
+        children: [],
+        registry: registry,
+        messages: [],
+        agent_id: nil
+      }
+
+      messages = [make_message("Hello")]
+
+      result = ChildrenInjector.inject_children_context(state, messages)
+      content = hd(result).content
+
+      assert content =~ "No child agents running"
+    end
+
+    test "R36: Registry-discovered children are enriched with messages" do
+      parent_agent_id = "parent-r36-#{System.unique_integer([:positive])}"
+      {registry, child_pids} = make_parent_registry_with_children(parent_agent_id, ["child-x"])
+      on_exit(fn -> for pid <- child_pids, do: Process.exit(pid, :kill) end)
+
+      inbox = [make_inbox_message("child-x", "My results are ready")]
+
+      state = %{children: [], registry: registry, messages: inbox, agent_id: parent_agent_id}
+      messages = [make_message("Hello")]
+
+      result = ChildrenInjector.inject_children_context(state, messages)
+      content = hd(result).content
+
+      assert content =~ "child-x"
+      assert content =~ "My results are ready"
     end
   end
 end

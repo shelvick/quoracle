@@ -488,6 +488,119 @@ defmodule Quoracle.Agent.Packet2SafetyTest do
     end
   end
 
+  describe "R400-R401: maybe_track_child dedup" do
+    test "maybe_track_child skips child already in state.children", %{state: state} do
+      action_id = "action_spawn_existing_child"
+      child_id = "existing-child-#{System.unique_integer([:positive])}"
+      spawned_at = ~U[2026-03-11 21:15:53Z]
+
+      existing_child = %{
+        agent_id: child_id,
+        spawned_at: spawned_at,
+        budget_allocated: Decimal.new("15.00")
+      }
+
+      state = %{
+        state
+        | children: [existing_child],
+          pending_actions: %{
+            action_id => %{
+              type: :spawn_child,
+              params: %{profile: "researcher"},
+              timestamp: DateTime.utc_now()
+            }
+          }
+      }
+
+      duplicate_result = %{
+        agent_id: child_id,
+        spawned_at: DateTime.utc_now(),
+        budget_allocated: Decimal.new("15.00")
+      }
+
+      opts = [
+        action_atom: :spawn_child,
+        wait_value: false,
+        always_sync: true,
+        action_response: %{
+          action: :spawn_child,
+          params: %{profile: "researcher"},
+          wait: false
+        }
+      ]
+
+      {:noreply, new_state} =
+        MessageHandler.handle_action_result(state, action_id, {:ok, duplicate_result}, opts)
+
+      matching_children = Enum.filter(new_state.children, &(&1.agent_id == child_id))
+
+      assert length(matching_children) == 1
+      assert hd(matching_children) == existing_child
+    end
+
+    test "maybe_track_child adds new child to state.children", %{state: state} do
+      action_id = "action_spawn_new_child"
+
+      existing_child = %{
+        agent_id: "existing-child-#{System.unique_integer([:positive])}",
+        spawned_at: DateTime.utc_now()
+      }
+
+      new_child_id = "new-child-#{System.unique_integer([:positive])}"
+      new_spawned_at = DateTime.utc_now()
+      new_budget = Decimal.new("22.00")
+
+      state = %{
+        state
+        | children: [existing_child],
+          pending_actions: %{
+            action_id => %{
+              type: :spawn_child,
+              params: %{profile: "researcher"},
+              timestamp: DateTime.utc_now()
+            }
+          },
+          budget_data: %{
+            mode: :root,
+            allocated: Decimal.new("100.00"),
+            committed: Decimal.new("0")
+          }
+      }
+
+      child_result = %{
+        agent_id: new_child_id,
+        spawned_at: new_spawned_at,
+        budget_allocated: new_budget
+      }
+
+      opts = [
+        action_atom: :spawn_child,
+        wait_value: false,
+        always_sync: true,
+        action_response: %{
+          action: :spawn_child,
+          params: %{profile: "researcher"},
+          wait: false
+        }
+      ]
+
+      {:noreply, new_state} =
+        MessageHandler.handle_action_result(state, action_id, {:ok, child_result}, opts)
+
+      matching_children = Enum.filter(new_state.children, &(&1.agent_id == new_child_id))
+
+      assert length(matching_children) == 1
+
+      assert hd(matching_children) == %{
+               agent_id: new_child_id,
+               spawned_at: new_spawned_at,
+               budget_allocated: new_budget
+             }
+
+      assert Enum.any?(new_state.children, &(&1.agent_id == existing_child.agent_id))
+    end
+  end
+
   # ============================================================================
   # FIX_BudgetCallbackElimination - R5: No Budget Update for Non-Budgeted Spawn
   # [UNIT] WHEN spawn_child result has nil budget_allocated THEN

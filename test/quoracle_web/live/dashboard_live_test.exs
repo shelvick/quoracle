@@ -134,11 +134,144 @@ defmodule QuoracleWeb.DashboardLiveTest do
     end
   end
 
-  # NOTE: "agent spawning with explicit messaging" describe block deleted in Packet 4
-  # These tests used form[phx-submit='submit_prompt'] which moved to TaskTree component.
-  # Task creation via form is now tested in:
-  # - test/quoracle_web/live/ui/task_tree_test.exs (component tests)
-  # - test/quoracle_web/live/dashboard_3panel_integration_test.exs (integration)
+  describe "deferred agent data fetch" do
+    test "fetch_agent_data_parallel skips agents not in map (registry drift)", _context do
+      alias QuoracleWeb.DashboardLive.DataLoader
+
+      # Simulate registry returning an agent that wasn't in the mount snapshot
+      # (spawned between mount and deferred fetch)
+      agents_map = %{}
+      live_agents = [{"new-agent", %{pid: self(), task_id: "t1", parent_id: nil}}]
+
+      # Should not crash — silently skips agents missing from the map
+      result = DataLoader.fetch_agent_data_parallel(live_agents, agents_map, 100)
+      assert result == %{}
+    end
+
+    test "fetch_agent_data_parallel merges fetched todos and budget into agent map", _context do
+      alias QuoracleWeb.DashboardLive.DataLoader
+
+      fake_todos = [%{id: "t1", text: "do stuff", done: false}]
+      fake_budget = %{limit: 100, spent: 42}
+
+      # Spawn a process that responds to :get_todos and :get_state like a real agent
+      fake_pid =
+        spawn(fn ->
+          receive_loop = fn loop ->
+            receive do
+              {:"$gen_call", from, :get_todos} ->
+                GenServer.reply(from, fake_todos)
+                loop.(loop)
+
+              {:"$gen_call", from, :get_state} ->
+                GenServer.reply(from, {:ok, %{budget_data: fake_budget}})
+                loop.(loop)
+
+              :stop ->
+                :ok
+            end
+          end
+
+          receive_loop.(receive_loop)
+        end)
+
+      on_exit(fn ->
+        if Process.alive?(fake_pid), do: send(fake_pid, :stop)
+      end)
+
+      agents_map = %{
+        "agent-1" => %{agent_id: "agent-1", todos: [], budget_data: nil}
+      }
+
+      live_agents = [{"agent-1", %{pid: fake_pid, task_id: "t1", parent_id: nil}}]
+
+      result = DataLoader.fetch_agent_data_parallel(live_agents, agents_map, 2000)
+
+      assert result["agent-1"].todos == fake_todos
+      assert result["agent-1"].budget_data == fake_budget
+    end
+
+    test "deferred fetch populates agent todos after mount", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      task = create_db_only_task("Deferred fetch test")
+      agent_id = "deferred-agent-1"
+      fake_todos = [%{id: "todo-1", text: "test item", done: false}]
+      fake_budget = %{allocated: Decimal.new("500"), committed: Decimal.new("0")}
+
+      # Spawn fake agent that responds to GenServer calls
+      fake_pid =
+        spawn(fn ->
+          loop = fn loop_fn ->
+            receive do
+              {:"$gen_call", from, :get_todos} ->
+                GenServer.reply(from, fake_todos)
+                loop_fn.(loop_fn)
+
+              {:"$gen_call", from, :get_state} ->
+                GenServer.reply(from, {:ok, %{budget_data: fake_budget}})
+                loop_fn.(loop_fn)
+
+              :stop ->
+                :ok
+            end
+          end
+
+          loop.(loop)
+        end)
+
+      on_exit(fn ->
+        if Process.alive?(fake_pid), do: send(fake_pid, :stop)
+      end)
+
+      # Register in Registry BEFORE mount so list_all_agents finds it
+      Registry.register(registry, {:agent, agent_id}, %{
+        pid: fake_pid,
+        task_id: task.id,
+        parent_id: nil
+      })
+
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner
+          }
+        )
+
+      # render(view) forces the LiveView to process the deferred {:fetch_agent_data, ...} message
+      render(view)
+
+      # Verify the agent's todos were populated by the deferred fetch
+      agents = :sys.get_state(view.pid).socket.assigns.agents
+      assert agents[agent_id].todos == fake_todos
+      assert agents[agent_id].budget_data == fake_budget
+    end
+
+    test "fetch_agent_data_parallel preserves agent on timeout", _context do
+      alias QuoracleWeb.DashboardLive.DataLoader
+
+      agents_map = %{
+        "agent-1" => %{agent_id: "agent-1", todos: [], budget_data: nil}
+      }
+
+      # self() won't respond to GenServer calls, causing timeout
+      live_agents = [{"agent-1", %{pid: self(), task_id: "t1", parent_id: nil}}]
+
+      result = DataLoader.fetch_agent_data_parallel(live_agents, agents_map, 50)
+
+      # Agent still present with original data (timeout fallback keeps it unchanged)
+      assert Map.has_key?(result, "agent-1")
+      assert result["agent-1"].todos == []
+      assert result["agent-1"].budget_data == nil
+    end
+  end
 
   describe "agent selection" do
     test "updates selected_agent_id on agent selection", %{
@@ -1370,10 +1503,6 @@ defmodule QuoracleWeb.DashboardLiveTest do
       assert html =~ "running"
     end
 
-    # NOTE: ARC_DB_09 (task selection) deleted in Packet 4
-    # Task selection feature was removed - all tasks now shown simultaneously
-    # in unified tree. Each task displays its own agent subtree inline.
-
     test "ARC_DB_10: WHEN agent_spawned event IF received THEN updates agents map AND task live status",
          %{
            conn: conn,
@@ -1893,7 +2022,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
             "pubsub" => pubsub,
             "registry" => registry,
             "dynsup" => dynsup,
-            "sandbox_owner" => sandbox_owner
+            "sandbox_owner" => sandbox_owner,
+            "cost_debounce_ms" => 0
           }
         )
 
@@ -1912,10 +2042,11 @@ defmodule QuoracleWeb.DashboardLiveTest do
       initial_assigns = :sys.get_state(view.pid).socket.assigns
       initial_timestamp = initial_assigns.costs_updated_at
 
-      # Send cost_recorded event
+      # Send cost_recorded event — 0ms debounce fires before next render
       send(view.pid, {:cost_recorded, %{task_id: "some-task", cost_usd: Decimal.new("0.05")}})
-
-      # Force processing
+      # First render processes cost_recorded (starts 0ms timer)
+      render(view)
+      # Second render processes :flush_cost_updates (timer already fired)
       render(view)
 
       # Get updated costs_updated_at
@@ -1940,7 +2071,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
             "pubsub" => pubsub,
             "registry" => registry,
             "dynsup" => dynsup,
-            "sandbox_owner" => sandbox_owner
+            "sandbox_owner" => sandbox_owner,
+            "cost_debounce_ms" => 0
           }
         )
 
@@ -1959,10 +2091,12 @@ defmodule QuoracleWeb.DashboardLiveTest do
       initial_assigns = :sys.get_state(view.pid).socket.assigns
       initial_timestamp = initial_assigns.costs_updated_at
 
-      # Send multiple cost_recorded events and collect timestamps
+      # Send multiple cost_recorded events — 0ms debounce fires between renders
       collected_timestamps =
         Enum.map(1..5, fn i ->
           send(view.pid, {:cost_recorded, %{task_id: "task-#{i}", cost_usd: Decimal.new("0.01")}})
+          render(view)
+          # Timer fires within 1ms, second render processes :flush_cost_updates
           render(view)
 
           assigns = :sys.get_state(view.pid).socket.assigns
@@ -1978,6 +2112,69 @@ defmodule QuoracleWeb.DashboardLiveTest do
       |> Enum.each(fn [prev, curr] ->
         assert curr > prev, "Expected #{curr} > #{prev}"
       end)
+    end
+
+    # R19b: Debounce Burst Coalescing [INTEGRATION]
+    test "R19b: burst of cost_recorded events coalesces into single refresh", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      # Use a longer debounce so the timer does NOT fire between sends
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner,
+            "cost_debounce_ms" => 5_000
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      initial_timestamp =
+        :sys.get_state(view.pid).socket.assigns.costs_updated_at
+
+      # Send a burst of 10 cost events — all should be absorbed by debounce
+      for i <- 1..10 do
+        send(view.pid, {:cost_recorded, %{task_id: "task-#{i}"}})
+      end
+
+      render(view)
+
+      # Timestamp should NOT have changed yet (timer still pending)
+      mid_timestamp =
+        :sys.get_state(view.pid).socket.assigns.costs_updated_at
+
+      assert mid_timestamp == initial_timestamp,
+             "Debounce should hold — timestamp must not change before timer fires"
+
+      # Timer ref should be set (proving a timer was scheduled)
+      timer = :sys.get_state(view.pid).socket.assigns.cost_refresh_timer
+      assert timer != nil, "Debounce timer should be pending"
+
+      # Cancel the long timer so it doesn't leak, then manually flush
+      Process.cancel_timer(timer)
+      send(view.pid, :flush_cost_updates)
+      render(view)
+
+      final_timestamp =
+        :sys.get_state(view.pid).socket.assigns.costs_updated_at
+
+      assert final_timestamp > initial_timestamp,
+             "Flush should bump timestamp after burst"
     end
 
     # R20: costs_updated_at Propagation [INTEGRATION]
@@ -2059,7 +2256,8 @@ defmodule QuoracleWeb.DashboardLiveTest do
             "pubsub" => pubsub,
             "registry" => registry,
             "dynsup" => dynsup,
-            "sandbox_owner" => sandbox_owner
+            "sandbox_owner" => sandbox_owner,
+            "cost_debounce_ms" => 0
           }
         )
 
@@ -2094,10 +2292,9 @@ defmodule QuoracleWeb.DashboardLiveTest do
           sandbox_owner: sandbox_owner
         )
 
-      # Force view to process PubSub message
+      # First render processes cost_recorded PubSub message (starts 0ms timer)
       render(view)
-
-      # Verify cost appears in UI as formatted number, not Decimal struct
+      # Second render processes :flush_cost_updates (timer already fired)
       html = render(view)
 
       # Cost should display as plain number

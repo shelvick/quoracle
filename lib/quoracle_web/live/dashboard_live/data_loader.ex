@@ -6,12 +6,11 @@ defmodule QuoracleWeb.DashboardLive.DataLoader do
 
   @doc """
   Load tasks from database and merge with Registry state.
-
-  Options:
-    * `:agent_fetch_timeout` - timeout in ms for fetching agent data (default: 1000)
+  Returns agents with metadata only (no GenServer.calls).
+  Per-agent data (todos, budget) is fetched separately via `fetch_agent_data_parallel/3`.
   """
   @spec load_tasks_from_db(atom(), atom(), keyword()) :: %{tasks: map(), agents: map()}
-  def load_tasks_from_db(registry, _pubsub, opts \\ []) do
+  def load_tasks_from_db(registry, _pubsub, _opts \\ []) do
     # Query all tasks from database
     db_tasks = Quoracle.Tasks.TaskManager.list_tasks()
 
@@ -38,7 +37,7 @@ defmodule QuoracleWeb.DashboardLive.DataLoader do
       |> Enum.into(%{})
 
     # Merge live agent state with DB tasks
-    {tasks_with_state, agents_map} = merge_task_state(tasks_map, live_agents, opts)
+    {tasks_with_state, agents_map} = merge_task_state(tasks_map, live_agents)
 
     %{
       tasks: tasks_with_state,
@@ -48,48 +47,23 @@ defmodule QuoracleWeb.DashboardLive.DataLoader do
 
   @doc """
   Merge task database state with live Registry state.
-
-  Options:
-    * `:agent_fetch_timeout` - timeout in ms for fetching agent data (default: 1000)
+  Builds agents map from Registry metadata only (no GenServer.calls).
   """
-  @spec merge_task_state(map(), list(), keyword()) :: {map(), map()}
-  def merge_task_state(tasks_map, live_agents, opts \\ []) do
+  @spec merge_task_state(map(), list()) :: {map(), map()}
+  def merge_task_state(tasks_map, live_agents) do
     # Group live agents by task_id
     agents_by_task =
       Enum.group_by(live_agents, fn {_agent_id, meta} ->
         Map.get(meta, :task_id)
       end)
 
-    # Fetch agent data in parallel to avoid sequential blocking during mount
-    # This prevents UI timeout when agents are busy (e.g., waiting on LLM)
-    agent_fetch_timeout = Keyword.get(opts, :agent_fetch_timeout, 1000)
-
-    agent_data =
-      live_agents
-      |> Enum.zip(
-        Task.async_stream(
-          live_agents,
-          fn {_agent_id, meta} ->
-            pid = Map.get(meta, :pid)
-            {fetch_agent_todos(pid), fetch_agent_budget_data(pid)}
-          end,
-          timeout: agent_fetch_timeout,
-          on_timeout: :kill_task
-        )
-      )
-      |> Enum.map(fn
-        {{agent_id, meta}, {:ok, {todos, budget_data}}} ->
-          {agent_id, meta, todos, budget_data}
-
-        {{agent_id, meta}, {:exit, _reason}} ->
-          # Timeout - still show agent but with empty data
-          {agent_id, meta, [], nil}
-      end)
-
-    # Build agents map (flat structure for rendering)
+    # Phase 1: Build agents map from Registry metadata only (no GenServer.calls).
+    # This keeps mount fast regardless of agent count.
+    # Todos and budget_data are populated asynchronously after mount via
+    # :fetch_agent_data message (see DashboardLive).
     agents_map =
-      agent_data
-      |> Enum.map(fn {agent_id, meta, todos, budget_data} ->
+      live_agents
+      |> Enum.map(fn {agent_id, meta} ->
         {agent_id,
          %{
            agent_id: agent_id,
@@ -98,8 +72,8 @@ defmodule QuoracleWeb.DashboardLive.DataLoader do
            pid: Map.get(meta, :pid),
            status: :running,
            children: [],
-           todos: todos,
-           budget_data: budget_data,
+           todos: [],
+           budget_data: nil,
            timestamp: System.system_time(:millisecond)
          }}
       end)
@@ -112,6 +86,42 @@ defmodule QuoracleWeb.DashboardLive.DataLoader do
     updated_tasks = update_task_status(tasks_map, agents_by_task)
 
     {updated_tasks, agents_map}
+  end
+
+  @doc """
+  Fetch todos and budget data for all live agents in parallel.
+  Merges results into the existing agents_map.
+  """
+  @spec fetch_agent_data_parallel(list(), map(), integer()) :: map()
+  def fetch_agent_data_parallel(live_agents, agents_map, timeout \\ 1000) do
+    live_agents
+    |> Enum.zip(
+      Task.async_stream(
+        live_agents,
+        fn {_agent_id, meta} ->
+          pid = Map.get(meta, :pid)
+          {fetch_agent_todos(pid), fetch_agent_budget_data(pid)}
+        end,
+        timeout: timeout,
+        on_timeout: :kill_task
+      )
+    )
+    |> Enum.reduce(agents_map, fn
+      {{agent_id, _meta}, {:ok, {todos, budget_data}}}, acc ->
+        # Only update agents already in the map — agents that spawned after
+        # mount built the initial map aren't present yet and will arrive via
+        # {:agent_spawned, ...} PubSub messages with their own data.
+        case Map.fetch(acc, agent_id) do
+          {:ok, agent} ->
+            Map.put(acc, agent_id, %{agent | todos: todos, budget_data: budget_data})
+
+          :error ->
+            acc
+        end
+
+      {{_agent_id, _meta}, {:exit, _reason}}, acc ->
+        acc
+    end)
   end
 
   @doc """

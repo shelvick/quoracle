@@ -25,11 +25,7 @@ defmodule QuoracleWeb.DashboardLive do
 
   alias Quoracle.Profiles.TableProfiles
 
-  @doc """
-  Returns the current PubSub instance to use.
-  In tests, uses session-passed pubsub for isolation.
-  In production, uses the configured PubSub instance.
-  """
+  @doc "Returns PubSub instance (session-injected for test isolation, global for production)."
   @spec current_pubsub(map()) :: atom()
   def current_pubsub(session \\ %{}) do
     case session do
@@ -49,44 +45,32 @@ defmodule QuoracleWeb.DashboardLive do
 
     dynsup = session["dynsup"] || session[:dynsup] || Quoracle.Agent.DynSup.get_dynsup_pid()
 
-    # Extract or discover EventHistory PID for buffer replay
     event_history_pid = DataLoader.get_event_history_pid(session)
 
-    # CRITICAL: Grant sandbox access in tests
-    # LiveView processes don't automatically inherit sandbox access with live_isolated
+    # Grant sandbox access in tests (LiveView doesn't inherit with live_isolated)
     sandbox_owner = session["sandbox_owner"] || session[:sandbox_owner]
 
     if sandbox_owner do
       Ecto.Adapters.SQL.Sandbox.allow(Quoracle.Repo, sandbox_owner, self())
     end
 
-    # Load profiles from database (needed for both connected and not connected)
     profiles = load_profiles()
 
-    # Load groves from groves_path (session-injected for tests, fallback for production)
     groves_path = session["groves_path"] || session[:groves_path]
     groves_opts = if groves_path, do: [groves_path: groves_path], else: []
     groves = load_groves(groves_opts)
 
-    # Extract skills_path from session (test isolation for global skills directory)
     skills_path = session["skills_path"] || session[:skills_path]
-
-    # Optional TaskManager test opts for route-level acceptance tests
     task_manager_test_opts = session["task_manager_test_opts"] || session[:task_manager_test_opts]
+    cost_debounce_ms = session["cost_debounce_ms"] || session[:cost_debounce_ms]
 
     if connected?(socket) do
-      # Subscribe to core topics (only when WebSocket is connected)
       Subscriptions.subscribe_to_core_topics(pubsub)
 
-      # Load persisted tasks and agents from database
       load_opts = extract_load_opts(session)
       %{tasks: tasks, agents: agents} = DataLoader.load_tasks_from_db(registry, pubsub, load_opts)
-
-      # Auto-subscribe to existing agents' log topics
       Subscriptions.subscribe_to_existing_agents(pubsub, session)
 
-      # Subscribe to task message and cost topics for tasks with live root agents
-      # and track them in subscribed_topics to prevent double-subscription
       subscribed_topics =
         tasks
         |> Map.values()
@@ -100,15 +84,16 @@ defmodule QuoracleWeb.DashboardLive do
           |> MapSet.put("tasks:#{task.id}:costs")
         end)
 
-      # Build agent_alive_map for direct message button visibility
       agent_alive_map = DataLoader.build_agent_alive_map(agents)
 
-      # Query EventHistory buffer for logs and messages (page refresh replay)
       agent_ids = Map.keys(agents)
       task_ids = Map.keys(tasks)
 
       {buffered_logs, buffered_messages} =
         DataLoader.query_event_history(event_history_pid, agent_ids, task_ids)
+
+      # Defer per-agent data fetch to after mount (avoids longpoll timeout with many agents)
+      send(self(), {:fetch_agent_data, load_opts})
 
       {:ok,
        assign(socket,
@@ -131,13 +116,16 @@ defmodule QuoracleWeb.DashboardLive do
          subscribed_topics: subscribed_topics,
          agent_alive_map: agent_alive_map,
          costs_updated_at: System.monotonic_time(),
+         cost_debounce_ms: cost_debounce_ms,
          # Grove skills path (server-derived, SEC-2a)
          grove_skills_path: nil,
          # Budget editor state (R44)
          budget_editor_visible: false,
          budget_editor_task_id: nil,
          budget_editor_current: nil,
-         budget_editor_spent: nil
+         budget_editor_spent: nil,
+         current_task_id: nil,
+         loaded_grove: nil
        )}
     else
       # Not connected - minimal state
@@ -162,13 +150,16 @@ defmodule QuoracleWeb.DashboardLive do
          subscribed_topics: MapSet.new(),
          agent_alive_map: %{},
          costs_updated_at: System.monotonic_time(),
+         cost_debounce_ms: cost_debounce_ms,
          # Grove skills path (server-derived, SEC-2a)
          grove_skills_path: nil,
          # Budget editor state (R44)
          budget_editor_visible: false,
          budget_editor_task_id: nil,
          budget_editor_current: nil,
-         budget_editor_spent: nil
+         budget_editor_spent: nil,
+         current_task_id: nil,
+         loaded_grove: nil
        )}
     end
   end
@@ -180,13 +171,11 @@ defmodule QuoracleWeb.DashboardLive do
     end
   end
 
-  # Loads grove metadata from groves directory
   defp load_groves(opts) do
     {:ok, groves} = Quoracle.Groves.Loader.list_groves(opts)
     groves
   end
 
-  # Loads profiles from database ordered by name
   defp load_profiles do
     import Ecto.Query
 
@@ -304,8 +293,6 @@ defmodule QuoracleWeb.DashboardLive do
     """
   end
 
-  # Event Handlers - delegate to EventHandlers module
-
   @impl true
   @spec handle_event(binary(), map(), Phoenix.LiveView.Socket.t()) ::
           {:noreply, Phoenix.LiveView.Socket.t()}
@@ -327,24 +314,19 @@ defmodule QuoracleWeb.DashboardLive do
   def handle_event("delete_task", params, socket),
     do: EventHandlers.handle_delete_task(params, socket)
 
-  # Budget editor event handlers (R46, R47, R49)
   def handle_event("submit_budget_edit", params, socket),
     do: EventHandlers.handle_submit_budget_edit(params, socket)
 
   def handle_event("cancel_budget_edit", _params, socket),
     do: EventHandlers.handle_cancel_budget_edit(socket)
 
-  # Catch-all for deprecated/child component events
   def handle_event(event, params, socket),
     do: EventHandlers.handle_child_component_event(event, params, socket)
-
-  # Message Handlers - delegate to MessageHandlers module
 
   @impl true
   @spec handle_info(tuple() | atom(), Phoenix.LiveView.Socket.t()) ::
           {:noreply, Phoenix.LiveView.Socket.t()}
 
-  # TaskTree event delegation - TaskTree sends these messages to Dashboard
   def handle_info({:pause_task, task_id}, socket),
     do: EventHandlers.handle_pause_task(%{"task-id" => task_id}, socket)
 
@@ -357,11 +339,9 @@ defmodule QuoracleWeb.DashboardLive do
   def handle_info({:submit_prompt, params}, socket),
     do: EventHandlers.handle_submit_prompt(params, socket)
 
-  # Budget editor message (R45)
   def handle_info({:show_budget_editor, task_id}, socket),
     do: EventHandlers.handle_show_budget_editor(task_id, socket)
 
-  # Agent lifecycle events
   def handle_info({:select_agent, agent_id}, socket),
     do: MessageHandlers.handle_select_agent(agent_id, socket)
 
@@ -377,7 +357,6 @@ defmodule QuoracleWeb.DashboardLive do
   def handle_info({:state_changed, payload}, socket),
     do: MessageHandlers.handle_state_changed(payload, socket)
 
-  # Task and message events
   def handle_info({:set_current_task, task_id}, socket),
     do: MessageHandlers.handle_set_current_task(task_id, socket)
 
@@ -390,56 +369,71 @@ defmodule QuoracleWeb.DashboardLive do
   def handle_info({:task_message, message}, socket),
     do: MessageHandlers.handle_task_message(message, socket)
 
-  # Task list (todos) events
   def handle_info({:todos_updated, payload}, socket),
     do: MessageHandlers.handle_todos_updated(payload, socket)
 
-  # Cost recording events - bump costs_updated_at to trigger re-render
+  @default_cost_debounce_ms 2_000
+
   def handle_info({:cost_recorded, _payload}, socket) do
-    {:noreply, assign(socket, costs_updated_at: System.monotonic_time())}
+    if socket.assigns[:cost_refresh_timer] do
+      # Timer already pending — absorb this event
+      {:noreply, socket}
+    else
+      debounce_ms = socket.assigns[:cost_debounce_ms] || @default_cost_debounce_ms
+      timer = schedule_cost_flush(debounce_ms)
+      {:noreply, assign(socket, cost_refresh_timer: timer)}
+    end
   end
 
-  # Connection events
+  def handle_info(:flush_cost_updates, socket) do
+    {:noreply,
+     socket
+     |> assign(costs_updated_at: System.monotonic_time())
+     |> assign(cost_refresh_timer: nil)}
+  end
+
   def handle_info({:mount, :reconnected}, socket),
     do: MessageHandlers.handle_reconnection(socket)
 
-  # Action events
   def handle_info({:action_started, payload}, socket),
     do: MessageHandlers.handle_action_started(payload, socket)
 
-  # Test events
   def handle_info({:test_event, payload}, socket),
     do: MessageHandlers.handle_test_event(payload, socket)
 
-  # Reply from Message component
   def handle_info({:send_reply, message_id, content}, socket),
     do: MessageHandlers.handle_send_reply(message_id, content, socket)
 
-  # Direct message from AgentNode component
   def handle_info({:send_direct_message, agent_id, content}, socket),
     do: MessageHandlers.handle_send_direct_message(agent_id, content, socket)
 
-  # Handles selected grove updates from the TaskTree component.
-  def handle_info({:selected_grove_updated, grove_name}, socket) do
-    {:noreply, assign(socket, selected_grove: grove_name)}
+  def handle_info({:selected_grove_updated, grove_name}, socket),
+    do: MessageHandlers.handle_selected_grove_updated(grove_name, socket)
+
+  def handle_info({:loaded_grove_updated, grove}, socket),
+    do: MessageHandlers.handle_loaded_grove_updated(grove, socket)
+
+  def handle_info({:grove_skills_path_updated, path}, socket),
+    do: MessageHandlers.handle_grove_skills_path_updated(path, socket)
+
+  def handle_info({:grove_error, message}, socket),
+    do: MessageHandlers.handle_grove_error(message, socket)
+
+  def handle_info({:fetch_agent_data, load_opts}, socket) do
+    registry = socket.assigns.registry
+    agent_fetch_timeout = Keyword.get(load_opts, :agent_fetch_timeout, 1000)
+    live_agents = Quoracle.Agent.RegistryQueries.list_all_agents(registry)
+
+    updated_agents =
+      DataLoader.fetch_agent_data_parallel(
+        live_agents,
+        socket.assigns.agents,
+        agent_fetch_timeout
+      )
+
+    {:noreply, Phoenix.Component.assign(socket, agents: updated_agents)}
   end
 
-  # Caches loaded grove struct from TaskTree to avoid redundant file I/O on task creation.
-  def handle_info({:loaded_grove_updated, grove}, socket) do
-    {:noreply, assign(socket, loaded_grove: grove)}
-  end
-
-  # Grove skills path update from TaskTree component (SEC-2a)
-  def handle_info({:grove_skills_path_updated, path}, socket) do
-    {:noreply, assign(socket, grove_skills_path: path)}
-  end
-
-  # Grove error from TaskTree component
-  def handle_info({:grove_error, message}, socket) do
-    {:noreply, Phoenix.LiveView.put_flash(socket, :error, message)}
-  end
-
-  # Test support messages - delegate to TestHelpers
   def handle_info({:render_log_entry, log}, socket),
     do: TestHelpers.handle_render_log_entry(log, socket)
 
@@ -461,7 +455,16 @@ defmodule QuoracleWeb.DashboardLive do
   def handle_info({:send_message, message}, socket),
     do: TestHelpers.handle_send_message(message, socket)
 
-  # Catch-all for unknown messages
   def handle_info(message, socket),
     do: MessageHandlers.handle_unknown_message(message, socket)
+
+  @spec schedule_cost_flush(non_neg_integer()) :: reference() | :immediate
+  defp schedule_cost_flush(0) do
+    send(self(), :flush_cost_updates)
+    :immediate
+  end
+
+  defp schedule_cost_flush(ms) do
+    Process.send_after(self(), :flush_cost_updates, ms)
+  end
 end

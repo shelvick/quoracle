@@ -10,7 +10,7 @@
 - format_sender_id/1: :parent→"parent", :user→"user", binary→as-is
 
 ## Private Helpers
-- maybe_track_child/3: Track spawned children from non-blocking dispatch results (spawn_child action only)
+- maybe_track_child/3: Track spawned children from non-blocking dispatch results (spawn_child action only), v30.0: Enum.any? idempotency guard prevents duplicate entries (matches ChildrenTracker.handle_child_spawned/2 pattern)
 - maybe_update_budget_committed/3: Update budget_data.committed for spawn_child results (replaces removed Core.update_budget_committed callback)
 - maybe_track_shell_router/3: Populate shell_routers with {command_id, router_pid} from async shell Phase 1 results (v25.0, v26.0 refactor: uses shared `async_shell_phase1?/1` predicate). Matches `{:ok, %{status: :running, command_id: binary, sync: false}}`.
 - async_shell_phase1?/1: Shared predicate detecting async shell Phase 1 ack. Used by both pending_actions guard and shell_routers tracking. Pattern: `{:ok, %{status: :running, command_id: binary, sync: false}}`.

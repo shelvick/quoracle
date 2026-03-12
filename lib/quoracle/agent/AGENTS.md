@@ -28,7 +28,7 @@
 - ConsensusHandler.Helpers: Helper functions (133 lines), normalize_sibling_context/1, self_contained_actions/0, has_pending_self_contained?/1 (v26.0), coerce_wait_value/1 (v34.0 DRY extraction), prepend_to_content/2, extract_shell_check_id/2 (v25.0 shared helper for shell routing), primary_skill_name/1 (REFACTOR DRY extraction from ActionExecutor)
 - ConsensusHandler.LogHelper: Logging helpers (63 lines), safe_broadcast_log/5, log_action_error/1 (v28.0: {:error, _} unwrap, {:action_crashed, tuple} clause, extended @warning_errors with transient network errors)
 - ConsensusHandler.TodoInjector: TODO injection (82 lines), inject_todo_context/2, format_todos_as_xml/1, escape_xml/1
-- ConsensusHandler.ChildrenInjector: Children context injection (150 lines), inject_children_context/2, format_children/1, Registry-based status check, v2.0: enrich_with_messages/2 cross-references state.messages for latest_message + latest_message_at per child
+- ConsensusHandler.ChildrenInjector: Children context injection (218 lines), inject_children_context/2, format_children/1, Registry-based status check, v2.0: enrich_with_messages/2 cross-references state.messages for latest_message + latest_message_at per child, v3.0: Registry fallback discovers children via Registry.select when state.children is empty/incomplete (race condition fix)
 - ConsensusHandler.AceInjector: ACE context injection (82 lines, v1.0), inject_ace_context/3 into FIRST user message (historical knowledge), format_ace_context/2
 - ConsensusHandler.ContextInjector: Context token injection (95 lines, v2.0), inject_context_tokens/1 counts fully-built messages (excluding system prompt), format_context_tokens/1 with comma separators
 - StateUtils: State manipulation helpers (145 lines), action_type tracking for NO_EXECUTE, v3.0 adds merge_consensus_state/2 for ACE state merging (extracted from MessageHandler/ConsensusContinuationHandler), v5.0 adds cancel_wait_timer/1 for DRY timer cancellation (4 pattern-matched clauses), v6.0 adds schedule_consensus_continuation/1 for DRY "set flag + send trigger" pattern, v38.0 adds :cached_system_prompt to merge_keys
@@ -80,13 +80,14 @@
 
 ## Children Tracking (2025-12-27)
 - Core.State.children: `[%{agent_id: String.t(), spawned_at: DateTime.t()}]` (changed from `[pid()]`)
-- Core.ChildrenTracker: handle_child_spawned/2 (prepend), handle_child_dismissed/2 (remove by id), handle_child_restored/2 (restoration)
+- Core.ChildrenTracker: handle_child_spawned/2 (idempotent prepend), handle_child_dismissed/2 (remove by id), handle_child_restored/2 (restoration)
 - ConsensusHandler.ChildrenInjector: inject_children_context/2 (up to 20 children, Registry-filtered)
 - Spawn action: Casts `{:child_spawned, %{agent_id, spawned_at}}` to parent after success
 - DismissChild action: Casts `{:child_dismissed, child_id}` to parent after dispatch
 - XML format: `<children>{"agent_id":"...", "spawned_at":"...", "latest_message":"...", "latest_message_at":"..."}</children>` (v2.0: enriched with message preview)
 - Injection order: children→todos→content (children prepended last, appears first)
 - v2.0 enrichment: Cross-references state.messages at injection time, truncates latest_message to 100 chars, RFC 2822 timestamps
+- v3.0 Registry fallback: ChildrenInjector discovers children via Registry.select when state.children is empty/incomplete (batch_async race condition fix). Dual-path tracking contract: both ChildrenTracker.handle_child_spawned/2 and ActionResultHandler.maybe_track_child/3 enforce Enum.any? idempotency guards
 
 ## Patterns
 - Full dependency injection (registry/dynsup/pubsub via opts)

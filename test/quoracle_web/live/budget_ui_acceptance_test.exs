@@ -78,7 +78,8 @@ defmodule QuoracleWeb.BudgetUIAcceptanceTest do
       "pubsub" => context.pubsub,
       "registry" => context.registry,
       "dynsup" => context.dynsup,
-      "sandbox_owner" => context.sandbox_owner
+      "sandbox_owner" => context.sandbox_owner,
+      "cost_debounce_ms" => 0
     })
     |> live("/")
   end
@@ -354,10 +355,9 @@ defmodule QuoracleWeb.BudgetUIAcceptanceTest do
           pubsub: context.pubsub
         )
 
-      # First render processes the cost_recorded PubSub message
+      # First render processes cost_recorded PubSub message (starts 0ms timer)
       render(view)
-
-      # POSITIVE ASSERTION: Cost should be reflected in display
+      # Second render processes :flush_cost_updates (timer already fired)
       html = render(view)
 
       assert html =~ "$10.00",

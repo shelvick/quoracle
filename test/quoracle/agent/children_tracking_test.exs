@@ -151,6 +151,16 @@ defmodule Quoracle.Agent.ChildrenTrackingTest do
     wait_loop.(wait_loop)
   end
 
+  defp register_registry_child(registry, child_id, parent_pid) do
+    Registry.register(registry, {:agent, child_id}, %{
+      pid: self(),
+      parent_pid: parent_pid,
+      registered_at: System.monotonic_time()
+    })
+
+    child_id
+  end
+
   # Build spawn opts
   defp spawn_opts(deps, parent_pid) do
     Map.to_list(deps) ++ [agent_pid: parent_pid]
@@ -710,6 +720,143 @@ defmodule Quoracle.Agent.ChildrenTrackingTest do
 
       assert oldest.agent_id == first_result.agent_id,
              "Oldest child (first spawn) should be second in list"
+    end
+  end
+
+  describe "R37-R39: race condition and dedup fixes" do
+    @tag :acceptance
+    test "children visible in consensus when child_spawned casts lag", %{deps: deps} do
+      response_json =
+        Jason.encode!(%{"action" => "wait", "params" => %{}, "reasoning" => "test"})
+
+      mock_query_fn = fn _messages, [model_id], _opts ->
+        {:ok,
+         %{
+           successful_responses: [%{model: model_id, content: response_json}],
+           failed_models: []
+         }}
+      end
+
+      {:ok, parent_pid} =
+        spawn_agent_with_cleanup(
+          deps.dynsup,
+          %{
+            agent_id: "parent-#{System.unique_integer([:positive])}",
+            task_id: Ecto.UUID.generate(),
+            test_mode: true,
+            sandbox_owner: deps.sandbox_owner,
+            registry: deps.registry,
+            dynsup: deps.dynsup,
+            pubsub: deps.pubsub,
+            model_pool: ["mock-model"],
+            model_histories: %{"mock-model" => []},
+            prompt_fields: %{
+              provided: %{task_description: "Parent agent task"},
+              injected: %{global_context: "", constraints: []},
+              transformed: %{}
+            },
+            test_opts: [model_query_fn: mock_query_fn]
+          },
+          registry: deps.registry,
+          pubsub: deps.pubsub,
+          sandbox_owner: deps.sandbox_owner
+        )
+
+      {:ok, parent_state} = Core.get_state(parent_pid)
+      Phoenix.PubSub.subscribe(deps.pubsub, "agents:#{parent_state.agent_id}:logs")
+
+      child_ids =
+        for i <- 1..3 do
+          register_registry_child(
+            deps.registry,
+            "race-child-#{i}-#{System.unique_integer([:positive])}",
+            parent_pid
+          )
+        end
+
+      {:ok, state} = Core.get_state(parent_pid)
+      assert state.children == []
+
+      Core.send_user_message(parent_pid, "What should I do?")
+
+      receive_consensus_log = fn receive_consensus_log, remaining_ms ->
+        receive do
+          {:log_entry, log_entry} ->
+            if log_entry.message =~ "Sending to consensus" do
+              log_entry
+            else
+              receive_consensus_log.(receive_consensus_log, remaining_ms)
+            end
+        after
+          remaining_ms ->
+            flunk("Expected a 'Sending to consensus' log entry")
+        end
+      end
+
+      log_entry = receive_consensus_log.(receive_consensus_log, 30_000)
+
+      sent_messages = log_entry.metadata[:sent_messages]
+      assert is_list(sent_messages)
+      [model_entry | _] = sent_messages
+
+      last_user_message = Enum.find(Enum.reverse(model_entry.messages), &(&1.role == "user"))
+      assert last_user_message, "Expected at least one user message in sent_messages"
+
+      last_user_content =
+        case last_user_message.content do
+          binary when is_binary(binary) -> binary
+          list when is_list(list) -> Enum.map_join(list, " ", &to_string(&1[:text] || ""))
+        end
+
+      assert last_user_content =~ "What should I do?"
+      assert last_user_content =~ "<children>"
+      refute last_user_content =~ "No child agents running"
+
+      for child_id <- child_ids do
+        assert last_user_content =~ child_id
+      end
+    end
+
+    test "duplicate child_spawned casts don't create duplicate children", %{deps: deps} do
+      {:ok, parent_pid} = spawn_parent_agent(deps)
+
+      child_id = "dedup-child-#{System.unique_integer([:positive])}"
+      register_registry_child(deps.registry, child_id, parent_pid)
+
+      child_data = %{agent_id: child_id, spawned_at: DateTime.utc_now()}
+
+      GenServer.cast(parent_pid, {:child_spawned, child_data})
+      GenServer.cast(parent_pid, {:child_spawned, child_data})
+
+      {:ok, state} = Core.get_state(parent_pid)
+
+      matching = Enum.filter(state.children, &(&1.agent_id == child_id))
+      assert length(matching) == 1
+    end
+
+    test "children from both state tracking and Registry merge correctly", %{deps: deps} do
+      {:ok, parent_pid} = spawn_parent_agent(deps)
+
+      tracked_child_id = "tracked-#{System.unique_integer([:positive])}"
+      registry_only_child_id = "untracked-#{System.unique_integer([:positive])}"
+
+      register_registry_child(deps.registry, tracked_child_id, parent_pid)
+      register_registry_child(deps.registry, registry_only_child_id, parent_pid)
+
+      tracked_child = %{agent_id: tracked_child_id, spawned_at: DateTime.utc_now()}
+      GenServer.cast(parent_pid, {:child_spawned, tracked_child})
+
+      {:ok, state} = Core.get_state(parent_pid)
+
+      assert Enum.any?(state.children, &(&1.agent_id == tracked_child_id))
+      refute Enum.any?(state.children, &(&1.agent_id == registry_only_child_id))
+
+      messages = [%{role: "user", content: "Status?"}]
+      injected = ChildrenInjector.inject_children_context(state, messages)
+      content = hd(injected).content
+
+      assert content =~ tracked_child_id
+      assert content =~ registry_only_child_id
     end
   end
 end

@@ -133,6 +133,15 @@
 - consensus/per_model_query_ace_test.exs: Updated ACE R40 assertion for fallback artifact behavior
 - consensus_per_model_test.exs: Updated R17 for fallback artifact behavior + vacuous assertion fix
 
+## Children Tracking Tests (fix-20260311-211553)
+- children_tracking_test.exs: 13 tests (R1-R6 + R4a-R4b v2.0 + R37-R39 v3.0), race condition + dedup integration tests
+  - R37: Batch-async race — children visible via Registry fallback when child_spawned casts lag
+  - R38: handle_child_spawned idempotency — duplicate casts don't create duplicate children
+  - R39: Mixed tracking — both state and Registry sources merge correctly
+- packet2_safety_test.exs: R400-R401 (2 tests), maybe_track_child dedup unit tests
+  - R400: maybe_track_child skips child already in state.children
+  - R401: maybe_track_child adds new child to state.children
+
 ## Removed Files
 core_injection_test.exs, config_manager_injection_test.exs, dyn_sup_injection_test.exs (redundant after isolation)
 
