@@ -5,7 +5,7 @@
 - Helpers: Shared helper functions (116 lines), self_contained_actions/0, has_pending_self_contained?/1 (v26.0), coerce_wait_value/1, extract_shell_check_id/2, normalize_sibling_context/1
 - LogHelper: Logging helpers (63 lines), safe_broadcast_log/5, log_action_error/1 (v28.0: {:error, _} unwrap, {:action_crashed, tuple} clause, extended @warning_errors)
 - TodoInjector: Todo list context injection (82 lines), inject_todo_context/2
-- ChildrenInjector: Children context injection (150 lines), inject_children_context/2, format_children/1, v2.0: enrich_with_messages/2 cross-references state.messages to add latest_message + latest_message_at per child
+- ChildrenInjector: Children context injection (218 lines), inject_children_context/2, format_children/1, v2.0: enrich_with_messages/2 cross-references state.messages to add latest_message + latest_message_at per child, v3.0: Registry fallback via discover_registry_children/2 + safe_find_children_by_parent/2 + build_registry_child/1 + merge_registry_children/2 for race condition fix
 - AceInjector: ACE context injection (82 lines), inject_ace_context/3
 - CorrectionInjector: Per-model correction feedback injection (56 lines, v1.0), inject_correction_feedback/3 — prepends correction to last user message at MessageBuilder step 7.5
 - ContextInjector: Context token injection (95 lines), inject_context_tokens/1

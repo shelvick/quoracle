@@ -1,32 +1,38 @@
 defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjector do
   @moduledoc """
-  Handles children injection into consensus messages.
-  Extracted from ConsensusHandler to maintain <500 line modules.
+  Injects children context into consensus messages as a `<children>` XML block.
 
-  v2.0: Message enrichment — cross-references state.messages to show
-  latest_message_preview and latest_message_at per child in consensus context.
+  Discovers children from two sources: `state.children` (tracked via casts) and
+  Registry (fallback for race conditions where casts haven't arrived yet). Merges
+  both sources, filters to live children, enriches each with the latest inbox
+  message preview, and prepends the block to the last consensus message.
   """
 
   alias Quoracle.Agent.ConsensusHandler.Helpers
 
   @max_message_length 100
 
-  @doc "Injects children context (up to 20) into last message. Returns messages unchanged only if messages empty."
+  @doc "Injects children context into last message. Returns messages unchanged only if messages empty."
   @spec inject_children_context(map(), list(map())) :: list(map())
   def inject_children_context(state, messages) do
     if messages == [], do: messages, else: inject_children_block(state, messages)
   end
 
   defp inject_children_block(state, messages) do
-    children = Map.get(state, :children, [])
     registry = Map.get(state, :registry)
-    live_children = if children == [], do: [], else: filter_live_children(children, registry)
+    registry_children = discover_registry_children(state, registry)
+
+    live_children =
+      state
+      |> Map.get(:children, [])
+      |> filter_live_children(registry)
+      |> merge_registry_children(registry_children)
 
     if live_children == [] do
       inject_empty_children(messages)
     else
       inbox = Map.get(state, :messages, [])
-      enriched = enrich_with_messages(Enum.take(live_children, 20), inbox)
+      enriched = enrich_with_messages(live_children, inbox)
       inject_into_last_message(messages, enriched)
     end
   end
@@ -91,6 +97,61 @@ defmodule Quoracle.Agent.ConsensusHandler.ChildrenInjector do
     catch
       _, _ -> :not_found
     end
+  end
+
+  @spec discover_registry_children(map(), atom() | pid() | nil) :: list(map())
+  defp discover_registry_children(%{agent_id: nil}, _registry), do: []
+  defp discover_registry_children(_state, nil), do: []
+
+  defp discover_registry_children(state, registry) do
+    case Map.get(state, :agent_id) do
+      nil ->
+        []
+
+      agent_id ->
+        case safe_registry_lookup(registry, agent_id) do
+          {:ok, parent_pid} ->
+            registry
+            |> safe_find_children_by_parent(parent_pid)
+            |> Enum.map(&build_registry_child/1)
+
+          :not_found ->
+            []
+        end
+    end
+  end
+
+  @spec safe_find_children_by_parent(atom() | pid(), pid()) :: list({String.t(), map()})
+  defp safe_find_children_by_parent(registry, parent_pid) do
+    try do
+      Registry.select(registry, [
+        {{{:agent, :"$1"}, :"$2", :"$3"}, [{:==, {:map_get, :parent_pid, :"$3"}, parent_pid}],
+         [{{:"$1", :"$3"}}]}
+      ])
+    rescue
+      _ -> []
+    catch
+      _, _ -> []
+    end
+  end
+
+  # Registry composite is a map with keys :pid, :agent_id, :task_id, :parent_pid,
+  # :parent_id, :registered_at — but NOT :spawned_at or :budget_allocated,
+  # so we use approximate values for the child entry.
+  @spec build_registry_child({String.t(), map()}) :: map()
+  defp build_registry_child({agent_id, _composite}) do
+    %{
+      agent_id: agent_id,
+      spawned_at: DateTime.utc_now(),
+      budget_allocated: nil
+    }
+  end
+
+  @spec merge_registry_children(list(map()), list(map())) :: list(map())
+  defp merge_registry_children(children, registry_children) do
+    tracked_ids = MapSet.new(children, & &1.agent_id)
+
+    children ++ Enum.reject(registry_children, &MapSet.member?(tracked_ids, &1.agent_id))
   end
 
   # Enrich children with latest message data from the agent's inbox.

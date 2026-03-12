@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-03-12
+
+### Fixed
+
+- Child tracking race condition: use Registry fallback when injected children lag state updates, and deduplicate spawn_child results to keep tracking consistent under async races.
+- Dashboard cost refresh storm: debounce `cost_recorded` PubSub events (2s window) to prevent O(N²) re-query feedback loop that caused UI lockup with 100+ agents.
+
+### Changed
+
+- Removed 20-child injection limit that caused agents to lose visibility of children beyond 20, triggering unbounded respawning.
+- Deferred per-agent GenServer calls (todos, budget) in Dashboard to after mount to prevent longpoll timeout with many live agents.
+
+### Removed
+
+- Dead `registry_spawned_at/1` function and unreachable code paths in ChildrenInjector.
+
 ## [0.2.0] - 2026-03-10
 
 ### Added
