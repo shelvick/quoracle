@@ -5,6 +5,7 @@ defmodule Quoracle.Groves.SpawnContractResolver do
 
   require Logger
 
+  alias Quoracle.Groves.LogHelper
   alias Quoracle.Groves.PathSecurity
 
   @type topology_edge :: %{optional(String.t()) => term()}
@@ -77,6 +78,35 @@ defmodule Quoracle.Groves.SpawnContractResolver do
       _ ->
         {:ok, %{skills: [], profile: nil, constraints: nil}}
     end
+  end
+
+  @doc """
+  Validates that grove_vars provides any topology-declared required_context keys.
+  Missing keys only emit warnings so unresolved templates degrade safely.
+  """
+  @spec validate_required_context(topology_edge() | nil, map() | nil, String.t()) :: :ok
+  def validate_required_context(edge, grove_vars, log_prefix \\ "Spawn")
+
+  def validate_required_context(nil, _grove_vars, _log_prefix), do: :ok
+  def validate_required_context(edge, _grove_vars, _log_prefix) when not is_map(edge), do: :ok
+
+  def validate_required_context(edge, grove_vars, log_prefix) do
+    required_context =
+      case Map.get(edge, "required_context") do
+        values when is_list(values) -> Enum.filter(values, &is_binary/1)
+        _ -> []
+      end
+
+    missing_keys = missing_required_context_keys(required_context, grove_vars)
+
+    if missing_keys != [] do
+      message =
+        "#{log_prefix}: missing grove_vars required_context keys: #{inspect(missing_keys)}"
+
+      log_warning(message)
+    end
+
+    :ok
   end
 
   @doc """
@@ -210,4 +240,18 @@ defmodule Quoracle.Groves.SpawnContractResolver do
   end
 
   defp merge_constraints(_topology_constraints, _llm_constraints), do: nil
+
+  @spec missing_required_context_keys([String.t()], map() | nil) :: [String.t()]
+  defp missing_required_context_keys([], _grove_vars), do: []
+  defp missing_required_context_keys(required, nil), do: required
+
+  defp missing_required_context_keys(required, grove_vars) when is_map(grove_vars) do
+    # Normalize grove_vars keys to strings for comparison (LLM may send atom or string keys)
+    string_keys = grove_vars |> Map.keys() |> Enum.map(&to_string/1)
+    Enum.reject(required, &(&1 in string_keys))
+  end
+
+  defp missing_required_context_keys(required, _grove_vars), do: required
+
+  defp log_warning(message), do: LogHelper.log_warning(message)
 end

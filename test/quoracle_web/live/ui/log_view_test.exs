@@ -566,4 +566,346 @@ defmodule QuoracleWeb.UI.LogViewTest do
       assert true
     end
   end
+
+  describe "v5.0: pre-computed display_logs" do
+    # R5: [UNIT] WHEN update/2 called with new logs THEN display_logs is pre-computed with level filtering applied
+    test "R5: update pre-computes display_logs with level filter", %{conn: conn} do
+      # Create logs with only debug-level entries
+      debug_only_logs = [
+        %{
+          id: 100,
+          agent_id: "agent_1",
+          level: :debug,
+          message: "Debug only entry",
+          metadata: %{},
+          timestamp: ~U[2024-01-01 10:00:00Z]
+        }
+      ]
+
+      {:ok, view, _html} = render_isolated(conn, debug_only_logs)
+
+      # Set min_level to :error — with only debug logs, display_logs should be empty
+      view
+      |> element("[phx-click='set_min_level'][phx-value-level='error']")
+      |> render_click()
+
+      html = render(view)
+
+      # With pre-computed display_logs, the empty check uses @display_logs == []
+      # which should show "No logs" when all entries are filtered out.
+      # Current implementation checks @logs == [] (which is false since @logs has entries),
+      # so "No logs" text is NOT shown even when filter produces empty result.
+      assert html =~ "No logs",
+             "display_logs should be pre-computed — empty filtered result should show 'No logs'"
+    end
+
+    # R6: [UNIT] WHEN set_min_level event fires THEN display_logs is recomputed for new level
+    test "R6: set_min_level recomputes display_logs", %{conn: conn} do
+      logs = create_test_logs()
+      {:ok, view, _html} = render_isolated(conn, logs)
+
+      # Change level to :warn — should recompute display_logs
+      view
+      |> element("[phx-click='set_min_level'][phx-value-level='warn']")
+      |> render_click()
+
+      html = render(view)
+
+      # Only warn and error should remain in display_logs
+      refute html =~ "Agent started", "info log should be excluded at :warn level"
+      refute html =~ "Processing action", "debug log should be excluded at :warn level"
+      assert html =~ "Slow response", "warn log should be in display_logs at :warn level"
+      assert html =~ "Action failed", "error log should be in display_logs at :warn level"
+
+      # Verify display_logs controls empty state: only info logs → filter to :error → "No logs"
+      info_only = [
+        %{
+          id: 77,
+          agent_id: "a1",
+          level: :info,
+          message: "Info only",
+          metadata: %{},
+          timestamp: ~U[2024-01-01 10:00:00Z]
+        }
+      ]
+
+      {:ok, view2, _html} = render_isolated(conn, info_only)
+
+      view2
+      |> element("[phx-click='set_min_level'][phx-value-level='error']")
+      |> render_click()
+
+      html2 = render(view2)
+
+      assert html2 =~ "No logs",
+             "display_logs pre-computation: set_min_level should show 'No logs' when result is empty"
+    end
+
+    # R7: [INTEGRATION] WHEN component renders after update/2 THEN visible log entries match @display_logs exactly
+    test "R7: rendered log list matches precomputed display_logs", %{conn: conn} do
+      logs = create_test_logs()
+      {:ok, view, _html} = render_isolated(conn, logs)
+
+      # Set min_level to :info to filter out debug logs
+      view
+      |> element("[phx-click='set_min_level'][phx-value-level='info']")
+      |> render_click()
+
+      html = render(view)
+
+      # After set_min_level, display_logs should be pre-computed with the filter.
+      # With min_level :info, we expect 3 logs: info, warn, error (not debug).
+      # Each rendered via LogEntry LiveComponent with id="log-entry-{id}"
+      assert html =~ ~s(id="log-entry-1"), "info log (id=1) should be rendered"
+      assert html =~ ~s(id="log-entry-3"), "warn log (id=3) should be rendered"
+      assert html =~ ~s(id="log-entry-4"), "error log (id=4) should be rendered"
+
+      # debug log should NOT be rendered (filtered by pre-computed display_logs)
+      refute html =~ ~s(id="log-entry-2"),
+             "debug log (id=2) should NOT be rendered when display_logs is pre-computed at :info level"
+
+      # With pre-computed display_logs, filtered-out entries should result in "No logs" message
+      # when ALL entries are excluded. Set to :error to filter more aggressively.
+      view
+      |> element("[phx-click='set_min_level'][phx-value-level='error']")
+      |> render_click()
+
+      html = render(view)
+
+      # Only error log should be rendered
+      assert html =~ ~s(id="log-entry-4"), "error log (id=4) should still be rendered"
+      refute html =~ ~s(id="log-entry-1"), "info log (id=1) should be excluded at :error level"
+      refute html =~ ~s(id="log-entry-3"), "warn log (id=3) should be excluded at :error level"
+
+      # Verify display_logs controls empty state: only debug logs → filter to :error → "No logs"
+      debug_only = [
+        %{
+          id: 88,
+          agent_id: "a1",
+          level: :debug,
+          message: "Debug match check",
+          metadata: %{},
+          timestamp: ~U[2024-01-01 10:00:00Z]
+        }
+      ]
+
+      {:ok, view2, _html} = render_isolated(conn, debug_only)
+
+      view2
+      |> element("[phx-click='set_min_level'][phx-value-level='error']")
+      |> render_click()
+
+      html2 = render(view2)
+
+      assert html2 =~ "No logs",
+             "display_logs pre-computation: empty result should show 'No logs' not blank list"
+    end
+
+    # R7b: [SYSTEM] WHEN user changes severity filter THEN visible log entries update to the matching severity subset
+    @tag :acceptance
+    test "R7b: changing severity level filters displayed logs", %{conn: conn} do
+      logs = create_test_logs()
+      {:ok, view, _html} = render_isolated(conn, logs)
+
+      # Start at default level (:debug) — all logs visible
+      html = render(view)
+      assert html =~ "Agent started"
+      assert html =~ "Slow response"
+      assert html =~ "Action failed"
+      assert html =~ "Processing action"
+
+      # User switches to :warn — only warn and error visible
+      view
+      |> element("[phx-click='set_min_level'][phx-value-level='warn']")
+      |> render_click()
+
+      html = render(view)
+      refute html =~ "Agent started", "info log should be hidden at :warn level"
+      refute html =~ "Processing action", "debug log should be hidden at :warn level"
+      assert html =~ "Slow response", "warn log should be visible at :warn level"
+      assert html =~ "Action failed", "error log should be visible at :warn level"
+
+      # User switches to :error — only error visible
+      view
+      |> element("[phx-click='set_min_level'][phx-value-level='error']")
+      |> render_click()
+
+      html = render(view)
+      refute html =~ "Agent started", "info log should be hidden at :error level"
+      refute html =~ "Processing action", "debug log should be hidden at :error level"
+      refute html =~ "Slow response", "warn log should be hidden at :error level"
+      assert html =~ "Action failed", "error log should be visible at :error level"
+
+      # With pre-computed display_logs, when ALL logs filtered out, "No logs" should appear
+      # Create a view with only debug logs, set to :error
+      debug_only = [
+        %{
+          id: 99,
+          agent_id: "a1",
+          level: :debug,
+          message: "Only debug here",
+          metadata: %{},
+          timestamp: ~U[2024-01-01 10:00:00Z]
+        }
+      ]
+
+      {:ok, view2, _html} = render_isolated(conn, debug_only)
+
+      view2
+      |> element("[phx-click='set_min_level'][phx-value-level='error']")
+      |> render_click()
+
+      html2 = render(view2)
+      # With pre-computed display_logs, empty result should show "No logs"
+      assert html2 =~ "No logs",
+             "display_logs pre-computation should show 'No logs' when filter excludes all entries"
+
+      # Negative: no crash states
+      refute html2 =~ "FunctionClauseError"
+    end
+
+    # R8: [UNIT] WHEN min_level is :warn THEN only :warn and :error logs appear in display_logs
+    test "R8: warn level shows only warn and error logs", %{conn: conn} do
+      logs = create_test_logs()
+      {:ok, view, _html} = render_isolated(conn, logs)
+
+      # Set min_level to :warn
+      view
+      |> element("[phx-click='set_min_level'][phx-value-level='warn']")
+      |> render_click()
+
+      html = render(view)
+
+      # Only warn and error should be in display_logs
+      refute html =~ "Agent started", "info should not appear in display_logs at :warn"
+      refute html =~ "Processing action", "debug should not appear in display_logs at :warn"
+      assert html =~ "Slow response", "warn should appear in display_logs at :warn"
+      assert html =~ "Action failed", "error should appear in display_logs at :warn"
+
+      # With only warn-level logs and :error filter, "No logs" should appear
+      # (verifies display_logs pre-computation controls the empty-state check)
+      warn_only = [
+        %{
+          id: 50,
+          agent_id: "a1",
+          level: :warn,
+          message: "Warn only",
+          metadata: %{},
+          timestamp: ~U[2024-01-01 10:00:00Z]
+        }
+      ]
+
+      {:ok, view2, _html} = render_isolated(conn, warn_only)
+
+      view2
+      |> element("[phx-click='set_min_level'][phx-value-level='error']")
+      |> render_click()
+
+      html2 = render(view2)
+
+      assert html2 =~ "No logs",
+             "display_logs pre-computation: empty filtered result should show 'No logs'"
+    end
+
+    # R9: [UNIT] WHEN more than 100 logs match filter THEN display_logs contains only last 100
+    test "R9: display_logs limited to 100 entries", %{conn: conn} do
+      # Create 150 logs all at :info level
+      logs =
+        for i <- 1..150 do
+          %{
+            id: i,
+            agent_id: "agent_1",
+            level: :info,
+            message: "Log entry #{i}",
+            metadata: %{},
+            timestamp: DateTime.utc_now()
+          }
+        end
+
+      {:ok, view, _html} = render_isolated(conn, logs)
+
+      html = render(view)
+
+      # display_logs should contain only last 100 (entries 51-150)
+      assert html =~ "Log entry 150", "newest log should be visible"
+      assert html =~ "Log entry 51", "100th-from-last log should be visible"
+
+      refute html =~ "Log entry 50",
+             "display_logs should be limited to 100 entries — entry 50 should be excluded"
+
+      # Create 3 debug-only logs and filter to :error — "No logs" should appear
+      # (verifies display_logs controls the empty-state check, not raw @logs)
+      debug_logs =
+        for i <- 1..3 do
+          %{
+            id: 200 + i,
+            agent_id: "a1",
+            level: :debug,
+            message: "Debug #{i}",
+            metadata: %{},
+            timestamp: DateTime.utc_now()
+          }
+        end
+
+      {:ok, view2, _html} = render_isolated(conn, debug_logs)
+
+      view2
+      |> element("[phx-click='set_min_level'][phx-value-level='error']")
+      |> render_click()
+
+      html2 = render(view2)
+
+      assert html2 =~ "No logs",
+             "display_logs pre-computation: empty filtered result should show 'No logs'"
+    end
+
+    # R10: [UNIT] WHEN clear_logs event fires THEN display_logs is also cleared
+    test "R10: clear_logs clears display_logs", %{conn: conn} do
+      logs = create_test_logs()
+      {:ok, view, _html} = render_isolated(conn, logs)
+
+      # Verify logs are displayed
+      html = render(view)
+      assert html =~ "Agent started"
+
+      # Clear logs
+      view
+      |> element("[phx-click='clear_logs']")
+      |> render_click()
+
+      html = render(view)
+
+      # display_logs should also be cleared — "No logs" shown
+      assert html =~ "No logs", "display_logs should be cleared when logs are cleared"
+      refute html =~ "Agent started", "no log entries should be rendered after clear"
+      refute html =~ "Slow response"
+      refute html =~ "Action failed"
+
+      # Verify that after clear + new logs via update, display_logs is recomputed.
+      # Send new logs to the component and verify display_logs picks them up.
+      new_logs = [
+        %{
+          id: 200,
+          agent_id: "a1",
+          level: :debug,
+          message: "Post-clear debug log",
+          metadata: %{},
+          timestamp: DateTime.utc_now()
+        }
+      ]
+
+      send(view.pid, {:update_component, %{logs: new_logs}})
+      render(view)
+
+      # Set to :error — with only debug logs, display_logs should be empty
+      view
+      |> element("[phx-click='set_min_level'][phx-value-level='error']")
+      |> render_click()
+
+      html2 = render(view)
+      # With pre-computed display_logs, empty result shows "No logs"
+      assert html2 =~ "No logs",
+             "display_logs pre-computation: post-clear filtered empty result should show 'No logs'"
+    end
+  end
 end

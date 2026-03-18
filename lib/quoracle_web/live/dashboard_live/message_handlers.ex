@@ -9,7 +9,12 @@ defmodule QuoracleWeb.DashboardLive.MessageHandlers do
   @doc "Handle agent selection from TaskTree component."
   @spec handle_select_agent(String.t(), Socket.t()) :: {:noreply, Socket.t()}
   def handle_select_agent(agent_id, socket) do
-    {:noreply, Phoenix.Component.assign(socket, selected_agent_id: agent_id)}
+    socket =
+      socket
+      |> Phoenix.Component.assign(selected_agent_id: agent_id)
+      |> recompute_filtered_logs()
+
+    {:noreply, socket}
   end
 
   @doc "Handle agent spawn event — subscribe to logs, update task/agent state."
@@ -116,15 +121,19 @@ defmodule QuoracleWeb.DashboardLive.MessageHandlers do
     agent_alive_map = Map.put(socket.assigns.agent_alive_map, agent_id, true)
     {logs, messages} = Helpers.query_agent_buffer(socket, agent_id, task_id)
 
-    {:noreply,
-     Phoenix.Component.assign(socket,
-       agents: agents,
-       tasks: tasks,
-       current_task_id: current_task_id,
-       agent_alive_map: agent_alive_map,
-       logs: logs,
-       messages: messages
-     )}
+    socket =
+      socket
+      |> Phoenix.Component.assign(
+        agents: agents,
+        tasks: tasks,
+        current_task_id: current_task_id,
+        agent_alive_map: agent_alive_map,
+        logs: logs,
+        messages: messages
+      )
+      |> recompute_filtered_logs()
+
+    {:noreply, socket}
   end
 
   @doc "Handle agent termination — unsubscribe from logs and update state."
@@ -210,7 +219,12 @@ defmodule QuoracleWeb.DashboardLive.MessageHandlers do
     agents = Map.delete(socket.assigns.agents, agent_id)
     logs = Map.delete(socket.assigns.logs, agent_id)
 
-    {:noreply, Phoenix.Component.assign(socket, agents: agents, logs: logs)}
+    socket =
+      socket
+      |> Phoenix.Component.assign(agents: agents, logs: logs)
+      |> recompute_filtered_logs()
+
+    {:noreply, socket}
   end
 
   @doc "Handle agent state change event."
@@ -253,25 +267,34 @@ defmodule QuoracleWeb.DashboardLive.MessageHandlers do
     end
   end
 
-  @doc "Handle incoming log entry (deduplicates by id)."
+  @default_log_debounce_ms 300
+
+  @doc "Handle incoming log entry (deduplicates by id, buffers for debounced flush)."
   @spec handle_log_entry(map(), Socket.t()) :: {:noreply, Socket.t()}
   def handle_log_entry(log, socket) do
     agent_id = log[:agent_id]
     log_id = log[:id]
-    agent_logs = Map.get(socket.assigns.logs, agent_id, [])
-    already_exists = log_id != nil and Enum.any?(agent_logs, &(&1[:id] == log_id))
 
-    if already_exists do
+    # Dedup against BOTH persisted logs AND the pending buffer
+    agent_logs = Map.get(socket.assigns.logs, agent_id, [])
+    in_persisted = log_id != nil and Enum.any?(agent_logs, &(&1[:id] == log_id))
+    in_buffer = log_id != nil and Enum.any?(socket.assigns.log_buffer, &(&1[:id] == log_id))
+
+    if in_persisted or in_buffer do
       {:noreply, socket}
     else
-      new_logs =
-        socket.assigns.logs
-        |> Map.update(agent_id, [log], fn existing_logs ->
-          # Prepend new log and keep only last 100
-          [log | existing_logs] |> Enum.take(100)
-        end)
+      # Buffer the log entry instead of immediately assigning
+      buffer = [log | socket.assigns.log_buffer]
 
-      {:noreply, Phoenix.Component.assign(socket, logs: new_logs)}
+      if socket.assigns[:log_refresh_timer] do
+        # Timer already pending — just buffer
+        {:noreply, Phoenix.Component.assign(socket, log_buffer: buffer)}
+      else
+        debounce_ms = socket.assigns[:log_debounce_ms] || @default_log_debounce_ms
+        timer = schedule_log_flush(debounce_ms)
+
+        {:noreply, Phoenix.Component.assign(socket, log_buffer: buffer, log_refresh_timer: timer)}
+      end
     end
   end
 
@@ -383,6 +406,27 @@ defmodule QuoracleWeb.DashboardLive.MessageHandlers do
   @doc "Catch-all for unhandled messages."
   @spec handle_unknown_message(term(), Socket.t()) :: {:noreply, Socket.t()}
   def handle_unknown_message(_message, socket), do: {:noreply, socket}
+
+  @spec schedule_log_flush(non_neg_integer()) :: reference() | :immediate
+  defp schedule_log_flush(0) do
+    send(self(), :flush_log_updates)
+    :immediate
+  end
+
+  defp schedule_log_flush(ms) do
+    Process.send_after(self(), :flush_log_updates, ms)
+  end
+
+  @spec recompute_filtered_logs(Socket.t()) :: Socket.t()
+  defp recompute_filtered_logs(socket) do
+    filtered_logs =
+      QuoracleWeb.DashboardLive.DataLoader.get_filtered_logs(
+        socket.assigns.logs,
+        socket.assigns.selected_agent_id
+      )
+
+    Phoenix.Component.assign(socket, filtered_logs: filtered_logs)
+  end
 
   # Best-effort fetch of agent todos (single GenServer.call with short timeout).
   @spec fetch_agent_todos(pid() | nil) :: list()

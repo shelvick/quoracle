@@ -3,7 +3,7 @@
 ## Modules
 - AgentCost: Ecto schema for cost records (53 lines)
 - Recorder: Cost recording + PubSub broadcast + batch recording API (159 lines, v3.0)
-- Aggregator: Query module with recursive CTE for agent trees (446 lines, v3.0)
+- Aggregator: Query module with recursive CTE for agent trees + batch totals (~490 lines, v5.0)
 
 ## Key Functions
 - AgentCost.changeset/2: Validates cost_type in [llm_consensus, llm_embedding, llm_answer, llm_summarization, llm_condensation, image_generation, external, child_budget_absorbed]
@@ -19,10 +19,12 @@
 - Aggregator.by_agent_and_model_detailed/1: v2.0 - Same detailed breakdown for single agent
 - Aggregator.by_agent_tree_and_model_detailed/1: v3.0 - Subtree costs including NULL model_spec (for DismissChild)
 - Aggregator.by_agent_ids_and_model_detailed/1: v3.0 - Multi-agent detailed breakdown
+- Aggregator.batch_totals/2: v5.0 - Single UNION ALL query for all agent+task totals (Dashboard batch cost fetch)
 - Aggregator.get_descendant_agent_ids/1: Recursive CTE for agent tree
 
 ## Types
 - model_cost_detailed: `model_spec: String.t() | nil` (nil for non-model costs like external/child_budget_absorbed)
+- batch_totals: `%{agents: %{String.t() => Decimal.t() | nil}, tasks: %{String.t() => Decimal.t() | nil}}` (v5.0)
 
 ## Schema
 ```
@@ -44,4 +46,4 @@ agent_costs: id(uuid), agent_id(string), task_id(uuid), cost_type(string),
 - Phoenix.PubSub for broadcasts
 - TABLE_Tasks (foreign key)
 
-Test coverage: 119 tests (29 schema + 36 recorder + 54 aggregator)
+Test coverage: 126 tests (29 schema + 36 recorder + 61 aggregator)

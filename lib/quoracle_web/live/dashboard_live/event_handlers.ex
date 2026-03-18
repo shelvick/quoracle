@@ -196,7 +196,14 @@ defmodule QuoracleWeb.DashboardLive.EventHandlers do
   """
   @spec handle_select_agent(map(), Socket.t()) :: {:noreply, Socket.t()}
   def handle_select_agent(%{"agent-id" => agent_id}, socket) do
-    {:noreply, Phoenix.Component.assign(socket, selected_agent_id: agent_id)}
+    filtered_logs =
+      QuoracleWeb.DashboardLive.DataLoader.get_filtered_logs(socket.assigns.logs, agent_id)
+
+    {:noreply,
+     Phoenix.Component.assign(socket,
+       selected_agent_id: agent_id,
+       filtered_logs: filtered_logs
+     )}
   end
 
   @doc """

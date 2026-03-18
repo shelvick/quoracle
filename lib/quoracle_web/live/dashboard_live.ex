@@ -63,6 +63,36 @@ defmodule QuoracleWeb.DashboardLive do
     skills_path = session["skills_path"] || session[:skills_path]
     task_manager_test_opts = session["task_manager_test_opts"] || session[:task_manager_test_opts]
     cost_debounce_ms = session["cost_debounce_ms"] || session[:cost_debounce_ms]
+    log_debounce_ms = session["log_debounce_ms"] || session[:log_debounce_ms]
+    mailbox_test_pid = session["mailbox_test_pid"] || session[:mailbox_test_pid]
+
+    base_assigns = [
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner,
+      event_history_pid: event_history_pid,
+      profiles: profiles,
+      groves: groves,
+      groves_path: groves_path,
+      skills_path: skills_path,
+      task_manager_test_opts: task_manager_test_opts,
+      selected_agent_id: nil,
+      selected_grove: nil,
+      cost_data: %{agents: %{}, tasks: %{}},
+      cost_debounce_ms: cost_debounce_ms,
+      log_debounce_ms: log_debounce_ms,
+      log_buffer: [],
+      log_refresh_timer: nil,
+      mailbox_test_pid: mailbox_test_pid,
+      grove_skills_path: nil,
+      budget_editor_visible: false,
+      budget_editor_task_id: nil,
+      budget_editor_current: nil,
+      budget_editor_spent: nil,
+      current_task_id: nil,
+      loaded_grove: nil
+    ]
 
     if connected?(socket) do
       Subscriptions.subscribe_to_core_topics(pubsub)
@@ -95,72 +125,32 @@ defmodule QuoracleWeb.DashboardLive do
       # Defer per-agent data fetch to after mount (avoids longpoll timeout with many agents)
       send(self(), {:fetch_agent_data, load_opts})
 
-      {:ok,
-       assign(socket,
-         pubsub: pubsub,
-         registry: registry,
-         dynsup: dynsup,
-         sandbox_owner: sandbox_owner,
-         event_history_pid: event_history_pid,
-         tasks: tasks,
-         agents: agents,
-         profiles: profiles,
-         groves: groves,
-         groves_path: groves_path,
-         skills_path: skills_path,
-         task_manager_test_opts: task_manager_test_opts,
-         selected_agent_id: nil,
-         selected_grove: nil,
-         logs: buffered_logs,
-         messages: buffered_messages,
-         subscribed_topics: subscribed_topics,
-         agent_alive_map: agent_alive_map,
-         costs_updated_at: System.monotonic_time(),
-         cost_debounce_ms: cost_debounce_ms,
-         # Grove skills path (server-derived, SEC-2a)
-         grove_skills_path: nil,
-         # Budget editor state (R44)
-         budget_editor_visible: false,
-         budget_editor_task_id: nil,
-         budget_editor_current: nil,
-         budget_editor_spent: nil,
-         current_task_id: nil,
-         loaded_grove: nil
-       )}
+      # Hydrate cost_data immediately so existing costs don't show N/A until first cost_recorded
+      send(self(), :flush_cost_updates)
+
+      connected_assigns = [
+        tasks: tasks,
+        agents: agents,
+        logs: buffered_logs,
+        messages: buffered_messages,
+        subscribed_topics: subscribed_topics,
+        agent_alive_map: agent_alive_map,
+        filtered_logs: DataLoader.get_filtered_logs(buffered_logs, nil)
+      ]
+
+      {:ok, assign(socket, base_assigns ++ connected_assigns)}
     else
-      # Not connected - minimal state
-      {:ok,
-       assign(socket,
-         pubsub: pubsub,
-         registry: registry,
-         dynsup: dynsup,
-         sandbox_owner: sandbox_owner,
-         event_history_pid: event_history_pid,
-         tasks: %{},
-         agents: %{},
-         profiles: profiles,
-         groves: groves,
-         groves_path: groves_path,
-         skills_path: skills_path,
-         task_manager_test_opts: task_manager_test_opts,
-         selected_agent_id: nil,
-         selected_grove: nil,
-         logs: %{},
-         messages: [],
-         subscribed_topics: MapSet.new(),
-         agent_alive_map: %{},
-         costs_updated_at: System.monotonic_time(),
-         cost_debounce_ms: cost_debounce_ms,
-         # Grove skills path (server-derived, SEC-2a)
-         grove_skills_path: nil,
-         # Budget editor state (R44)
-         budget_editor_visible: false,
-         budget_editor_task_id: nil,
-         budget_editor_current: nil,
-         budget_editor_spent: nil,
-         current_task_id: nil,
-         loaded_grove: nil
-       )}
+      disconnected_assigns = [
+        tasks: %{},
+        agents: %{},
+        logs: %{},
+        messages: [],
+        subscribed_topics: MapSet.new(),
+        agent_alive_map: %{},
+        filtered_logs: []
+      ]
+
+      {:ok, assign(socket, base_assigns ++ disconnected_assigns)}
     end
   end
 
@@ -210,7 +200,7 @@ defmodule QuoracleWeb.DashboardLive do
           registry={@registry}
           dynsup={@dynsup}
           agent_alive_map={@agent_alive_map}
-          costs_updated_at={@costs_updated_at}
+          cost_data={@cost_data}
         />
       </div>
 
@@ -220,7 +210,7 @@ defmodule QuoracleWeb.DashboardLive do
         <.live_component
           module={QuoracleWeb.UI.LogView}
           id="logs"
-          logs={DataLoader.get_filtered_logs(@logs, @selected_agent_id)}
+          logs={@filtered_logs}
           agent_id={@selected_agent_id}
           pubsub={@pubsub}
         />
@@ -236,7 +226,8 @@ defmodule QuoracleWeb.DashboardLive do
           task_id={nil}
           pubsub={@pubsub}
           registry={@registry}
-          agents={@agents}
+          agent_alive_map={@agent_alive_map}
+          test_pid={@mailbox_test_pid}
         />
       </div>
     </div>
@@ -386,10 +377,42 @@ defmodule QuoracleWeb.DashboardLive do
   end
 
   def handle_info(:flush_cost_updates, socket) do
+    agent_ids = Map.keys(socket.assigns.agents)
+    task_ids = Map.keys(socket.assigns.tasks)
+    cost_data = Quoracle.Costs.Aggregator.batch_totals(agent_ids, task_ids)
+
     {:noreply,
      socket
-     |> assign(costs_updated_at: System.monotonic_time())
+     |> assign(cost_data: cost_data)
      |> assign(cost_refresh_timer: nil)}
+  end
+
+  def handle_info(:flush_log_updates, socket) do
+    buffer = socket.assigns.log_buffer
+
+    # Merge buffered logs into the main logs map.
+    # Buffer is newest-first (prepend order), so reverse to process oldest-first,
+    # preserving newest-first order in the logs list after prepending.
+    new_logs =
+      Enum.reduce(Enum.reverse(buffer), socket.assigns.logs, fn log, acc ->
+        agent_id = log[:agent_id]
+
+        Map.update(acc, agent_id, [log], fn existing ->
+          [log | existing] |> Enum.take(100)
+        end)
+      end)
+
+    filtered_logs =
+      DataLoader.get_filtered_logs(new_logs, socket.assigns.selected_agent_id)
+
+    {:noreply,
+     socket
+     |> assign(
+       logs: new_logs,
+       filtered_logs: filtered_logs,
+       log_buffer: [],
+       log_refresh_timer: nil
+     )}
   end
 
   def handle_info({:mount, :reconnected}, socket),

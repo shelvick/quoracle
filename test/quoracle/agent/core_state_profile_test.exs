@@ -162,6 +162,37 @@ defmodule Quoracle.Agent.CoreStateProfileTest do
     end
   end
 
+  describe "grove_confinement_mode field" do
+    test "grove_confinement_mode stored in state from config" do
+      config = %{
+        agent_id: "test-agent",
+        registry: :test_registry,
+        dynsup: self(),
+        pubsub: :test_pubsub,
+        grove_confinement_mode: "strict"
+      }
+
+      state = State.new(config)
+
+      assert Map.has_key?(state, :grove_confinement_mode)
+      assert Map.get(state, :grove_confinement_mode) == "strict"
+    end
+
+    test "grove_confinement_mode nil when not in config" do
+      config = %{
+        agent_id: "test-agent",
+        registry: :test_registry,
+        dynsup: self(),
+        pubsub: :test_pubsub
+      }
+
+      state = State.new(config)
+
+      assert Map.has_key?(state, :grove_confinement_mode)
+      assert Map.get(state, :grove_confinement_mode) == nil
+    end
+  end
+
   describe "capability_groups field (R57-R60)" do
     # R57: capability_groups Field Exists
     test "State struct has capability_groups field" do

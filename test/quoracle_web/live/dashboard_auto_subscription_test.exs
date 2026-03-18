@@ -73,7 +73,12 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "log_debounce_ms" => 0
+          }
         )
 
       agent_id = "new_agent_#{System.unique_integer([:positive])}"
@@ -108,7 +113,12 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "log_debounce_ms" => 0
+          }
         )
 
       agent_id = "temp_agent_#{System.unique_integer([:positive])}"
@@ -157,7 +167,12 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "log_debounce_ms" => 0
+          }
         )
 
       agent1_id = "agent1_#{System.unique_integer([:positive])}"
@@ -207,7 +222,12 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "log_debounce_ms" => 0
+          }
         )
 
       agent1_id = "agent1_#{System.unique_integer([:positive])}"
@@ -257,7 +277,12 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "log_debounce_ms" => 0
+          }
         )
 
       agent_id = "prolific_agent_#{System.unique_integer([:positive])}"
@@ -276,7 +301,9 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
         )
       end
 
-      # Force LiveView to process all pending messages synchronously
+      # Two renders: first processes log_entry messages and intermediate flushes,
+      # second drains any remaining flush messages from 0ms debounce
+      render(view)
       render(view)
 
       socket = :sys.get_state(view.pid).socket
@@ -298,7 +325,12 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "log_debounce_ms" => 0
+          }
         )
 
       agent_id = "test_agent_#{System.unique_integer([:positive])}"
@@ -335,7 +367,12 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "log_debounce_ms" => 0
+          }
         )
 
       socket = :sys.get_state(view.pid).socket
@@ -405,7 +442,12 @@ defmodule QuoracleWeb.DashboardAutoSubscriptionTest do
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "log_debounce_ms" => 0
+          }
         )
 
       socket = :sys.get_state(view.pid).socket

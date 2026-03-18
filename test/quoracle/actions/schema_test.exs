@@ -1,6 +1,7 @@
 defmodule Quoracle.Actions.SchemaTest do
   use ExUnit.Case, async: true
   alias Quoracle.Actions.Schema
+  alias Quoracle.Actions.Validator
 
   @valid_actions [
     :spawn_child,
@@ -172,7 +173,40 @@ defmodule Quoracle.Actions.SchemaTest do
       # models are configured.
       assert :role in schema.optional_params
       assert :downstream_constraints in schema.optional_params
+      assert :grove_vars in schema.optional_params
       refute :models in schema.optional_params
+    end
+
+    test "grove_vars uses map typing" do
+      {:ok, schema} = Schema.get_schema(:spawn_child)
+      assert schema.param_types.grove_vars == :map
+    end
+
+    test "grove_vars accepts map values during validation" do
+      params = %{
+        task_description: "Child task",
+        success_criteria: "Complete task",
+        immediate_context: "Spawn context",
+        approach_guidance: "Be careful",
+        profile: "test-profile",
+        grove_vars: %{"child_workspace" => "workspace-a"}
+      }
+
+      assert {:ok, validated} = Validator.validate_params(:spawn_child, params)
+      assert validated.grove_vars == %{"child_workspace" => "workspace-a"}
+    end
+
+    test "grove_vars rejects non-map values during validation" do
+      params = %{
+        task_description: "Child task",
+        success_criteria: "Complete task",
+        immediate_context: "Spawn context",
+        approach_guidance: "Be careful",
+        profile: "test-profile",
+        grove_vars: "workspace-a"
+      }
+
+      assert {:error, :invalid_param_type} = Validator.validate_params(:spawn_child, params)
     end
 
     test "has correct param types" do

@@ -32,11 +32,19 @@ defmodule Quoracle.Actions.FileRead do
     limit = Map.get(params, :limit, @default_limit) |> min(@default_limit)
     parent_config = Keyword.get(opts, :parent_config, %{})
     confinement = parent_config_value(parent_config, :grove_confinement)
+    confinement_mode = parent_config_value(parent_config, :grove_confinement_mode)
     skill_name = parent_config_value(parent_config, :skill_name)
 
     with :ok <- validate_offset(offset),
          :ok <- validate_absolute_path(path),
-         :ok <- HardRuleEnforcer.check_file_access(path, :read, confinement, skill_name),
+         :ok <-
+           HardRuleEnforcer.check_file_access(
+             path,
+             :read,
+             confinement,
+             skill_name,
+             confinement_mode
+           ),
          :ok <- validate_not_directory(path),
          {:ok, raw_content} <- read_file(path),
          :ok <- validate_not_binary(raw_content, path) do

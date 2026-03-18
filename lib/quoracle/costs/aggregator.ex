@@ -41,6 +41,11 @@ defmodule Quoracle.Costs.Aggregator do
           total_cost: Decimal.t() | nil
         }
 
+  @type batch_totals :: %{
+          agents: %{String.t() => Decimal.t() | nil},
+          tasks: %{binary() => Decimal.t() | nil}
+        }
+
   # ============================================================
   # Per-Agent Queries (Own Costs)
   # ============================================================
@@ -185,6 +190,52 @@ defmodule Quoracle.Costs.Aggregator do
     )
     |> Repo.all()
     |> Map.new()
+  end
+
+  @doc """
+  Returns total costs for multiple agents and tasks in a single query.
+  """
+  @spec batch_totals([String.t()], [binary()]) :: batch_totals()
+  def batch_totals([], []), do: %{agents: %{}, tasks: %{}}
+
+  def batch_totals(agent_ids, task_ids) do
+    valid_task_ids = Enum.filter(task_ids, fn id -> match?({:ok, _}, Ecto.UUID.cast(id)) end)
+    dumped_task_ids = Enum.map(valid_task_ids, &Ecto.UUID.dump!/1)
+
+    sql = """
+    SELECT 'agent' AS entity_type, agent_id AS entity_id, SUM(cost_usd) AS total_cost
+    FROM agent_costs
+    WHERE agent_id = ANY($1::text[])
+    GROUP BY agent_id
+
+    UNION ALL
+
+    SELECT 'task' AS entity_type, task_id::text AS entity_id, SUM(cost_usd) AS total_cost
+    FROM agent_costs
+    WHERE task_id = ANY($2::uuid[])
+    GROUP BY task_id
+    """
+
+    case Repo.query(sql, [agent_ids, dumped_task_ids]) do
+      {:ok, %{rows: rows}} ->
+        Enum.reduce(rows, %{agents: %{}, tasks: %{}}, fn [entity_type, entity_id, total_cost],
+                                                         acc ->
+          put_batch_total(acc, entity_type, entity_id, to_decimal_or_nil(total_cost))
+        end)
+
+      {:error, _} ->
+        %{agents: %{}, tasks: %{}}
+    end
+  end
+
+  @spec put_batch_total(batch_totals(), String.t(), String.t(), Decimal.t() | nil) ::
+          batch_totals()
+  defp put_batch_total(acc, "agent", entity_id, total_cost) do
+    put_in(acc, [:agents, entity_id], total_cost)
+  end
+
+  defp put_batch_total(acc, "task", entity_id, total_cost) do
+    put_in(acc, [:tasks, entity_id], total_cost)
   end
 
   # ============================================================

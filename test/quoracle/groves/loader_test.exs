@@ -791,6 +791,66 @@ defmodule Quoracle.Groves.LoaderTest do
     end
   end
 
+  describe "confinement_mode parsing (R31-R33)" do
+    @tag :r31
+    test "R31: Loader parses confinement_mode strict from frontmatter", %{
+      groves_path: path,
+      base_name: base_name
+    } do
+      frontmatter = """
+      name: strict-mode-grove
+      description: Strict confinement grove
+      version: "1.0"
+      confinement_mode: strict
+      """
+
+      create_grove(base_name, "strict-mode-grove", frontmatter)
+
+      assert {:ok, grove} = Loader.load_grove("strict-mode-grove", groves_path: path)
+      assert Map.has_key?(grove, :confinement_mode)
+      assert Map.get(grove, :confinement_mode) == "strict"
+    end
+
+    @tag :r32
+    test "R32: Loader sets confinement_mode to nil when absent", %{
+      groves_path: path,
+      base_name: base_name
+    } do
+      frontmatter = """
+      name: permissive-mode-grove
+      description: No confinement mode
+      version: "1.0"
+      bootstrap:
+        role: "Permissive Agent"
+      """
+
+      create_grove(base_name, "permissive-mode-grove", frontmatter)
+
+      assert {:ok, grove} = Loader.load_grove("permissive-mode-grove", groves_path: path)
+      assert Map.has_key?(grove, :confinement_mode)
+      assert is_nil(Map.get(grove, :confinement_mode))
+    end
+
+    @tag :r33
+    test "R33: Loader ignores invalid confinement_mode values", %{
+      groves_path: path,
+      base_name: base_name
+    } do
+      frontmatter = """
+      name: invalid-mode-grove
+      description: Invalid confinement mode
+      version: "1.0"
+      confinement_mode: permissive
+      """
+
+      create_grove(base_name, "invalid-mode-grove", frontmatter)
+
+      assert {:ok, grove} = Loader.load_grove("invalid-mode-grove", groves_path: path)
+      assert Map.has_key?(grove, :confinement_mode)
+      assert is_nil(Map.get(grove, :confinement_mode))
+    end
+  end
+
   describe "typed hard_rules parsing (R25-R26)" do
     @tag :r25
     test "R25: Loader validates hard_rules entries for required fields", %{

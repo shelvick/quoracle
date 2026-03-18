@@ -22,7 +22,6 @@ defmodule QuoracleWeb.UI.LogView do
   @impl true
   @spec update(map(), Phoenix.LiveView.Socket.t()) :: {:ok, Phoenix.LiveView.Socket.t()}
   def update(assigns, socket) do
-    # Simple pure component - just assign the data from parent
     socket =
       socket
       |> assign(assigns)
@@ -30,7 +29,10 @@ defmodule QuoracleWeb.UI.LogView do
       |> assign_new(:auto_scroll, fn -> true end)
       |> assign_new(:expanded_logs, fn -> MapSet.new() end)
 
-    {:ok, socket}
+    # Pre-compute level-filtered logs when inputs change
+    display = display_logs(socket.assigns.logs || [], socket.assigns.min_level)
+
+    {:ok, assign(socket, display_logs: display)}
   end
 
   @impl true
@@ -92,11 +94,11 @@ defmodule QuoracleWeb.UI.LogView do
         </div>
       </div>
       
-      <div class="log-container overflow-y-auto flex-1" data-virtualized={length(@logs) > 100}>
-        <%= if @logs == [] do %>
+      <div class="log-container overflow-y-auto flex-1" data-virtualized={length(@display_logs) > 100}>
+        <%= if @display_logs == [] do %>
           <p class="text-gray-500">No logs</p>
         <% else %>
-          <%= for log <- filtered_logs(@logs, @min_level, @agent_id) |> Enum.take(-100) do %>
+          <%= for log <- @display_logs do %>
             <% log_id = log_identifier(log) %>
             <.live_component
               module={QuoracleWeb.UI.LogEntry}
@@ -128,7 +130,8 @@ defmodule QuoracleWeb.UI.LogView do
         _ -> :debug
       end
 
-    {:noreply, assign(socket, min_level: level_atom)}
+    display = display_logs(socket.assigns.logs || [], level_atom)
+    {:noreply, assign(socket, min_level: level_atom, display_logs: display)}
   end
 
   @impl true
@@ -144,7 +147,7 @@ defmodule QuoracleWeb.UI.LogView do
 
   @impl true
   def handle_event("clear_logs", _params, socket) do
-    {:noreply, assign(socket, logs: [])}
+    {:noreply, assign(socket, logs: [], display_logs: [])}
   end
 
   @impl true
@@ -184,9 +187,13 @@ defmodule QuoracleWeb.UI.LogView do
 
   # Private functions
 
-  defp filtered_logs(logs, min_level, _agent_id) do
-    # Only filter by level - agent filtering is done by parent Dashboard
-    filter_by_level(logs, min_level)
+  # Pre-compute level-filtered and limited logs for display.
+  # Called from update/2 and event handlers to avoid recomputation on every render.
+  @spec display_logs(list(), atom()) :: list()
+  defp display_logs(logs, min_level) do
+    logs
+    |> filter_by_level(min_level)
+    |> Enum.take(-100)
   end
 
   defp filter_by_level(logs, min_level) do

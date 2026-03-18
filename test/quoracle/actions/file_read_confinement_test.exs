@@ -89,6 +89,31 @@ defmodule Quoracle.Actions.FileReadConfinementTest do
     assert content =~ "1\tread only"
   end
 
+  test "file_read with strict confinement blocks unlisted skill", %{outside_dir: outside_dir} do
+    path = Path.join(outside_dir, "strict-blocked.txt")
+    File.write!(path, "strict blocked")
+
+    confinement = %{
+      "different-skill" => %{
+        "paths" => [Path.join(outside_dir, "**")],
+        "read_only_paths" => []
+      }
+    }
+
+    opts = [
+      parent_config: %{
+        grove_confinement: confinement,
+        grove_confinement_mode: "strict",
+        skill_name: "agentic-coding"
+      }
+    ]
+
+    assert {:error, {:confinement_violation, %{path: ^path, access_type: :read} = details}} =
+             FileRead.execute(%{path: path}, "agent-1", opts)
+
+    assert details.skill == "agentic-coding"
+  end
+
   test "file_read without confinement passes through", %{outside_dir: outside_dir} do
     path = Path.join(outside_dir, "passthrough.txt")
     File.write!(path, "passthrough")

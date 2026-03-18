@@ -5,6 +5,7 @@ defmodule Quoracle.Groves.HardRuleEnforcer do
 
   require Logger
 
+  alias Quoracle.Groves.LogHelper
   alias Quoracle.Groves.SchemaValidator
 
   @type shell_hard_rule_violation :: %{
@@ -83,15 +84,17 @@ defmodule Quoracle.Groves.HardRuleEnforcer do
   @doc """
   Validates that shell working directory is inside the confinement paths for a skill.
   """
-  @spec check_shell_working_dir(String.t(), map() | nil, String.t() | nil) ::
+  @spec check_shell_working_dir(String.t(), map() | nil, String.t() | nil, String.t() | nil) ::
           :ok | {:error, {:confinement_violation, shell_confinement_violation()}}
-  def check_shell_working_dir(_working_dir, confinement, _skill_name)
+  def check_shell_working_dir(working_dir, confinement, skill_name, confinement_mode \\ nil)
+
+  def check_shell_working_dir(_working_dir, confinement, _skill_name, _confinement_mode)
       when confinement in [nil, %{}],
       do: :ok
 
-  def check_shell_working_dir(working_dir, confinement, skill_name)
+  def check_shell_working_dir(working_dir, confinement, skill_name, confinement_mode)
       when is_binary(working_dir) and is_map(confinement) do
-    case confinement_entry(confinement, skill_name) do
+    case confinement_entry(confinement, skill_name, confinement_mode) do
       {:ok, entry} ->
         allowed_paths = confinement_paths(entry)
 
@@ -109,25 +112,44 @@ defmodule Quoracle.Groves.HardRuleEnforcer do
             }}}
         end
 
+      {:error, :unlisted_skill} ->
+        {:error,
+         {:confinement_violation,
+          %{
+            working_dir: working_dir,
+            skill: skill_name,
+            allowed_paths: [],
+            message:
+              "Strict confinement mode: no confinement entry for skill #{skill_name}. Add a confinement entry in GROVE.md."
+          }}}
+
       :allow_unlisted ->
         :ok
     end
   end
 
-  def check_shell_working_dir(_working_dir, _confinement, _skill_name), do: :ok
+  def check_shell_working_dir(_working_dir, _confinement, _skill_name, _confinement_mode),
+    do: :ok
 
   @doc """
   Validates file access against skill confinement paths.
   """
-  @spec check_file_access(String.t(), :read | :write, map() | nil, String.t() | nil) ::
-          :ok | {:error, {:confinement_violation, file_confinement_violation()}}
-  def check_file_access(_path, _access_type, confinement, _skill_name)
+  @spec check_file_access(
+          String.t(),
+          :read | :write,
+          map() | nil,
+          String.t() | nil,
+          String.t() | nil
+        ) :: :ok | {:error, {:confinement_violation, file_confinement_violation()}}
+  def check_file_access(path, access_type, confinement, skill_name, confinement_mode \\ nil)
+
+  def check_file_access(_path, _access_type, confinement, _skill_name, _confinement_mode)
       when confinement in [nil, %{}],
       do: :ok
 
-  def check_file_access(path, access_type, confinement, skill_name)
+  def check_file_access(path, access_type, confinement, skill_name, confinement_mode)
       when is_binary(path) and access_type in [:read, :write] and is_map(confinement) do
-    case confinement_entry(confinement, skill_name) do
+    case confinement_entry(confinement, skill_name, confinement_mode) do
       {:ok, entry} ->
         allowed_paths = allowed_paths_for_access(entry, access_type)
 
@@ -146,12 +168,25 @@ defmodule Quoracle.Groves.HardRuleEnforcer do
             }}}
         end
 
+      {:error, :unlisted_skill} ->
+        {:error,
+         {:confinement_violation,
+          %{
+            path: path,
+            skill: skill_name,
+            access_type: access_type,
+            allowed_paths: [],
+            message:
+              "Strict confinement mode: no confinement entry for skill #{skill_name}. Add a confinement entry in GROVE.md."
+          }}}
+
       :allow_unlisted ->
         :ok
     end
   end
 
-  def check_file_access(_path, _access_type, _confinement, _skill_name), do: :ok
+  def check_file_access(_path, _access_type, _confinement, _skill_name, _confinement_mode),
+    do: :ok
 
   @spec check_shell_rule(String.t(), map(), String.t() | nil) ::
           :ok | {:error, {:hard_rule_violation, shell_hard_rule_violation()}}
@@ -235,17 +270,26 @@ defmodule Quoracle.Groves.HardRuleEnforcer do
     end
   end
 
-  @spec confinement_entry(map(), String.t() | nil) :: {:ok, map()} | :allow_unlisted
-  defp confinement_entry(confinement, skill_name) do
+  @spec confinement_entry(map(), String.t() | nil, String.t() | nil) ::
+          {:ok, map()} | {:error, :unlisted_skill} | :allow_unlisted
+  defp confinement_entry(confinement, skill_name, confinement_mode) do
     case Map.get(confinement, skill_name) do
       entry when is_map(entry) ->
         {:ok, entry}
 
       _ ->
-        log_warning("No confinement entry for skill #{inspect(skill_name)}, allowing access")
-        :allow_unlisted
+        if strict_confinement_mode?(confinement_mode) do
+          {:error, :unlisted_skill}
+        else
+          log_warning("No confinement entry for skill #{inspect(skill_name)}, allowing access")
+          :allow_unlisted
+        end
     end
   end
+
+  @spec strict_confinement_mode?(String.t() | nil) :: boolean()
+  defp strict_confinement_mode?("strict"), do: true
+  defp strict_confinement_mode?(_), do: false
 
   @spec confinement_paths(map()) :: [String.t()]
   defp confinement_paths(entry) do
@@ -300,16 +344,5 @@ defmodule Quoracle.Groves.HardRuleEnforcer do
     end
   end
 
-  @spec log_warning(String.t()) :: :ok
-  defp log_warning(message) when is_binary(message) do
-    Logger.bare_log(:warning, message)
-
-    # In test env, global logger level is :error, so mirror the message at :error
-    # to keep warning-behavior assertions observable via capture_log/1.
-    if Logger.compare_levels(Logger.level(), :warning) == :gt do
-      Logger.bare_log(:error, message)
-    end
-
-    :ok
-  end
+  defp log_warning(message), do: LogHelper.log_warning(message)
 end

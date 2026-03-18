@@ -1775,4 +1775,135 @@ defmodule Quoracle.Costs.AggregatorTest do
       assert named_group.request_count == 1
     end
   end
+
+  # ============================================================
+  # WorkGroupID: fix-20260316-051518
+  # v5.0: Batch Cost Totals for Dashboard Performance (R39-R45)
+  # ============================================================
+
+  describe "v5.0: batch_totals/2" do
+    test "R39: batch_totals returns total cost per agent" do
+      task = create_task()
+      agent1 = create_agent(task)
+      agent2 = create_agent(task)
+
+      create_cost(task, agent1.agent_id, cost_usd: Decimal.new("0.10"))
+      create_cost(task, agent1.agent_id, cost_usd: Decimal.new("0.15"))
+      create_cost(task, agent2.agent_id, cost_usd: Decimal.new("0.25"))
+
+      result = Aggregator.batch_totals([agent1.agent_id, agent2.agent_id], [])
+
+      assert Decimal.equal?(result.agents[agent1.agent_id], Decimal.new("0.25"))
+      assert Decimal.equal?(result.agents[agent2.agent_id], Decimal.new("0.25"))
+      assert result.tasks == %{}
+    end
+
+    test "R40: batch_totals returns total cost per task" do
+      task1 = create_task()
+      task2 = create_task()
+      agent1 = create_agent(task1)
+      agent2 = create_agent(task2)
+
+      create_cost(task1, agent1.agent_id, cost_usd: Decimal.new("0.30"))
+      create_cost(task2, agent2.agent_id, cost_usd: Decimal.new("0.45"))
+
+      result = Aggregator.batch_totals([], [task1.id, task2.id])
+
+      assert result.agents == %{}
+      assert Decimal.equal?(result.tasks[task1.id], Decimal.new("0.30"))
+      assert Decimal.equal?(result.tasks[task2.id], Decimal.new("0.45"))
+    end
+
+    test "R41: batch_totals returns both agent and task totals" do
+      task1 = create_task()
+      task2 = create_task()
+      agent1 = create_agent(task1)
+      agent2 = create_agent(task2)
+
+      create_cost(task1, agent1.agent_id, cost_usd: Decimal.new("0.12"))
+      create_cost(task2, agent2.agent_id, cost_usd: Decimal.new("0.34"))
+
+      result = Aggregator.batch_totals([agent1.agent_id, agent2.agent_id], [task1.id, task2.id])
+
+      assert Decimal.equal?(result.agents[agent1.agent_id], Decimal.new("0.12"))
+      assert Decimal.equal?(result.agents[agent2.agent_id], Decimal.new("0.34"))
+      assert Decimal.equal?(result.tasks[task1.id], Decimal.new("0.12"))
+      assert Decimal.equal?(result.tasks[task2.id], Decimal.new("0.34"))
+    end
+
+    test "R42: batch_totals with empty lists returns empty maps" do
+      assert Aggregator.batch_totals([], []) == %{agents: %{}, tasks: %{}}
+    end
+
+    test "R43: batch_totals excludes entities with no costs" do
+      task = create_task()
+      agent_with_cost = create_agent(task)
+      agent_without_cost = create_agent(task)
+      empty_task = create_task()
+
+      create_cost(task, agent_with_cost.agent_id, cost_usd: Decimal.new("0.22"))
+
+      result =
+        Aggregator.batch_totals(
+          [agent_with_cost.agent_id, agent_without_cost.agent_id],
+          [task.id, empty_task.id]
+        )
+
+      assert Decimal.equal?(result.agents[agent_with_cost.agent_id], Decimal.new("0.22"))
+      refute Map.has_key?(result.agents, agent_without_cost.agent_id)
+      assert Decimal.equal?(result.tasks[task.id], Decimal.new("0.22"))
+      refute Map.has_key?(result.tasks, empty_task.id)
+    end
+
+    test "R44: batch totals match individual query results" do
+      task1 = create_task()
+      task2 = create_task()
+      agent1 = create_agent(task1)
+      agent2 = create_agent(task2)
+
+      create_cost(task1, agent1.agent_id, cost_usd: Decimal.new("0.14"))
+      create_cost(task1, agent1.agent_id, cost_usd: Decimal.new("0.06"))
+      create_cost(task2, agent2.agent_id, cost_usd: Decimal.new("0.50"))
+
+      result = Aggregator.batch_totals([agent1.agent_id, agent2.agent_id], [task1.id, task2.id])
+
+      assert Decimal.equal?(
+               result.agents[agent1.agent_id],
+               Aggregator.by_agent(agent1.agent_id).total_cost
+             )
+
+      assert Decimal.equal?(
+               result.agents[agent2.agent_id],
+               Aggregator.by_agent(agent2.agent_id).total_cost
+             )
+
+      assert Decimal.equal?(result.tasks[task1.id], Aggregator.by_task(task1.id).total_cost)
+      assert Decimal.equal?(result.tasks[task2.id], Aggregator.by_task(task2.id).total_cost)
+    end
+
+    test "R45: batch_totals handles 30+ agents correctly" do
+      task = create_task()
+
+      agents_with_expected_totals =
+        Enum.map(1..35, fn index ->
+          agent =
+            create_agent(task,
+              agent_id: "batch_agent_#{index}_#{System.unique_integer([:positive])}"
+            )
+
+          expected_total = Decimal.new(index)
+          create_cost(task, agent.agent_id, cost_usd: expected_total)
+          {agent.agent_id, expected_total}
+        end)
+
+      agent_ids = Enum.map(agents_with_expected_totals, &elem(&1, 0))
+      result = Aggregator.batch_totals(agent_ids, [])
+
+      assert map_size(result.agents) == 35
+
+      Enum.each(agents_with_expected_totals, fn {agent_id, expected_total} ->
+        assert Decimal.equal?(result.agents[agent_id], expected_total)
+      end)
+    end
+  end
 end

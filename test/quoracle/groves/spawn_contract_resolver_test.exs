@@ -1,10 +1,13 @@
 defmodule Quoracle.Groves.SpawnContractResolverTest do
   @moduledoc """
-  Unit tests for GROVE_SpawnContractResolver packet 1.
+  Unit tests for GROVE_SpawnContractResolver packet 1 and packet 3.
 
   ARC Criteria: R42-R63 from TEST_GroveSpawnContracts (packet 1)
+              + R23-R27 (validate_required_context, packet 3)
   """
   use ExUnit.Case, async: true
+
+  import ExUnit.CaptureLog
 
   @moduletag :feat_grove_system
   @moduletag :packet_1
@@ -27,6 +30,20 @@ defmodule Quoracle.Groves.SpawnContractResolverTest do
     File.write!(Path.join([System.tmp_dir!(), base_name, relative_path]), content)
     Path.join([System.tmp_dir!(), base_name, relative_path])
   end
+
+  defp capture_warning_log(fun) do
+    previous_level = Logger.get_process_level(self())
+    Logger.put_process_level(self(), :warning)
+
+    try do
+      capture_log(fun)
+    after
+      restore_process_log_level(previous_level)
+    end
+  end
+
+  defp restore_process_log_level(nil), do: Logger.delete_process_level(self())
+  defp restore_process_log_level(level), do: Logger.put_process_level(self(), level)
 
   describe "find_edge/3" do
     @tag :r42
@@ -294,6 +311,76 @@ defmodule Quoracle.Groves.SpawnContractResolverTest do
 
       assert {:ok, %{skills: [], profile: nil, constraints: nil}} =
                SpawnContractResolver.resolve_auto_inject(edge, grove_path, %{skills: ["ignored"]})
+    end
+  end
+
+  describe "validate_required_context/3" do
+    @tag :r23
+    test "R23: validate_required_context emits no warning when all keys present" do
+      # [UNIT] WHEN edge has required_context and grove_vars has all keys THEN no warning
+      edge = %{"required_context" => ["venture_id", "workspace"]}
+      grove_vars = %{"venture_id" => "v_001", "workspace" => "/tmp/ws"}
+
+      log =
+        capture_log(fn ->
+          assert :ok = SpawnContractResolver.validate_required_context(edge, grove_vars)
+        end)
+
+      refute log =~ "missing grove_vars required_context"
+    end
+
+    @tag :r24
+    test "R24: validate_required_context warns when grove_vars is nil" do
+      # [UNIT] WHEN edge has required_context and grove_vars is nil THEN warning emitted
+      edge = %{"required_context" => ["venture_id"]}
+
+      log =
+        capture_warning_log(fn ->
+          assert :ok = SpawnContractResolver.validate_required_context(edge, nil)
+        end)
+
+      assert log =~ "missing grove_vars required_context"
+      assert log =~ "venture_id"
+    end
+
+    @tag :r25
+    test "R25: validate_required_context warns for missing keys in grove_vars" do
+      # [UNIT] WHEN edge has required_context and grove_vars is missing a key THEN warning for that key
+      edge = %{"required_context" => ["venture_id", "workspace"]}
+      grove_vars = %{"venture_id" => "v_001"}
+
+      log =
+        capture_warning_log(fn ->
+          assert :ok = SpawnContractResolver.validate_required_context(edge, grove_vars)
+        end)
+
+      assert log =~ "missing grove_vars required_context"
+      assert log =~ "workspace"
+      refute log =~ "venture_id"
+    end
+
+    @tag :r26
+    test "R26: validate_required_context no warning when edge has no required_context" do
+      # [UNIT] WHEN edge has no required_context THEN no warning regardless of grove_vars
+      edge = %{"parent" => "factory", "child" => "venture"}
+
+      log =
+        capture_log(fn ->
+          assert :ok = SpawnContractResolver.validate_required_context(edge, nil)
+        end)
+
+      refute log =~ "missing grove_vars required_context"
+    end
+
+    @tag :r27
+    test "R27: validate_required_context returns ok for nil edge" do
+      # [UNIT] WHEN edge is nil THEN returns :ok immediately
+      log =
+        capture_log(fn ->
+          assert :ok = SpawnContractResolver.validate_required_context(nil, nil)
+        end)
+
+      refute log =~ "missing grove_vars required_context"
     end
   end
 

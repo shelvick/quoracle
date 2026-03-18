@@ -17,7 +17,8 @@ defmodule Quoracle.Actions.Spawn.Helpers do
     "sibling_context" => :sibling_context,
     "accumulated_narrative" => :accumulated_narrative,
     "constraints" => :constraints,
-    "downstream_constraints" => :downstream_constraints
+    "downstream_constraints" => :downstream_constraints,
+    "grove_vars" => :grove_vars
   }
 
   @doc """

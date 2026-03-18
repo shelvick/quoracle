@@ -9,7 +9,7 @@
 - SchemaDefinitions: Aggregator (18 lines, merges AgentSchemas + ApiSchemas)
 
 **Schema Data** (split by action category):
-- AgentSchemas: Agent actions (199 lines: spawn_child, wait, send_message, orient, todo)
+- AgentSchemas: Agent actions (205 lines: spawn_child with grove_vars, wait, send_message, orient, todo)
 - ApiSchemas: API/integration actions (295 lines: answer_engine, execute_shell, fetch_web, call_api, call_mcp, generate_secret, search_secrets, file_read, file_write)
 
 **Supporting Modules**:

@@ -646,16 +646,9 @@ defmodule QuoracleWeb.UI.MailboxTest do
       assert [{^agent_pid, nil}] = Registry.lookup(registry, {:agent, "agent_200"})
     end
 
-    # ARC_INT_02: WHEN agents map provided THEN builds agent_alive_map correctly
-    test "builds agent_alive_map from agents assign", %{conn: conn, pubsub: pubsub} do
+    test "Mailbox uses parent-provided agent_alive_map", %{conn: conn, pubsub: pubsub} do
       registry = :"test_registry_#{System.unique_integer([:positive])}"
       {:ok, _} = start_supervised({Registry, keys: :unique, name: registry})
-
-      {:ok, agent_pid1} =
-        start_supervised({Task, fn -> :timer.sleep(:infinity) end}, id: :agent1)
-
-      {:ok, agent_pid2} =
-        start_supervised({Task, fn -> :timer.sleep(:infinity) end}, id: :agent2)
 
       messages = [
         %{
@@ -665,85 +658,31 @@ defmodule QuoracleWeb.UI.MailboxTest do
           content: "From alive agent",
           timestamp: ~U[2024-01-01 10:00:00Z],
           status: :sent
-        },
-        %{
-          id: 2,
-          from: :agent,
-          sender_id: "agent_dead",
-          content: "From terminated agent",
-          timestamp: ~U[2024-01-01 10:01:00Z],
-          status: :sent
         }
       ]
-
-      agents = %{
-        "agent_alive" => %{pid: agent_pid1, status: :running},
-        "agent_dead" => %{pid: agent_pid2, status: :terminated}
-      }
 
       assigns = %{
         messages: messages,
         pubsub: pubsub,
         registry: registry,
-        agents: agents,
-        task_id: "task_1"
-      }
-
-      {:ok, _view, html} = render_isolated(conn, assigns)
-
-      # Message from alive agent should have enabled reply button
-      # Message from dead agent should have disabled reply button
-      assert html =~ "agent_alive"
-      assert html =~ "agent_dead"
-    end
-  end
-
-  describe "Packet 2: agent lifecycle tracking" do
-    # ARC_FUNC_07: WHEN agents map has terminated status THEN builds agent_alive_map correctly
-    test "builds agent_alive_map with terminated agent", %{conn: conn, pubsub: pubsub} do
-      registry = :"test_registry_#{System.unique_integer([:positive])}"
-      {:ok, _} = start_supervised({Registry, keys: :unique, name: registry})
-
-      {:ok, agent_pid} = start_supervised({Task, fn -> :timer.sleep(:infinity) end})
-
-      messages = [
-        %{
-          id: 1,
-          from: :agent,
-          sender_id: "agent_300",
-          content: "Message from agent",
-          timestamp: ~U[2024-01-01 10:00:00Z],
-          status: :sent
-        }
-      ]
-
-      # Agent is terminated
-      agents = %{"agent_300" => %{pid: agent_pid, status: :terminated}}
-
-      assigns = %{
-        messages: messages,
-        pubsub: pubsub,
-        registry: registry,
-        agents: agents,
+        agent_alive_map: %{"agent_alive" => true},
         task_id: "task_1"
       }
 
       {:ok, view, _html} = render_isolated(conn, assigns)
 
-      # Expand message to show reply form
       view
       |> element("#message-1 .message-header")
       |> render_click()
 
       html = render(view)
 
-      # Button should be disabled and show warning
-      assert html =~ "disabled"
-      assert html =~ "no longer active"
+      assert html =~ "From alive agent"
+      refute html =~ "Agent no longer active"
+      refute html =~ "disabled"
     end
 
-    # ARC_INT_03: WHEN lifecycle events received THEN re-renders with updated button states
-    test "re-renders UI when agent lifecycle changes", %{conn: conn, pubsub: pubsub} do
+    test "unknown agent defaults to not alive", %{conn: conn, pubsub: pubsub} do
       registry = :"test_registry_#{System.unique_integer([:positive])}"
       {:ok, _} = start_supervised({Registry, keys: :unique, name: registry})
 
@@ -751,58 +690,363 @@ defmodule QuoracleWeb.UI.MailboxTest do
         %{
           id: 1,
           from: :agent,
-          sender_id: "agent_400",
-          content: "Test message",
+          sender_id: "agent_missing",
+          content: "From missing agent",
           timestamp: ~U[2024-01-01 10:00:00Z],
           status: :sent
         }
       ]
 
-      # Agent initially not in map
-      agents = %{}
-
       assigns = %{
         messages: messages,
         pubsub: pubsub,
         registry: registry,
-        agents: agents,
+        agent_alive_map: %{},
         task_id: "task_1"
       }
 
       {:ok, view, _html} = render_isolated(conn, assigns)
 
-      # Send agent spawned event
-      {:ok, new_agent_pid} = start_supervised({Task, fn -> :timer.sleep(:infinity) end})
-      send(view.pid, {:agent_spawned, %{agent_id: "agent_400", pid: new_agent_pid}})
+      view
+      |> element("#message-1 .message-header")
+      |> render_click()
 
-      # Should update internal state
       html = render(view)
-      assert html =~ "agent_400"
+
+      assert html =~ "From missing agent"
+      assert html =~ "Agent no longer active"
+      assert html =~ "disabled"
     end
 
-    test "subscribes to agents:lifecycle topic on mount", %{conn: conn, pubsub: pubsub} do
+    test "Mailbox does not subscribe to lifecycle topic", %{pubsub: pubsub} do
       registry = :"test_registry_#{System.unique_integer([:positive])}"
       {:ok, _} = start_supervised({Registry, keys: :unique, name: registry})
 
-      messages = create_test_messages()
-      agents = %{}
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          __changed__: %{},
+          expanded_messages: MapSet.new(),
+          pubsub: nil,
+          registry: nil,
+          agents: %{},
+          agent_alive_map: %{}
+        }
+      }
+
+      {:ok, updated_socket} =
+        QuoracleWeb.UI.Mailbox.update(
+          %{
+            messages: [],
+            pubsub: pubsub,
+            registry: registry,
+            agent_alive_map: %{"agent_subscription" => true},
+            task_id: "task_1"
+          },
+          socket
+        )
+
+      # Mailbox should not have any lifecycle subscription state
+      refute Map.has_key?(updated_socket.assigns, :lifecycle_subscribed)
+    end
+  end
+
+  describe "Packet 2: agent_alive_map integration" do
+    test "reply works when agent_alive_map shows agent alive", %{conn: conn, pubsub: pubsub} do
+      registry = :"test_registry_#{System.unique_integer([:positive])}"
+      {:ok, _} = start_supervised({Registry, keys: :unique, name: registry})
+
+      test_pid = self()
+
+      _agent_pid =
+        start_supervised!({
+          Task,
+          fn ->
+            Registry.register(registry, {:agent, "agent_reply"}, nil)
+            send(test_pid, :agent_registered)
+
+            receive do
+              msg -> send(test_pid, msg)
+            end
+          end
+        })
+
+      assert_receive :agent_registered, 1_000
+
+      assigns = %{
+        messages: [
+          %{
+            id: 1,
+            from: :agent,
+            sender_id: "agent_reply",
+            content: "Reply to me",
+            timestamp: ~U[2024-01-01 10:00:00Z],
+            status: :sent
+          }
+        ],
+        pubsub: pubsub,
+        registry: registry,
+        agent_alive_map: %{"agent_reply" => true},
+        task_id: "task_1"
+      }
+
+      {:ok, view, _html} = render_isolated(conn, assigns)
+
+      view
+      |> element("#message-1 .message-header")
+      |> render_click()
+
+      view
+      |> element("form[phx-submit='send_reply']")
+      |> render_submit(%{"message-id" => "1", "content" => "My reply"})
+
+      assert_receive {:"$gen_cast", {:send_user_message, "My reply"}}, 1_000
+    end
+
+    test "reply button disabled when agent_alive_map shows terminated", %{
+      conn: conn,
+      pubsub: pubsub
+    } do
+      registry = :"test_registry_#{System.unique_integer([:positive])}"
+      {:ok, _} = start_supervised({Registry, keys: :unique, name: registry})
+
+      assigns = %{
+        messages: [
+          %{
+            id: 1,
+            from: :agent,
+            sender_id: "agent_dead",
+            content: "Cannot reply",
+            timestamp: ~U[2024-01-01 10:00:00Z],
+            status: :sent
+          }
+        ],
+        pubsub: pubsub,
+        registry: registry,
+        agent_alive_map: %{"agent_dead" => false},
+        task_id: "task_1"
+      }
+
+      {:ok, view, _html} = render_isolated(conn, assigns)
+
+      view
+      |> element("#message-1 .message-header")
+      |> render_click()
+
+      html = render(view)
+
+      assert html =~ "Cannot reply"
+      assert html =~ "disabled"
+      assert html =~ "Agent no longer active"
+    end
+  end
+
+  describe "v2.0 R30: parent-provided alive map" do
+    test "renders correctly with agent_alive_map and no agents assign", %{
+      conn: conn,
+      pubsub: pubsub
+    } do
+      registry = :"test_registry_#{System.unique_integer([:positive])}"
+      {:ok, _} = start_supervised({Registry, keys: :unique, name: registry})
+
+      messages = [
+        %{
+          id: 1,
+          from: :agent,
+          sender_id: "agent_alive_v2",
+          content: "Message from alive agent",
+          timestamp: ~U[2024-01-01 10:00:00Z],
+          status: :sent
+        }
+      ]
 
       assigns = %{
         messages: messages,
         pubsub: pubsub,
         registry: registry,
-        agents: agents,
+        agent_alive_map: %{"agent_alive_v2" => true},
         task_id: "task_1"
       }
 
-      {:ok, _view, _html} = render_isolated(conn, assigns)
+      {:ok, view, _html} = render_isolated(conn, assigns)
 
-      # Component should have subscribed to lifecycle events
-      Phoenix.PubSub.broadcast(pubsub, "agents:lifecycle", {:test_event, %{}})
+      view
+      |> element("#message-1 .message-header")
+      |> render_click()
 
-      # If subscribed, the view process will receive the message
-      # (actual behavior verified in implementation)
-      assert true
+      html = render(view)
+
+      assert html =~ "Message from alive agent"
+      # Agent is alive — reply should NOT be disabled
+      refute html =~ "Agent no longer active"
+      refute html =~ "disabled"
+    end
+  end
+
+  describe "v2.0 R31: unknown agent not alive" do
+    test "agent not in agent_alive_map shows as terminated", %{
+      conn: conn,
+      pubsub: pubsub
+    } do
+      registry = :"test_registry_#{System.unique_integer([:positive])}"
+      {:ok, _} = start_supervised({Registry, keys: :unique, name: registry})
+
+      messages = [
+        %{
+          id: 1,
+          from: :agent,
+          sender_id: "agent_unknown_v2",
+          content: "Message from unknown agent",
+          timestamp: ~U[2024-01-01 10:00:00Z],
+          status: :sent
+        }
+      ]
+
+      # agent_unknown_v2 is NOT in agent_alive_map — should default to not alive
+      assigns = %{
+        messages: messages,
+        pubsub: pubsub,
+        registry: registry,
+        agent_alive_map: %{},
+        task_id: "task_1"
+      }
+
+      {:ok, view, _html} = render_isolated(conn, assigns)
+
+      view
+      |> element("#message-1 .message-header")
+      |> render_click()
+
+      html = render(view)
+
+      assert html =~ "Message from unknown agent"
+      # Unknown agent defaults to not alive — reply should be disabled
+      assert html =~ "Agent no longer active"
+      assert html =~ "disabled"
+    end
+  end
+
+  describe "v2.0 R32: no PubSub subscription" do
+    test "Mailbox does not subscribe to agents:lifecycle topic", %{pubsub: pubsub} do
+      registry = :"test_registry_#{System.unique_integer([:positive])}"
+      {:ok, _} = start_supervised({Registry, keys: :unique, name: registry})
+
+      # Track PubSub subscriptions before update
+      subscriptions_before = Registry.lookup(pubsub, "agents:lifecycle")
+
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          __changed__: %{},
+          expanded_messages: MapSet.new(),
+          pubsub: nil,
+          registry: nil,
+          agent_alive_map: %{}
+        }
+      }
+
+      {:ok, _updated_socket} =
+        QuoracleWeb.UI.Mailbox.update(
+          %{
+            messages: [],
+            pubsub: pubsub,
+            registry: registry,
+            agent_alive_map: %{},
+            task_id: "task_1"
+          },
+          socket
+        )
+
+      # Verify no new subscription to agents:lifecycle
+      subscriptions_after = Registry.lookup(pubsub, "agents:lifecycle")
+      assert subscriptions_before == subscriptions_after
+    end
+  end
+
+  describe "v2.0 R33-R34: reply with alive map" do
+    test "reply works when agent_alive_map shows agent alive", %{conn: conn, pubsub: pubsub} do
+      registry = :"test_registry_#{System.unique_integer([:positive])}"
+      {:ok, _} = start_supervised({Registry, keys: :unique, name: registry})
+
+      test_pid = self()
+
+      _agent_pid =
+        start_supervised!({
+          Task,
+          fn ->
+            Registry.register(registry, {:agent, "agent_reply_v2"}, nil)
+            send(test_pid, :agent_registered)
+
+            receive do
+              msg -> send(test_pid, msg)
+            end
+          end
+        })
+
+      assert_receive :agent_registered, 1_000
+
+      assigns = %{
+        messages: [
+          %{
+            id: 1,
+            from: :agent,
+            sender_id: "agent_reply_v2",
+            content: "Reply to me",
+            timestamp: ~U[2024-01-01 10:00:00Z],
+            status: :sent
+          }
+        ],
+        pubsub: pubsub,
+        registry: registry,
+        agent_alive_map: %{"agent_reply_v2" => true},
+        task_id: "task_1"
+      }
+
+      {:ok, view, _html} = render_isolated(conn, assigns)
+
+      view
+      |> element("#message-1 .message-header")
+      |> render_click()
+
+      view
+      |> element("form[phx-submit='send_reply']")
+      |> render_submit(%{"message-id" => "1", "content" => "My reply"})
+
+      assert_receive {:"$gen_cast", {:send_user_message, "My reply"}}, 1_000
+    end
+
+    test "reply button disabled when agent_alive_map shows terminated", %{
+      conn: conn,
+      pubsub: pubsub
+    } do
+      registry = :"test_registry_#{System.unique_integer([:positive])}"
+      {:ok, _} = start_supervised({Registry, keys: :unique, name: registry})
+
+      assigns = %{
+        messages: [
+          %{
+            id: 1,
+            from: :agent,
+            sender_id: "agent_dead_v2",
+            content: "Cannot reply to dead agent",
+            timestamp: ~U[2024-01-01 10:00:00Z],
+            status: :sent
+          }
+        ],
+        pubsub: pubsub,
+        registry: registry,
+        agent_alive_map: %{"agent_dead_v2" => false},
+        task_id: "task_1"
+      }
+
+      {:ok, view, _html} = render_isolated(conn, assigns)
+
+      view
+      |> element("#message-1 .message-header")
+      |> render_click()
+
+      html = render(view)
+      assert html =~ "Cannot reply to dead agent"
+      assert html =~ "Agent no longer active"
+      assert html =~ "disabled"
     end
   end
 

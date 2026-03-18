@@ -3,7 +3,7 @@
 ## Modules
 - ActionExecutor: Non-blocking consensus action execution (379 lines), dispatches Router.execute via Task.Supervisor, result returns via GenServer.cast, v36.0 outer try/rescue/catch crash protection + MCP sync timeout, v40.0 task_id fallback removal (Map.get without default), timeout overrides: :adjust_budget → :infinity, :call_mcp → 600_000, :answer_engine → 120_000, :fetch_web → 60_000, :call_api → 120_000, :generate_images → 300_000 (v39.0)
 - Helpers: Shared helper functions (116 lines), self_contained_actions/0, has_pending_self_contained?/1 (v26.0), coerce_wait_value/1, extract_shell_check_id/2, normalize_sibling_context/1
-- LogHelper: Logging helpers (63 lines), safe_broadcast_log/5, log_action_error/1 (v28.0: {:error, _} unwrap, {:action_crashed, tuple} clause, extended @warning_errors)
+- LogHelper: Logging helpers (75 lines), safe_broadcast_log/5, log_action_error/1 (v28.0: {:error, _} unwrap, {:action_crashed, tuple} clause, extended @warning_errors, grove policy denial clauses log at :info level for :confinement_violation and :hard_rule_violation)
 - TodoInjector: Todo list context injection (82 lines), inject_todo_context/2
 - ChildrenInjector: Children context injection (218 lines), inject_children_context/2, format_children/1, v2.0: enrich_with_messages/2 cross-references state.messages to add latest_message + latest_message_at per child, v3.0: Registry fallback via discover_registry_children/2 + safe_find_children_by_parent/2 + build_registry_child/1 + merge_registry_children/2 for race condition fix
 - AceInjector: ACE context injection (82 lines), inject_ace_context/3

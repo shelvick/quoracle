@@ -21,7 +21,7 @@ defmodule QuoracleWeb.UI.CostDisplayTest do
   - R13: Cost Update Handling [INTEGRATION]
   - R14: Agent Cost Display Flow [SYSTEM]
   - R15: Task Total Display Flow [SYSTEM]
-  - R16-R19: ID Attribute & costs_updated_at Trigger [UNIT/INTEGRATION]
+  - R16-R19: ID Attribute & Pre-computed Cost Data [UNIT/INTEGRATION]
   - R20-R39: v2.0 Token Breakdown Table [UNIT/INTEGRATION]
   - R40: Absorption Records in Model Breakdown Table [ACCEPTANCE]
   - R41: Header Total Stable After Child Dismissal [ACCEPTANCE]
@@ -30,12 +30,15 @@ defmodule QuoracleWeb.UI.CostDisplayTest do
 
   use QuoracleWeb.ConnCase, async: true
   import Phoenix.LiveViewTest, except: [live_isolated: 2, live_isolated: 3]
+  import Test.AgentTestHelpers
 
   alias Quoracle.Repo
   alias Quoracle.Tasks.Task
   alias Quoracle.Agents.Agent
   alias Quoracle.Costs.AgentCost
   alias Test.IsolationHelpers
+
+  @repo_query_event [:quoracle, :repo, :query]
 
   # ============================================================
   # Test Data Setup Helpers
@@ -124,7 +127,13 @@ defmodule QuoracleWeb.UI.CostDisplayTest do
 
   setup %{sandbox_owner: sandbox_owner} do
     deps = IsolationHelpers.create_isolated_deps()
-    %{pubsub: deps.pubsub, sandbox_owner: sandbox_owner}
+
+    %{
+      pubsub: deps.pubsub,
+      registry: deps.registry,
+      dynsup: deps.dynsup,
+      sandbox_owner: sandbox_owner
+    }
   end
 
   # ============================================================
@@ -1238,7 +1247,7 @@ defmodule QuoracleWeb.UI.CostDisplayTest do
 
   # ============================================================
   # WorkGroupID: fix-ui-costs-20251213
-  # R16-R19: ID Attribute & costs_updated_at Trigger
+  # R16-R19: ID Attribute & Pre-computed Cost Data
   # ============================================================
 
   describe "R16: ID attribute on outer div" do
@@ -1291,26 +1300,22 @@ defmodule QuoracleWeb.UI.CostDisplayTest do
     end
   end
 
-  describe "R17: costs_updated_at re-render trigger" do
-    test "reloads costs when costs_updated_at changes", %{
+  describe "R17: precomputed total_cost updates badge" do
+    test "badge updates when parent pushes new total_cost", %{
       conn: conn,
       sandbox_owner: sandbox_owner
     } do
       task = create_task()
       agent = create_agent(task)
-      create_cost(task, agent.agent_id, cost_usd: Decimal.new("0.10"))
-
-      # Initial render with timestamp
-      initial_timestamp = System.monotonic_time()
 
       {:ok, view, _html} =
         render_isolated(
           conn,
           %{
-            id: "cost-timestamp-#{agent.agent_id}",
+            id: "cost-precomputed-update-#{agent.agent_id}",
             mode: :badge,
             agent_id: agent.agent_id,
-            costs_updated_at: initial_timestamp
+            total_cost: Decimal.new("0.10")
           },
           sandbox_owner
         )
@@ -1318,61 +1323,40 @@ defmodule QuoracleWeb.UI.CostDisplayTest do
       html = render(view)
       assert html =~ "$0.10"
 
-      # Add another cost
-      create_cost(task, agent.agent_id, cost_usd: Decimal.new("0.20"))
-
-      # Re-render with NEW timestamp should reload costs
-      new_timestamp = System.monotonic_time()
-
-      {:ok, view2, _html} =
-        render_isolated(
-          conn,
-          %{
-            id: "cost-timestamp-new-#{agent.agent_id}",
-            mode: :badge,
-            agent_id: agent.agent_id,
-            costs_updated_at: new_timestamp
-          },
-          sandbox_owner
-        )
-
-      html = render(view2)
-      # Should show updated total: 0.10 + 0.20 = 0.30
+      # Parent pushes updated total_cost
+      send(view.pid, {:update_component, %{total_cost: Decimal.new("0.30")}})
+      html = render(view)
       assert html =~ "$0.30"
+      refute html =~ "$0.10"
     end
   end
 
-  describe "R18: no reload on same timestamp" do
-    test "skips reload when costs_updated_at unchanged", %{
+  describe "R18: precomputed badge does not query DB" do
+    test "badge with total_cost shows parent value regardless of DB state", %{
       conn: conn,
       sandbox_owner: sandbox_owner
     } do
       task = create_task()
       agent = create_agent(task)
-      create_cost(task, agent.agent_id, cost_usd: Decimal.new("0.10"))
-
-      timestamp = System.monotonic_time()
+      # DB has $0.50 cost, but parent says $0.10
+      create_cost(task, agent.agent_id, cost_usd: Decimal.new("0.50"))
 
       {:ok, view, _html} =
         render_isolated(
           conn,
           %{
-            id: "cost-same-timestamp",
+            id: "cost-precomputed-no-db",
             mode: :badge,
             agent_id: agent.agent_id,
-            costs_updated_at: timestamp
+            total_cost: Decimal.new("0.10")
           },
           sandbox_owner
         )
 
       html = render(view)
+      # Shows parent-provided value, NOT DB value
       assert html =~ "$0.10"
-
-      # The component should not reload if timestamp is the same
-      # This is verified by the fact that costs_loaded flag is preserved
-      # when costs_updated_at hasn't changed (implementation detail)
-      # For now, we just verify it renders correctly with same timestamp
-      assert html =~ "cost-badge"
+      refute html =~ "$0.50"
     end
   end
 
@@ -2386,6 +2370,480 @@ defmodule QuoracleWeb.UI.CostDisplayTest do
       # The header uses by_task (unfiltered) and model rows use
       # by_task_and_model_detailed (filtered on model_spec IS NOT NULL).
       # With absorption records preserving model_spec, these should match.
+    end
+  end
+
+  # ============================================================
+  # WorkGroupID: fix-20260316-051518
+  # v5.0: Pre-computed Cost Data - Eliminate N+1 DB Queries (R46-R55)
+  # ============================================================
+
+  describe "v5.0: pre-computed cost data" do
+    test "R46: badge mode displays pre-computed total_cost", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      task = create_task()
+      agent = create_agent(task)
+      create_cost(task, agent.agent_id, cost_usd: Decimal.new("0.99"))
+
+      {:ok, view, _html} =
+        render_isolated(
+          conn,
+          %{
+            id: "cost-badge-precomputed",
+            mode: :badge,
+            agent_id: agent.agent_id,
+            total_cost: Decimal.new("0.12")
+          },
+          sandbox_owner
+        )
+
+      html = render(view)
+      assert html =~ "$0.12"
+      refute html =~ "$0.99"
+    end
+
+    test "R47: badge mode does not call Aggregator", %{conn: conn, sandbox_owner: sandbox_owner} do
+      agent_id = "missing-agent-#{System.unique_integer([:positive])}"
+      telemetry_handler_id = {:cost_display_badge_query, System.unique_integer([:positive])}
+      parent = self()
+
+      :ok =
+        :telemetry.attach(
+          telemetry_handler_id,
+          @repo_query_event,
+          fn _event, _measurements, metadata, _config ->
+            query = metadata.query || ""
+            params = metadata[:params] || []
+
+            if String.contains?(query, ~s(FROM "agent_costs")) and
+                 String.contains?(inspect(params), agent_id) do
+              send(parent, {:badge_mode_repo_query, query})
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(telemetry_handler_id) end)
+
+      {:ok, view, _html} =
+        render_isolated(
+          conn,
+          %{
+            id: "cost-badge-no-db",
+            mode: :badge,
+            agent_id: agent_id,
+            total_cost: Decimal.new("0.11")
+          },
+          sandbox_owner
+        )
+
+      html = render(view)
+      assert html =~ "$0.11"
+      refute_receive {:badge_mode_repo_query, _query}, 100
+    end
+
+    test "R48: badge mode shows N/A for nil total_cost", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      task = create_task()
+      agent = create_agent(task)
+      create_cost(task, agent.agent_id, cost_usd: Decimal.new("0.44"))
+
+      {:ok, view, _html} =
+        render_isolated(
+          conn,
+          %{
+            id: "cost-badge-nil-total",
+            mode: :badge,
+            agent_id: agent.agent_id,
+            total_cost: nil
+          },
+          sandbox_owner
+        )
+
+      html = render(view)
+      assert html =~ "N/A"
+      refute html =~ "$0.44"
+    end
+
+    test "R49: detail mode collapsed shows pre-computed total_cost", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      task = create_task()
+      agent = create_agent(task)
+
+      create_detailed_cost(task, agent.agent_id,
+        cost_usd: Decimal.new("0.88"),
+        input_cost: "0.30",
+        output_cost: "0.58"
+      )
+
+      {:ok, view, _html} =
+        render_isolated(
+          conn,
+          %{
+            id: "cost-detail-collapsed-precomputed",
+            mode: :detail,
+            agent_id: agent.agent_id,
+            total_cost: Decimal.new("0.21")
+          },
+          sandbox_owner
+        )
+
+      html = render(view)
+      assert html =~ "Cost Details"
+      assert html =~ "$0.21"
+      refute html =~ "$0.88"
+      refute html =~ "<table"
+    end
+
+    test "R50: detail mode expand lazy-loads model breakdown", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      task = create_task()
+      agent = create_agent(task)
+
+      {:ok, view, _html} =
+        render_isolated(
+          conn,
+          %{
+            id: "cost-detail-lazy-load",
+            mode: :detail,
+            agent_id: agent.agent_id,
+            total_cost: Decimal.new("0.33")
+          },
+          sandbox_owner
+        )
+
+      collapsed_html = render(view)
+      assert collapsed_html =~ "$0.33"
+      refute collapsed_html =~ "claude-sonnet"
+      refute collapsed_html =~ "<table"
+
+      create_detailed_cost(task, agent.agent_id,
+        model_spec: "anthropic/claude-sonnet-4-20250514",
+        cost_usd: Decimal.new("0.33"),
+        input_tokens: 1200,
+        output_tokens: 300,
+        reasoning_tokens: 80,
+        cached_tokens: 10,
+        cache_creation_tokens: 5,
+        input_cost: "0.10",
+        output_cost: "0.23"
+      )
+
+      view |> element("[phx-click='toggle_expand']") |> render_click()
+
+      expanded_html = render(view)
+      assert expanded_html =~ "claude-sonnet"
+      assert expanded_html =~ "<table"
+      refute expanded_html =~ "N/A"
+    end
+
+    test "R51: detail mode collapse does not re-query", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      task = create_task()
+      agent = create_agent(task)
+
+      {:ok, view, _html} =
+        render_isolated(
+          conn,
+          %{
+            id: "cost-detail-collapse-cache",
+            mode: :detail,
+            agent_id: agent.agent_id,
+            total_cost: Decimal.new("0.27")
+          },
+          sandbox_owner
+        )
+
+      create_detailed_cost(task, agent.agent_id,
+        model_spec: "anthropic/claude-sonnet-4-20250514",
+        cost_usd: Decimal.new("0.27"),
+        input_cost: "0.09",
+        output_cost: "0.18"
+      )
+
+      view |> element("[phx-click='toggle_expand']") |> render_click()
+      expanded_html = render(view)
+      assert expanded_html =~ "claude-sonnet"
+
+      view |> element("[phx-click='toggle_expand']") |> render_click()
+      collapsed_html = render(view)
+      assert collapsed_html =~ "$0.27"
+      refute collapsed_html =~ "<table"
+
+      create_detailed_cost(task, agent.agent_id,
+        model_spec: "openai/gpt-4o",
+        cost_usd: Decimal.new("0.05"),
+        input_cost: "0.02",
+        output_cost: "0.03"
+      )
+
+      still_collapsed_html = render(view)
+      refute still_collapsed_html =~ "gpt-4o"
+      refute still_collapsed_html =~ "<table"
+    end
+
+    test "R52: summary mode expand lazy-loads cost breakdown", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      task = create_task()
+      tree = create_agent_tree(task)
+
+      create_cost(task, tree.root.agent_id,
+        cost_type: "llm_consensus",
+        cost_usd: Decimal.new("0.14")
+      )
+
+      {:ok, view, _html} =
+        render_isolated(
+          conn,
+          %{
+            id: "cost-summary-lazy-load",
+            mode: :summary,
+            agent_id: tree.root.agent_id,
+            total_cost: Decimal.new("0.14")
+          },
+          sandbox_owner
+        )
+
+      collapsed_html = render(view)
+      assert collapsed_html =~ "$0.14"
+      refute collapsed_html =~ "Embeddings"
+      refute collapsed_html =~ "children: $0.09"
+
+      create_cost(task, tree.child1.agent_id,
+        cost_type: "llm_embedding",
+        cost_usd: Decimal.new("0.09")
+      )
+
+      view |> element("[phx-click='toggle_expand']") |> render_click()
+
+      expanded_html = render(view)
+      assert expanded_html =~ "Embeddings"
+      assert expanded_html =~ "children: $0.09"
+      refute expanded_html =~ "N/A"
+    end
+
+    test "R53: request mode uses passed-in cost", %{conn: conn, sandbox_owner: sandbox_owner} do
+      {:ok, view, _html} =
+        render_isolated(
+          conn,
+          %{
+            id: "cost-request-v5",
+            mode: :request,
+            agent_id: "ignored-agent",
+            cost: Decimal.new("0.07"),
+            metadata: %{"model_spec" => "anthropic/claude-sonnet-4-20250514"}
+          },
+          sandbox_owner
+        )
+
+      html = render(view)
+      assert html =~ "$0.07"
+      assert html =~ "claude-sonnet"
+      refute html =~ "$9.99"
+    end
+
+    test "R54: CostDisplay does not subscribe to PubSub", %{
+      conn: conn,
+      pubsub: pubsub,
+      sandbox_owner: sandbox_owner
+    } do
+      agent_id = "pubsub-agent-#{System.unique_integer([:positive])}"
+
+      {:ok, view, _html} =
+        render_isolated(
+          conn,
+          %{
+            id: "cost-no-pubsub-subscription",
+            mode: :badge,
+            agent_id: agent_id,
+            total_cost: Decimal.new("0.19"),
+            pubsub: pubsub
+          },
+          sandbox_owner
+        )
+
+      html = render(view)
+      assert html =~ "$0.19"
+
+      Phoenix.PubSub.broadcast(
+        pubsub,
+        "agents:#{agent_id}:costs",
+        {:cost_recorded, %{cost: Decimal.new("0.99")}}
+      )
+
+      rerendered_html = render(view)
+
+      assert rerendered_html =~ "$0.19"
+      refute rerendered_html =~ "$0.99"
+    end
+
+    test "R55: re-expand uses cached detail data", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      task = create_task()
+      agent = create_agent(task)
+
+      {:ok, view, _html} =
+        render_isolated(
+          conn,
+          %{
+            id: "cost-detail-reexpand-cache",
+            mode: :detail,
+            agent_id: agent.agent_id,
+            total_cost: Decimal.new("0.41")
+          },
+          sandbox_owner
+        )
+
+      create_detailed_cost(task, agent.agent_id,
+        model_spec: "openai/gpt-4o",
+        cost_usd: Decimal.new("0.41"),
+        input_cost: "0.16",
+        output_cost: "0.25"
+      )
+
+      view |> element("[phx-click='toggle_expand']") |> render_click()
+      first_expand_html = render(view)
+      assert first_expand_html =~ "gpt-4o"
+
+      view |> element("[phx-click='toggle_expand']") |> render_click()
+
+      create_detailed_cost(task, agent.agent_id,
+        model_spec: "anthropic/claude-sonnet-4-20250514",
+        cost_usd: Decimal.new("0.05"),
+        input_cost: "0.02",
+        output_cost: "0.03"
+      )
+
+      view |> element("[phx-click='toggle_expand']") |> render_click()
+
+      reexpanded_html = render(view)
+      assert reexpanded_html =~ "gpt-4o"
+      refute reexpanded_html =~ "claude-sonnet"
+    end
+
+    test "expanded detail refreshes breakdown when total_cost changes", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      task = create_task()
+      agent = create_agent(task)
+
+      create_detailed_cost(task, agent.agent_id,
+        model_spec: "openai/gpt-4o",
+        cost_usd: Decimal.new("0.30"),
+        input_cost: "0.10",
+        output_cost: "0.20"
+      )
+
+      {:ok, view, _html} =
+        render_isolated(
+          conn,
+          %{
+            id: "cost-detail-refresh",
+            mode: :detail,
+            agent_id: agent.agent_id,
+            total_cost: Decimal.new("0.30")
+          },
+          sandbox_owner
+        )
+
+      # Expand to load breakdown
+      view |> element("[phx-click='toggle_expand']") |> render_click()
+      html = render(view)
+      assert html =~ "gpt-4o"
+      refute html =~ "claude-sonnet"
+
+      # Record a new cost
+      create_detailed_cost(task, agent.agent_id,
+        model_spec: "anthropic/claude-sonnet-4-20250514",
+        cost_usd: Decimal.new("0.15"),
+        input_cost: "0.05",
+        output_cost: "0.10"
+      )
+
+      # Parent pushes updated total_cost — should invalidate breakdown
+      send(view.pid, {:update_component, %{total_cost: Decimal.new("0.45")}})
+      html = render(view)
+
+      # Breakdown should refresh and show both models
+      assert html =~ "gpt-4o"
+      assert html =~ "claude-sonnet"
+    end
+
+    @tag :acceptance
+    test "expanding dashboard task cost details shows newly recorded model costs", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, {task, agent_pid}} =
+        create_task_with_cleanup("Cost display lazy-load acceptance",
+          sandbox_owner: sandbox_owner,
+          dynsup: dynsup,
+          registry: registry,
+          pubsub: pubsub,
+          force_persist: true
+        )
+
+      {:ok, agent_state} = GenServer.call(agent_pid, :get_state)
+
+      conn =
+        Plug.Test.init_test_session(conn, %{
+          "pubsub" => pubsub,
+          "registry" => registry,
+          "dynsup" => dynsup,
+          "sandbox_owner" => sandbox_owner
+        })
+
+      {:ok, view, initial_html} = live(conn, "/")
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      assert initial_html =~ "Cost display lazy-load acceptance"
+      refute initial_html =~ "claude-sonnet"
+
+      create_detailed_cost(task, agent_state.agent_id,
+        model_spec: "anthropic/claude-sonnet-4-20250514",
+        cost_usd: Decimal.new("0.17"),
+        input_tokens: 900,
+        output_tokens: 200,
+        input_cost: "0.06",
+        output_cost: "0.11"
+      )
+
+      view
+      |> element("#task-cost-detail-#{task.id} [phx-click='toggle_expand']")
+      |> render_click()
+
+      html = render(view)
+      detail_html = view |> element("#task-cost-detail-#{task.id}") |> render()
+
+      assert html =~ "claude-sonnet"
+      refute detail_html =~ "N/A"
     end
   end
 end

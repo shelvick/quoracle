@@ -6,14 +6,14 @@ defmodule QuoracleWeb.UI.TaskTree.BudgetHelpers do
 
   @doc """
   Calculates task budget summary with spent amount and percentage.
+  Accepts pre-computed total_cost from batch query to avoid N+1 DB queries.
   """
-  @spec calculate_task_budget_summary(String.t(), Decimal.t(), any()) :: %{
+  @spec calculate_task_budget_summary(Decimal.t(), Decimal.t() | nil) :: %{
           spent: Decimal.t(),
           percentage: float()
         }
-  def calculate_task_budget_summary(task_id, budget_limit, _costs_updated_at) do
-    cost_summary = Quoracle.Costs.Aggregator.by_task(task_id)
-    spent_decimal = cost_summary.total_cost || Decimal.new(0)
+  def calculate_task_budget_summary(budget_limit, total_cost) do
+    spent_decimal = total_cost || Decimal.new(0)
 
     percentage =
       if Decimal.compare(budget_limit, Decimal.new(0)) == :gt do
@@ -48,20 +48,21 @@ defmodule QuoracleWeb.UI.TaskTree.BudgetHelpers do
 
   @doc """
   Builds agent budget summary from agent data for badge display.
+  Accepts pre-computed total_cost to avoid N+1 DB queries.
   """
-  @spec build_agent_budget_summary(map()) :: map()
-  def build_agent_budget_summary(%{budget_data: %{mode: :na}}) do
+  @spec build_agent_budget_summary(map(), Decimal.t() | nil) :: map()
+  def build_agent_budget_summary(%{budget_data: %{mode: :na}}, _total_cost) do
     %{status: :na}
   end
 
-  def build_agent_budget_summary(%{budget_data: %{allocated: nil}}) do
+  def build_agent_budget_summary(%{budget_data: %{allocated: nil}}, _total_cost) do
     %{status: :na}
   end
 
-  def build_agent_budget_summary(%{agent_id: agent_id, budget_data: budget_data}) do
+  def build_agent_budget_summary(%{agent_id: _agent_id, budget_data: budget_data}, total_cost) do
     allocated = budget_data.allocated
     committed = budget_data.committed || Decimal.new(0)
-    spent = Quoracle.Costs.Aggregator.by_agent(agent_id).total_cost || Decimal.new(0)
+    spent = total_cost || Decimal.new(0)
     available = Decimal.sub(Decimal.sub(allocated, spent), committed)
 
     status =
@@ -80,7 +81,7 @@ defmodule QuoracleWeb.UI.TaskTree.BudgetHelpers do
     }
   end
 
-  def build_agent_budget_summary(_agent) do
+  def build_agent_budget_summary(_agent, _total_cost) do
     %{status: :na}
   end
 end

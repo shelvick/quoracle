@@ -5,29 +5,35 @@
 - GroveSelector: Grove dropdown component (2026-02), renders `<select>` with grove names from assigns, `for="grove-select"` label + `id="grove-select"` select (accessibility), emits `grove_selected` event
 - TaskFormFields: Reusable form components (text, textarea, enum_dropdown, list_input, budget_input), 250 lines
 - TaskBudgetEditor: Modal for editing task budget limits (2025-12), validates against spent+committed minimum
-- LogView: Log display, min_level filter, auto-scroll
-- AgentNode: Recursive node rendering, status indicators, TODO accordion (2025-12), direct message forms (2025-11)
+- LogView: Log display, severity filter via pre-computed display_logs in update/2, auto-scroll (v5.0: render uses @display_logs)
+- AgentNode: Recursive LiveComponent (v7.0), per-node diffing, dual-mode (TaskTree integration + legacy isolated). Delegates to MessageForm/TodoDisplay/BudgetHelpers submodules. Accepts selected_agent_id + expanded_set from parent, computes booleans in update/2. component_prefix assign for CostDisplay ID disambiguation
 - LogEntry: Log rendering (351 lines), imports LogEntry.Helpers
 - LogEntry.Helpers: Formatting helpers (279 lines, 23 @spec), timestamp/level/metadata/role styling, LLM response formatting (2025-12)
 - Message: Accordion display, collapsed 80-char preview, reply forms with agent_alive control
 - CostDisplay: Cost display component (385 lines), 4 modes (:badge, :summary, :detail, :request)
-  - v3.0: Token breakdown table with 10 columns (Model, Req, Input, Output, Reason, Cache R, Cache W, In$, Out$, Total$)
-  - Expandable detail view, lazy-loads from Aggregator
+  - v5.0: precomputed_total_cost? flag, badge mode is pure display (zero DB access), detail/summary lazy-load on expand
+  - Token breakdown table with 10 columns (Model, Req, Input, Output, Reason, Cache R, Cache W, In$, Out$, Total$)
   - Correctly renders absorption records (child_budget_absorbed with model_spec) after child dismissal
-  - Helper functions: format_tokens/1, format_token_or_dash/1, format_cost_compact/1, truncate_model/1
+  - Helper functions: format_tokens/1, format_token_or_dash/1, format_cost_compact/1, truncate_model/1, merge_cost_types/2
 
 ## Stateful Components
-- Mailbox: Accordion inbox, subscribes to agents:lifecycle, agent_alive_map tracking, newest-first ordering
+- Mailbox: Accordion inbox, v2.0: accepts agent_alive_map directly from parent (no lifecycle subscription), newest-first ordering
 
-## AgentNode TODO Display (2025-12)
-- Accordion section when @expanded and @agent[:todos]
-- State icons: ⏳ (todo), ⏸️ (pending), ✅ (done)
-- Strikethrough + opacity for done items
-- Helper functions: state_icon/1, todo_state_class/1 (lines 176-183)
+## AgentNode v7.0 (2026-03, perf-20260317-034445)
+- Unified recursive LiveComponent replacing TaskTree's render_agent_node/1 function component
+- Dual-mode: `has_centralized_state` check in update/2 detects TaskTree mode vs legacy isolated mode
+- TaskTree mode: receives selected_agent_id + expanded_set (MapSet), computes selected/expanded booleans
+- Legacy mode: receives selected/expanded booleans directly (backward compat for 59 existing tests)
+- Submodule delegation: MessageForm, TodoDisplay, BudgetHelpers (when @target set)
+- Event routing: phx-target={@target || @myself} — TaskTree handles all events in production
+- component_prefix assign: "" (legacy) or "tasktree-" (TaskTree) for CostDisplay ID disambiguation
+- lookup_child/2: agents map lookup with fallback stub for legacy mode
+- Null guard: render(%{agent: nil}) renders empty div
 
-## AgentNode Direct Message (2025-11)
-- Inline form for alive root agents (@agent_alive and parent_id == nil)
-- LiveComponent local state: message_form_expanded, message_input
+## AgentNode Direct Message (2025-11, updated 2026-03)
+- Inline form for alive root agents (agent_alive_map check + parent_id == nil)
+- TaskTree mode: delegates to MessageForm submodule, uses centralized message_forms map
+- Legacy mode: local state message_form_expanded, message_input
 - Event handlers: show_message_form, cancel_message, update_message_input, send_direct_message
 - Sends {:send_direct_message, agent_id, content} to socket.root_pid
 - Form clears and collapses after submission

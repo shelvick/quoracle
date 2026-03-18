@@ -65,7 +65,12 @@ defmodule QuoracleWeb.DashboardIsolationFixesTest do
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "log_debounce_ms" => 0
+          }
         )
 
       # Test by broadcasting on global topics - Dashboard should NOT receive them
@@ -111,7 +116,12 @@ defmodule QuoracleWeb.DashboardIsolationFixesTest do
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "log_debounce_ms" => 0
+          }
         )
 
       # Simulate a reconnection event
@@ -199,7 +209,12 @@ defmodule QuoracleWeb.DashboardIsolationFixesTest do
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "log_debounce_ms" => 0
+          }
         )
 
       agent_id = "agent_#{System.unique_integer([:positive])}"
@@ -229,7 +244,8 @@ defmodule QuoracleWeb.DashboardIsolationFixesTest do
         )
       end
 
-      # Force LiveView to process messages
+      # Two renders: first processes log_entry (buffers + sends flush), second processes flush
+      render(view)
       render(view)
 
       # Verify agent and logs exist
@@ -260,7 +276,12 @@ defmodule QuoracleWeb.DashboardIsolationFixesTest do
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "log_debounce_ms" => 0
+          }
         )
 
       agent_id = "agent_#{System.unique_integer([:positive])}"
@@ -288,7 +309,8 @@ defmodule QuoracleWeb.DashboardIsolationFixesTest do
          }}
       )
 
-      # Force LiveView to process messages
+      # Two renders: first processes log_entry (buffers + sends flush), second processes flush
+      render(view)
       render(view)
 
       # Simulate delete button click event
@@ -313,7 +335,12 @@ defmodule QuoracleWeb.DashboardIsolationFixesTest do
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "log_debounce_ms" => 0
+          }
         )
 
       agent_id = "agent_#{System.unique_integer([:positive])}"
@@ -340,7 +367,8 @@ defmodule QuoracleWeb.DashboardIsolationFixesTest do
          }}
       )
 
-      # Force LiveView to process messages
+      # Two renders: first processes log_entry (buffers + sends flush), second processes flush
+      render(view)
       render(view)
 
       # Terminate the agent
@@ -378,7 +406,12 @@ defmodule QuoracleWeb.DashboardIsolationFixesTest do
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "log_debounce_ms" => 0
+          }
         )
 
       agent_id = "agent_#{System.unique_integer([:positive])}"
@@ -411,7 +444,8 @@ defmodule QuoracleWeb.DashboardIsolationFixesTest do
          }}
       )
 
-      # Force LiveView to process log_entry message
+      # Two renders: first processes log_entry (buffers + sends flush), second processes flush
+      render(view)
       html = render(view)
 
       # Check that Dashboard received and stored the log
@@ -512,7 +546,12 @@ defmodule QuoracleWeb.DashboardIsolationFixesTest do
     } do
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "log_debounce_ms" => 0
+          }
         )
 
       agent_id = "agent_#{System.unique_integer([:positive])}"
@@ -544,7 +583,8 @@ defmodule QuoracleWeb.DashboardIsolationFixesTest do
          }}
       )
 
-      # Force LiveView to process log broadcast
+      # Two renders: first processes log_entry (buffers + sends flush), second processes flush
+      render(view)
       render(view)
 
       socket = :sys.get_state(view.pid).socket
@@ -604,7 +644,12 @@ defmodule QuoracleWeb.DashboardIsolationFixesTest do
       # Mount two dashboards with different pubsubs
       {:ok, view1, _html} =
         live_isolated(conn, QuoracleWeb.DashboardLive,
-          session: %{"pubsub" => pubsub, "registry" => registry, "dynsup" => dynsup}
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "log_debounce_ms" => 0
+          }
         )
 
       {:ok, view2, _html} =
@@ -612,7 +657,8 @@ defmodule QuoracleWeb.DashboardIsolationFixesTest do
           session: %{
             "pubsub" => pubsub2_name,
             "registry" => registry2_name,
-            "dynsup" => dynsup2_name
+            "dynsup" => dynsup2_name,
+            "log_debounce_ms" => 0
           }
         )
 
@@ -640,7 +686,8 @@ defmodule QuoracleWeb.DashboardIsolationFixesTest do
          }}
       )
 
-      # Force LiveView to process messages
+      # Two renders: first processes log_entry (buffers + sends flush), second processes flush
+      render(view1)
       render(view1)
 
       # Check both dashboards

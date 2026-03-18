@@ -1,13 +1,11 @@
 defmodule QuoracleWeb.UI.Mailbox do
   @moduledoc """
   Live component for displaying messages in accordion-style inbox.
-
-  Packet 1: Message display with expand/collapse state management
-  Packet 2: Reply functionality (TBD)
   """
 
   use QuoracleWeb, :live_component
 
+  @doc false
   @impl true
   @spec mount(Phoenix.LiveView.Socket.t()) :: {:ok, Phoenix.LiveView.Socket.t()}
   def mount(socket) do
@@ -19,13 +17,13 @@ defmodule QuoracleWeb.UI.Mailbox do
        # Wait for parent to provide isolated pubsub/registry via update/2
        pubsub: nil,
        registry: nil,
-       agents: [],
        agent_alive_map: %{},
        component_pid: self(),
-       lifecycle_subscribed: false
+       test_pid: nil
      )}
   end
 
+  @doc false
   @impl true
   @spec update(map(), Phoenix.LiveView.Socket.t()) :: {:ok, Phoenix.LiveView.Socket.t()}
   def update(assigns, socket) do
@@ -33,34 +31,24 @@ defmodule QuoracleWeb.UI.Mailbox do
 
     pubsub = safe_assigns[:pubsub] || socket.assigns[:pubsub] || Quoracle.PubSub
     registry = safe_assigns[:registry] || socket.assigns[:registry] || Quoracle.Registry
-    agents = safe_assigns[:agents] || socket.assigns[:agents] || []
+    agent_alive_map = safe_assigns[:agent_alive_map] || socket.assigns[:agent_alive_map] || %{}
     expanded_messages = socket.assigns[:expanded_messages] || MapSet.new()
-
-    # Only subscribe if we have valid pubsub AND haven't subscribed yet
-    # This prevents subscribing to global PubSub before parent provides isolated instance
-    socket =
-      if connected?(socket) && pubsub != nil && !socket.assigns[:lifecycle_subscribed] do
-        Phoenix.PubSub.subscribe(pubsub, "agents:lifecycle")
-        assign(socket, :lifecycle_subscribed, true)
-      else
-        socket
-      end
-
-    agent_alive_map = build_agent_alive_map(agents)
 
     socket =
       socket
       |> assign(safe_assigns)
       |> assign(:pubsub, pubsub)
       |> assign(:registry, registry)
-      |> assign(:agents, agents)
       |> assign(:expanded_messages, expanded_messages)
       |> assign(:agent_alive_map, agent_alive_map)
       |> assign(:component_pid, self())
 
+    notify_test_pid(socket.assigns[:test_pid], {:mailbox_updated, Map.keys(safe_assigns)})
+
     {:ok, socket}
   end
 
+  @doc false
   @impl true
   @spec render(map()) :: Phoenix.LiveView.Rendered.t()
   def render(assigns) do
@@ -79,6 +67,7 @@ defmodule QuoracleWeb.UI.Mailbox do
               reply_form_visible={Map.get(message, :from) == :agent}
               agent_alive={get_agent_alive(message, @agent_alive_map)}
               target={@myself}
+              registry={@registry}
               pubsub={@pubsub}
             />
           <% end %>
@@ -88,6 +77,7 @@ defmodule QuoracleWeb.UI.Mailbox do
     """
   end
 
+  @doc false
   @impl true
   @spec handle_event(binary(), map(), Phoenix.LiveView.Socket.t()) ::
           {:noreply, Phoenix.LiveView.Socket.t()}
@@ -104,6 +94,7 @@ defmodule QuoracleWeb.UI.Mailbox do
     {:noreply, assign(socket, expanded_messages: expanded_messages)}
   end
 
+  @doc false
   @impl true
   def handle_event("send_reply", %{"message-id" => message_id, "content" => content}, socket) do
     message_id = String.to_integer(message_id)
@@ -126,6 +117,9 @@ defmodule QuoracleWeb.UI.Mailbox do
     end
   end
 
+  @doc false
+  @spec handle_info(term(), Phoenix.LiveView.Socket.t()) ::
+          {:noreply, Phoenix.LiveView.Socket.t()}
   def handle_info({:toggle_message, message_id}, socket) do
     expanded_messages =
       if MapSet.member?(socket.assigns.expanded_messages, message_id) do
@@ -144,16 +138,6 @@ defmodule QuoracleWeb.UI.Mailbox do
   def handle_info({:new_message, message}, socket) do
     messages = socket.assigns.messages ++ [message]
     {:noreply, assign(socket, messages: messages)}
-  end
-
-  def handle_info({:agent_terminated, agent_id}, socket) do
-    agent_alive_map = Map.put(socket.assigns.agent_alive_map, agent_id, false)
-    {:noreply, assign(socket, agent_alive_map: agent_alive_map)}
-  end
-
-  def handle_info({:agent_spawned, agent_id, _pid}, socket) do
-    agent_alive_map = Map.put(socket.assigns.agent_alive_map, agent_id, true)
-    {:noreply, assign(socket, agent_alive_map: agent_alive_map)}
   end
 
   def handle_info({:send_reply, message_id, content}, socket) do
@@ -186,16 +170,16 @@ defmodule QuoracleWeb.UI.Mailbox do
     )
   end
 
-  defp build_agent_alive_map(agents) when is_map(agents) do
-    Map.new(agents, fn {agent_id, agent_data} -> {agent_id, agent_data.status != :terminated} end)
-  end
-
-  defp build_agent_alive_map(_), do: %{}
-
   defp get_agent_alive(message, agent_alive_map) do
     case message do
       %{from: :agent, sender_id: sender_id} -> Map.get(agent_alive_map, sender_id, false)
       _ -> true
     end
+  end
+
+  defp notify_test_pid(nil, _message), do: :ok
+
+  defp notify_test_pid(test_pid, message) when is_pid(test_pid) do
+    send(test_pid, message)
   end
 end
