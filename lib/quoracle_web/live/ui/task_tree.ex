@@ -6,11 +6,10 @@ defmodule QuoracleWeb.UI.TaskTree do
 
   use QuoracleWeb, :live_component
 
+  alias QuoracleWeb.UI.AgentNode
   alias QuoracleWeb.UI.TaskTree.GroveHandlers
   alias QuoracleWeb.UI.TaskTree.Helpers
-  alias QuoracleWeb.UI.TaskTree.MessageForm
   alias QuoracleWeb.UI.TaskTree.NewTaskModal
-  alias QuoracleWeb.UI.TaskTree.TodoDisplay
 
   import QuoracleWeb.UI.TaskTree.BudgetHelpers
 
@@ -39,7 +38,8 @@ defmodule QuoracleWeb.UI.TaskTree do
       |> assign_new(:agent_alive_map, fn -> %{} end)
       |> assign_new(:root_pid, fn -> nil end)
       |> assign_new(:message_forms, fn -> %{} end)
-      |> assign_new(:costs_updated_at, fn -> nil end)
+      |> assign_new(:cost_data, fn -> %{agents: %{}, tasks: %{}} end)
+      |> assign_new(:use_precomputed_costs, fn -> true end)
       |> assign_new(:profiles, fn -> [] end)
       |> assign_new(:groves, fn -> [] end)
       |> assign_new(:groves_path, fn -> nil end)
@@ -93,7 +93,8 @@ defmodule QuoracleWeb.UI.TaskTree do
                 id={"task-cost-#{task_id}"}
                 mode={:badge}
                 task_id={task_id}
-                costs_updated_at={@costs_updated_at}
+                total_cost={task_total(@cost_data, task_id)}
+                precomputed_total_cost?={@use_precomputed_costs}
               />
             </div>
             <!-- Per-model cost breakdown -->
@@ -103,13 +104,14 @@ defmodule QuoracleWeb.UI.TaskTree do
                 id={"task-cost-detail-#{task_id}"}
                 mode={:detail}
                 task_id={task_id}
-                costs_updated_at={@costs_updated_at}
+                total_cost={task_total(@cost_data, task_id)}
+                precomputed_total_cost?={@use_precomputed_costs}
               />
             </div>
 
             <!-- Task Budget Summary -->
             <%= if task[:budget_limit] do %>
-              <% budget_summary = calculate_task_budget_summary(task_id, task.budget_limit, @costs_updated_at) %>
+              <% budget_summary = calculate_task_budget_summary(task.budget_limit, task_total(@cost_data, task_id)) %>
               <div class={"task-budget-summary mb-2 text-sm #{budget_color_class(budget_summary.percentage)} #{if budget_summary.percentage > 100, do: "over-budget", else: ""}"}>
                 <div class="flex items-center gap-2">
                   <span class="font-medium">Budget:</span>
@@ -187,17 +189,22 @@ defmodule QuoracleWeb.UI.TaskTree do
 
             <%= if task[:root_agent_id] do %>
               <div class="agent-tree ml-2 mt-2">
-                <.render_agent_node
+                <.live_component
+                  module={AgentNode}
+                  id={"agent-node-#{task[:root_agent_id]}"}
                   agent={@agents[task[:root_agent_id]]}
                   agents={@agents}
                   selected_agent_id={@selected_agent_id}
-                  expanded={@expanded}
+                  expanded_set={@expanded}
                   depth={0}
                   target={@myself}
                   agent_alive_map={@agent_alive_map || %{}}
+                  agent_alive={Map.get(@agent_alive_map || %{}, task[:root_agent_id], false)}
                   root_pid={@root_pid}
                   message_forms={@message_forms}
-                  costs_updated_at={@costs_updated_at}
+                  cost_data={@cost_data}
+                  use_precomputed_costs={@use_precomputed_costs}
+                  component_prefix="tasktree-"
                 />
               </div>
             <% end %>
@@ -216,96 +223,7 @@ defmodule QuoracleWeb.UI.TaskTree do
     """
   end
 
-  defp render_agent_node(%{agent: nil} = assigns), do: ~H""
-
-  defp render_agent_node(assigns) do
-    ~H"""
-    <div class="agent-node" data-agent-id={@agent.agent_id} data-depth={@depth}>
-      <div 
-        class={"agent-row flex items-center p-1 hover:bg-gray-50 cursor-pointer #{if @agent.agent_id == @selected_agent_id, do: "bg-blue-100 agent-selected"}"}
-        phx-click="select_agent"
-        phx-value-agent-id={@agent.agent_id}
-        phx-target={@target}
-      >
-        <!-- Expand/Collapse Icon -->
-        <%= if length(@agent[:children] || []) > 0 do %>
-          <button
-            phx-click="toggle_expand"
-            phx-value-agent-id={@agent.agent_id}
-            phx-target={@target}
-            class="mr-2"
-          >
-            <%= if MapSet.member?(@expanded, @agent.agent_id) do %>
-              <span class="icon-collapse">▼</span>
-            <% else %>
-              <span class="icon-expand">▶</span>
-            <% end %>
-          </button>
-        <% else %>
-          <span class="mr-2 invisible">▶</span>
-        <% end %>
-        
-        <!-- Agent Info -->
-        <span class={"agent-info flex-1 status-#{@agent[:status] || :idle}"}>
-          <%= @agent.agent_id %>
-          <%= if @agent[:status] == :working and @agent[:current_action] do %>
-            <span class="text-sm text-gray-500 ml-2">(<%= @agent.current_action %>)</span>
-          <% end %>
-        </span>
-        
-        <!-- Status Indicator -->
-        <span class={"status-indicator ml-2 px-2 py-1 text-xs rounded status-#{@agent[:status] || :idle}"}>
-          <%= @agent[:status] || :idle %>
-        </span>
-
-        <!-- Cost Badge -->
-        <.live_component
-          module={QuoracleWeb.Live.UI.CostDisplay}
-          id={"cost-badge-tasktree-#{@agent.agent_id}"}
-          mode={:badge}
-          agent_id={@agent.agent_id}
-          costs_updated_at={@costs_updated_at}
-        />
-
-        <!-- Budget Badge -->
-        <%= if @agent[:budget_data] do %>
-          <QuoracleWeb.UI.BudgetBadge.budget_badge summary={build_agent_budget_summary(@agent)} />
-        <% end %>
-      </div>
-
-      <!-- Direct Message Form -->
-      <MessageForm.render
-        agent={@agent}
-        agent_alive_map={@agent_alive_map}
-        message_forms={@message_forms}
-        target={@target}
-      />
-
-      <!-- Agent task list display -->
-      <TodoDisplay.render agent={@agent} />
-
-      <!-- Children -->
-      <%= if MapSet.member?(@expanded, @agent.agent_id) and @agent[:children] do %>
-        <div class="children ml-4">
-          <%= for child_id <- Enum.uniq(@agent.children) do %>
-            <.render_agent_node
-              agent={@agents[child_id]}
-              agents={@agents}
-              selected_agent_id={@selected_agent_id}
-              expanded={@expanded}
-              depth={@depth + 1}
-              target={@target}
-              agent_alive_map={@agent_alive_map}
-              root_pid={@root_pid}
-              message_forms={@message_forms}
-              costs_updated_at={@costs_updated_at}
-            />
-          <% end %>
-        </div>
-      <% end %>
-    </div>
-    """
-  end
+  defp task_total(cost_data, task_id), do: get_in(cost_data, [:tasks, task_id])
 
   @doc """
   Handles expand/collapse toggle for agent nodes.

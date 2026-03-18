@@ -3,13 +3,13 @@
 ## Test Files
 - governance_resolver_test.exs: 41 tests (R1-R17 spec + AUDIT remediation) - ExUnit.Case, async: true
 - bootstrap_resolver_test.exs: 16 tests (R1-R11 spec + SEC-1a/b/c/d/g/h security) - ExUnit.Case, async: true
-- loader_test.exs: 20+ tests (R1-R13 spec + SEC-1e/f/SEC-4a/b security + edge cases) - DataCase, async: true
+- loader_test.exs: 23+ tests (R1-R13 spec + SEC-1e/f/SEC-4a/b security + edge cases + R31-R33 confinement_mode) - DataCase, async: true
 - path_security_test.exs: 11 tests (R1-R11) - ExUnit.Case, async: true (NEW: wip-20260228-spawn-contracts)
-- spawn_contract_resolver_test.exs: 22 tests (R1-R22) - ExUnit.Case, async: true (NEW: wip-20260228-spawn-contracts)
+- spawn_contract_resolver_test.exs: 27 tests (R1-R22 + R23-R27 validate_required_context) - ExUnit.Case, async: true
 - spawn_contract_integration_test.exs: integration + acceptance tests for full spawn pipeline - DataCase, async: true (NEW: wip-20260228-spawn-contracts)
 - governance_integration_test.exs: integration tests for governance propagation - DataCase, async: true
-- hard_rule_enforcer_test.exs: 21 tests (R1-R21) - ExUnit.Case, async: true (NEW: wip-20260302-grove-hard-enforcement)
-- hard_enforcement_integration_test.exs: 13 tests (R1-R12 + R3b) - DataCase, async: true (NEW: wip-20260302-grove-hard-enforcement)
+- hard_rule_enforcer_test.exs: 37 tests (R1-R21 + R22-R31 action_block + R32-R37 strict confinement mode) - ExUnit.Case, async: true
+- hard_enforcement_integration_test.exs: 25 tests (R1-R12 + R3b + R13-R18 action_block + R19-R22 strict mode + confinement_mode threading) - DataCase, async: true
 - groves_path_config_test.exs: DB config path fallback tests - DataCase, async: true
 
 ## Test Patterns
@@ -35,12 +35,14 @@
 - choose_profile/2: LLM-explicit wins, edge fallback when LLM omits, empty string treated as absent
 - resolve_constraints/2: file read, section extraction, path security, missing file graceful nil
 - merge_skills/2: deduplication, ordering
+- validate_required_context/3: R23-R27 — nil edge, nil grove_vars, all keys present, missing keys warning, empty required_context
 
 **SpawnContractIntegration** (spawn_contract_integration_test.exs):
 - R25-R65: Full pipeline from grove loading through spawn to child state
 - LLM profile wins regression test
 - R30: Profile optional when topology edge provides fallback
 - grove_topology/grove_path threading through TaskManager → Core.State
+- R64-R66: Template variable resolution tests (grove_vars → ConfigBuilder path template resolution)
 
 **GovernanceResolver** (governance_resolver_test.exs):
 - resolve_all: basic injection, unknown scope skip, skill-scoped filtering, all-scope always-included
@@ -68,6 +70,8 @@
 - R1-R7: Shell pattern blocking (match, no-match, scope all/list, nil/empty rules, invalid regex)
 - R8-R11: Working directory confinement (within/outside paths, nil confinement, unlisted skill)
 - R12-R21: File access confinement (write within/outside/read-only, read within/read-only/outside, nil, unlisted, glob, error details)
+- R22-R31: Action blocking (match, no-match, scope filtering, nil/empty rules)
+- R32-R37: Strict confinement mode (unlisted skill denied for file_access and working_dir, with actionable error messages)
 
 **HardEnforcementIntegration** (hard_enforcement_integration_test.exs):
 - R1-R2: Shell blocked/allowed through full pipeline (spawns real agents)
@@ -76,3 +80,8 @@
 - R7-R9: File read blocked/from-write-path/from-read-only through full pipeline
 - R10-R11: No grove passthrough (shell + files)
 - R12: Confinement inheritance to children
+- R13-R18: Action blocking through full pipeline
+- R19-R22: Strict confinement mode through full pipeline + confinement_mode threading from Loader to HardRuleEnforcer
+
+**Loader** (loader_test.exs):
+- R31-R33: confinement_mode parsing (strict, absent defaults nil, non-string ignored)

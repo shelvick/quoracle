@@ -61,6 +61,7 @@ schemas:
 workspace: "~/.quoracle/benchmarks/mmlu-pro"
 
 # Filesystem confinement
+# confinement_mode: strict  # Optional: "strict" denies unlisted skills (default: warn and allow)
 confinement:
   mmlu-coordinator:
     paths:

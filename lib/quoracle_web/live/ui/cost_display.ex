@@ -17,24 +17,28 @@ defmodule QuoracleWeb.Live.UI.CostDisplay do
   @impl true
   @spec mount(Socket.t()) :: {:ok, Socket.t()}
   def mount(socket) do
-    {:ok, assign(socket, expanded: false, costs_loaded: false)}
+    {:ok, assign(socket, expanded: false, costs_loaded: false, breakdown_loaded: false)}
   end
 
   @impl true
   @spec update(map(), Socket.t()) :: {:ok, Socket.t()}
   def update(assigns, socket) do
-    # R17-R18: Check if costs_updated_at changed - only force reload when it changes
-    old_timestamp = socket.assigns[:costs_updated_at]
-    new_timestamp = assigns[:costs_updated_at]
-    force_reload = old_timestamp != new_timestamp and new_timestamp != nil
+    old_total = socket.assigns[:total_cost]
 
     socket =
       socket
       |> assign(assigns)
+      |> assign(
+        :precomputed_total_cost?,
+        Map.get(assigns, :precomputed_total_cost?, Map.has_key?(assigns, :total_cost))
+      )
       |> assign_new(:mode, fn -> :badge end)
-      |> then(fn s ->
-        if force_reload, do: assign(s, :costs_loaded, false), else: s
-      end)
+      |> assign_new(:expanded, fn -> false end)
+      |> assign_new(:total_cost, fn -> nil end)
+      |> assign_new(:children_cost, fn -> nil end)
+      |> assign_new(:by_type, fn -> %{} end)
+      |> assign_new(:by_model, fn -> [] end)
+      |> maybe_invalidate_breakdown(old_total)
       |> maybe_load_costs()
 
     {:ok, socket}
@@ -213,37 +217,76 @@ defmodule QuoracleWeb.Live.UI.CostDisplay do
   @impl true
   @spec handle_event(String.t(), map(), Socket.t()) :: {:noreply, Socket.t()}
   def handle_event("toggle_expand", _params, socket) do
-    {:noreply, assign(socket, expanded: not socket.assigns.expanded)}
+    socket = assign(socket, expanded: not socket.assigns.expanded)
+
+    socket =
+      if socket.assigns.expanded do
+        maybe_load_costs(socket)
+      else
+        socket
+      end
+
+    {:noreply, socket}
   end
 
   # ============================================================
   # Private Functions
   # ============================================================
 
-  defp maybe_load_costs(socket) do
-    if socket.assigns[:costs_loaded] do
-      socket
+  defp maybe_invalidate_breakdown(socket, old_total) do
+    new_total = socket.assigns[:total_cost]
+
+    if old_total != new_total do
+      assign(socket, breakdown_loaded: false)
     else
-      load_costs(socket)
+      socket
     end
   end
 
-  defp load_costs(socket) do
+  defp maybe_load_costs(socket) do
+    socket
+    |> maybe_load_base_costs()
+    |> maybe_load_breakdown()
+  end
+
+  defp maybe_load_base_costs(socket) do
+    if socket.assigns[:costs_loaded] do
+      socket
+    else
+      load_base_costs(socket)
+    end
+  end
+
+  defp maybe_load_breakdown(%{assigns: %{expanded: false}} = socket), do: socket
+  defp maybe_load_breakdown(%{assigns: %{breakdown_loaded: true}} = socket), do: socket
+  defp maybe_load_breakdown(socket), do: load_breakdown(socket)
+
+  defp load_base_costs(socket) do
     case socket.assigns[:mode] do
       :badge ->
         load_badge_costs(socket)
 
       :summary ->
-        load_summary_costs(socket)
+        load_summary_base_costs(socket)
 
       :detail ->
-        load_detail_costs(socket)
+        load_detail_base_costs(socket)
 
       :request ->
-        # Request mode uses passed-in cost, no loading needed
-        socket
-        |> assign(:costs_loaded, true)
+        assign(socket, :costs_loaded, true)
     end
+  end
+
+  defp load_breakdown(socket) do
+    case socket.assigns[:mode] do
+      :summary -> load_summary_breakdown(socket)
+      :detail -> load_detail_breakdown(socket)
+      _ -> socket
+    end
+  end
+
+  defp load_badge_costs(%{assigns: %{precomputed_total_cost?: true}} = socket) do
+    assign(socket, :costs_loaded, true)
   end
 
   defp load_badge_costs(socket) do
@@ -265,7 +308,35 @@ defmodule QuoracleWeb.Live.UI.CostDisplay do
     end
   end
 
-  defp load_summary_costs(socket) do
+  defp load_summary_base_costs(%{assigns: %{precomputed_total_cost?: true}} = socket) do
+    socket
+    |> assign(:children_cost, nil)
+    |> assign(:by_type, %{})
+    |> assign(:costs_loaded, true)
+  end
+
+  defp load_summary_base_costs(%{assigns: %{agent_id: agent_id}} = socket)
+       when not is_nil(agent_id) do
+    own = Aggregator.by_agent(agent_id)
+    children = Aggregator.by_agent_children(agent_id)
+
+    socket
+    |> assign(:total_cost, own.total_cost)
+    |> assign(:children_cost, children.total_cost)
+    |> assign(:by_type, own.by_type)
+    |> assign(:costs_loaded, true)
+  end
+
+  defp load_summary_base_costs(socket) do
+    socket
+    |> assign(:total_cost, nil)
+    |> assign(:children_cost, nil)
+    |> assign(:by_type, %{})
+    |> assign(:costs_loaded, true)
+    |> assign(:breakdown_loaded, true)
+  end
+
+  defp load_summary_breakdown(socket) do
     agent_id = socket.assigns[:agent_id]
 
     if agent_id do
@@ -273,41 +344,90 @@ defmodule QuoracleWeb.Live.UI.CostDisplay do
       children = Aggregator.by_agent_children(agent_id)
 
       socket
-      |> assign(:total_cost, own.total_cost)
+      |> maybe_assign_total_cost(own.total_cost)
       |> assign(:children_cost, children.total_cost)
-      |> assign(:by_type, own.by_type)
-      |> assign(:costs_loaded, true)
+      |> assign(:by_type, merge_cost_types(own.by_type, children.by_type))
+      |> assign(:breakdown_loaded, true)
     else
-      assign(socket, total_cost: nil, children_cost: nil, by_type: %{}, costs_loaded: true)
+      socket
+      |> assign(:children_cost, nil)
+      |> assign(:by_type, %{})
+      |> assign(:breakdown_loaded, true)
     end
   end
 
-  defp load_detail_costs(socket) do
+  defp load_detail_base_costs(%{assigns: %{precomputed_total_cost?: true}} = socket) do
+    socket
+    |> assign(:by_model, [])
+    |> assign(:costs_loaded, true)
+  end
+
+  defp load_detail_base_costs(%{assigns: %{agent_id: agent_id}} = socket)
+       when not is_nil(agent_id) do
+    %{total_cost: total} = Aggregator.by_agent(agent_id)
+    assign(socket, total_cost: total, costs_loaded: true)
+  end
+
+  defp load_detail_base_costs(%{assigns: %{task_id: task_id}} = socket)
+       when not is_nil(task_id) do
+    if valid_uuid?(task_id) do
+      %{total_cost: total} = Aggregator.by_task(task_id)
+      assign(socket, total_cost: total, costs_loaded: true)
+    else
+      assign(socket, total_cost: nil, by_model: [], costs_loaded: true, breakdown_loaded: true)
+    end
+  end
+
+  defp load_detail_base_costs(socket) do
+    assign(socket, total_cost: nil, by_model: [], costs_loaded: true, breakdown_loaded: true)
+  end
+
+  defp load_detail_breakdown(socket) do
     case socket.assigns do
       %{agent_id: agent_id} when not is_nil(agent_id) ->
         by_model = Aggregator.by_agent_and_model_detailed(agent_id)
         %{total_cost: total} = Aggregator.by_agent(agent_id)
-        assign_detail_costs(socket, by_model, total)
+
+        socket
+        |> maybe_assign_total_cost(total)
+        |> assign(:by_model, by_model)
+        |> assign(:breakdown_loaded, true)
 
       %{task_id: task_id} when not is_nil(task_id) ->
         if valid_uuid?(task_id) do
           by_model = Aggregator.by_task_and_model_detailed(task_id)
           %{total_cost: total} = Aggregator.by_task(task_id)
-          assign_detail_costs(socket, by_model, total)
+
+          socket
+          |> maybe_assign_total_cost(total)
+          |> assign(:by_model, by_model)
+          |> assign(:breakdown_loaded, true)
         else
-          assign(socket, total_cost: nil, by_model: [], costs_loaded: true)
+          socket
+          |> assign(:by_model, [])
+          |> assign(:breakdown_loaded, true)
         end
 
       _ ->
-        assign(socket, total_cost: nil, by_model: [], costs_loaded: true)
+        socket
+        |> assign(:by_model, [])
+        |> assign(:breakdown_loaded, true)
     end
   end
 
-  defp assign_detail_costs(socket, by_model, total) do
-    socket
-    |> assign(:total_cost, total)
-    |> assign(:by_model, by_model)
-    |> assign(:costs_loaded, true)
+  defp maybe_assign_total_cost(
+         %{assigns: %{precomputed_total_cost?: true, total_cost: total_cost}} = socket,
+         _total
+       )
+       when not is_nil(total_cost),
+       do: socket
+
+  defp maybe_assign_total_cost(socket, total), do: assign(socket, :total_cost, total)
+
+  defp merge_cost_types(own_by_type, children_by_type) do
+    Map.merge(own_by_type, children_by_type, fn _type, own_cost, child_cost ->
+      Decimal.add(own_cost || Decimal.new(0), child_cost || Decimal.new(0))
+    end)
   end
 
   # ============================================================

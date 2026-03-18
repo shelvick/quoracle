@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Q ring: deep indigo -->
+    <linearGradient id="q-ring" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4F46E5"/>
+      <stop offset="100%" stop-color="#3730A3"/>
+    </linearGradient>
+
+    <!-- Quorum circle gradients -->
+    <radialGradient id="c-indigo" cx="50%" cy="35%" r="60%">
+      <stop offset="0%" stop-color="#A5B4FC"/>
+      <stop offset="100%" stop-color="#6366F1"/>
+    </radialGradient>
+    <radialGradient id="c-cyan" cx="55%" cy="35%" r="60%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#06B6D4"/>
+    </radialGradient>
+    <radialGradient id="c-violet" cx="45%" cy="35%" r="60%">
+      <stop offset="0%" stop-color="#C4B5FD"/>
+      <stop offset="100%" stop-color="#7C3AED"/>
+    </radialGradient>
+
+    <!-- Oracle center glow -->
+    <radialGradient id="oracle" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FEF3C7"/>
+      <stop offset="40%" stop-color="#FDE68A"/>
+      <stop offset="80%" stop-color="#FBBF24"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </radialGradient>
+  </defs>
+
+  <!--
+    QUORUM: Three overlapping circles inside the Q.
+    Each circle = one model's perspective in multi-LLM consensus.
+    Drawn first so the Q ring frames them on top.
+  -->
+  <circle cx="232" cy="180" r="85" fill="url(#c-indigo)" opacity="0.55"/>
+  <circle cx="187" cy="258" r="85" fill="url(#c-cyan)" opacity="0.55"/>
+  <circle cx="277" cy="258" r="85" fill="url(#c-violet)" opacity="0.55"/>
+
+  <!--
+    THE Q: Outer ring frames the quorum within.
+    Drawn on top of circles for clean containment.
+  -->
+  <circle cx="232" cy="232" r="165"
+          fill="none" stroke="url(#q-ring)" stroke-width="28"/>
+
+  <!--
+    Q-TAIL: The oracle's answer emerges.
+    Curves from inside the ring downward-right, matching the ring color.
+  -->
+  <path d="M 300 322 C 338 385, 388 430, 428 420"
+        fill="none" stroke="url(#q-ring)" stroke-width="28"
+        stroke-linecap="round"/>
+
+  <!--
+    THE ORACLE: Central convergence — consensus crystallizes
+    where all three perspectives meet.
+  -->
+  <circle cx="232" cy="232" r="28" fill="url(#oracle)" opacity="0.9"/>
+  <circle cx="232" cy="232" r="12" fill="#FEF3C7"/>
+</svg>

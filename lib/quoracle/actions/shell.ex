@@ -100,10 +100,16 @@ defmodule Quoracle.Actions.Shell do
     parent_config = Keyword.get(opts, :parent_config, %{})
     hard_rules = parent_config_value(parent_config, :grove_hard_rules)
     confinement = parent_config_value(parent_config, :grove_confinement)
+    confinement_mode = parent_config_value(parent_config, :grove_confinement_mode)
     skill_name = parent_config_value(parent_config, :skill_name)
 
     with :ok <- HardRuleEnforcer.check_shell_command(command, hard_rules, skill_name) do
-      HardRuleEnforcer.check_shell_working_dir(working_dir, confinement, skill_name)
+      HardRuleEnforcer.check_shell_working_dir(
+        working_dir,
+        confinement,
+        skill_name,
+        confinement_mode
+      )
     end
   end
 

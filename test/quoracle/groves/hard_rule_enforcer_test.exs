@@ -1,8 +1,8 @@
 defmodule Quoracle.Groves.HardRuleEnforcerTest do
   @moduledoc """
-  Unit tests for GROVE_HardRuleEnforcer packet 1.
+  Unit tests for GROVE_HardRuleEnforcer packets 1-2.
 
-  ARC Criteria: R1-R21 from TEST_GroveHardRuleEnforcer (packet 1)
+  ARC Criteria: R1-R37 from TEST_GroveHardRuleEnforcer
   """
   use ExUnit.Case, async: true
 
@@ -317,6 +317,151 @@ defmodule Quoracle.Groves.HardRuleEnforcerTest do
       assert is_list(details.allowed_paths)
       assert details.allowed_paths != []
       assert details.message =~ "venture-management"
+    end
+  end
+
+  describe "strict confinement mode" do
+    @tag :r32
+    test "R32: strict mode denies unlisted skill for file access" do
+      confinement = %{
+        "venture-management" => %{
+          "paths" => ["/home/user/ventures/**"],
+          "read_only_paths" => ["/home/user/shared/**"]
+        }
+      }
+
+      assert {:error, {:confinement_violation, details}} =
+               HardRuleEnforcer.check_file_access(
+                 "/home/user/ventures/project/file.txt",
+                 :read,
+                 confinement,
+                 "unlisted-skill",
+                 "strict"
+               )
+
+      assert details.path == "/home/user/ventures/project/file.txt"
+      assert details.skill == "unlisted-skill"
+      assert details.access_type == :read
+      assert details.allowed_paths == []
+      assert details.message =~ "Strict confinement mode"
+      assert details.message =~ "no confinement entry for skill"
+      assert details.message =~ "unlisted-skill"
+      assert details.message =~ "GROVE.md"
+    end
+
+    @tag :r33
+    test "R33: strict mode denies unlisted skill for working dir" do
+      confinement = %{
+        "venture-management" => %{
+          "paths" => ["/home/user/ventures/**"]
+        }
+      }
+
+      assert {:error, {:confinement_violation, details}} =
+               HardRuleEnforcer.check_shell_working_dir(
+                 "/home/user/ventures/project",
+                 confinement,
+                 "unlisted-skill",
+                 "strict"
+               )
+
+      assert details.working_dir == "/home/user/ventures/project"
+      assert details.skill == "unlisted-skill"
+      assert details.allowed_paths == []
+      assert details.message =~ "Strict confinement mode"
+      assert details.message =~ "no confinement entry for skill"
+      assert details.message =~ "unlisted-skill"
+      assert details.message =~ "GROVE.md"
+    end
+
+    @tag :r34
+    test "R34: permissive mode warns and allows unlisted skill for file access" do
+      confinement = %{
+        "venture-management" => %{
+          "paths" => ["/home/user/ventures/**"]
+        }
+      }
+
+      log =
+        capture_log(fn ->
+          assert :ok =
+                   HardRuleEnforcer.check_file_access(
+                     "/etc/passwd",
+                     :read,
+                     confinement,
+                     "unlisted-skill",
+                     nil
+                   )
+        end)
+
+      assert log =~ "No confinement entry"
+      assert log =~ "unlisted-skill"
+    end
+
+    @tag :r35
+    test "R35: permissive mode warns and allows unlisted skill for working dir" do
+      confinement = %{
+        "venture-management" => %{
+          "paths" => ["/home/user/ventures/**"]
+        }
+      }
+
+      log =
+        capture_log(fn ->
+          assert :ok =
+                   HardRuleEnforcer.check_shell_working_dir(
+                     "/tmp/work",
+                     confinement,
+                     "unlisted-skill",
+                     nil
+                   )
+        end)
+
+      assert log =~ "No confinement entry"
+      assert log =~ "unlisted-skill"
+    end
+
+    @tag :r36
+    test "R36: strict mode with nil confinement allows access" do
+      assert :ok =
+               HardRuleEnforcer.check_file_access(
+                 "/etc/passwd",
+                 :read,
+                 nil,
+                 "any-skill",
+                 "strict"
+               )
+    end
+
+    @tag :r37
+    test "R37: strict mode with listed skill applies normal path matching" do
+      confinement = %{
+        "venture-management" => %{
+          "paths" => ["/home/user/ventures/**"],
+          "read_only_paths" => ["/home/user/shared/**"]
+        }
+      }
+
+      assert :ok =
+               HardRuleEnforcer.check_file_access(
+                 "/home/user/ventures/project/file.txt",
+                 :write,
+                 confinement,
+                 "venture-management",
+                 "strict"
+               )
+
+      assert {:error, {:confinement_violation, details}} =
+               HardRuleEnforcer.check_file_access(
+                 "/etc/passwd",
+                 :read,
+                 confinement,
+                 "venture-management",
+                 "strict"
+               )
+
+      refute details.message =~ "Strict confinement mode"
+      assert details.skill == "venture-management"
     end
   end
 

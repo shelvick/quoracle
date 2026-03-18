@@ -62,6 +62,15 @@ defmodule Quoracle.Agent.ConsensusHandler.LogHelper do
     end
   end
 
+  # Grove policy denials are expected control-flow, not runtime failures.
+  def log_action_error({:confinement_violation, details}) do
+    Logger.info("Action blocked by grove confinement: #{inspect(details)}")
+  end
+
+  def log_action_error({:hard_rule_violation, details}) do
+    Logger.info("Action blocked by grove hard rule: #{inspect(details)}")
+  end
+
   def log_action_error(reason) do
     Logger.error("Action execution failed: #{inspect(reason)}")
   end

@@ -41,6 +41,7 @@ defmodule Quoracle.Groves.Loader do
           topology: map(),
           governance: map() | nil,
           confinement: map() | nil,
+          confinement_mode: String.t() | nil,
           schemas: [map()] | nil,
           workspace: String.t() | nil,
           skills_path: String.t() | nil
@@ -277,6 +278,7 @@ defmodule Quoracle.Groves.Loader do
       topology: topology_raw,
       governance: governance,
       confinement: confinement,
+      confinement_mode: get_confinement_mode(frontmatter),
       schemas: Sanitizer.sanitize_schema_definitions(schemas_raw, &get_safe_file_ref/2),
       workspace: Sanitizer.parse_workspace(workspace_raw),
       skills_path: skills_path
@@ -339,6 +341,14 @@ defmodule Quoracle.Groves.Loader do
     case Map.get(map, key) do
       nil -> nil
       list when is_list(list) -> list
+      _ -> nil
+    end
+  end
+
+  defp get_confinement_mode(frontmatter) do
+    case Map.get(frontmatter, "confinement_mode") do
+      "strict" -> "strict"
+      value when is_atom(value) and value == :strict -> "strict"
       _ -> nil
     end
   end

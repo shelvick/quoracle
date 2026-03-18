@@ -133,6 +133,48 @@ defmodule Quoracle.Groves.HardEnforcementIntegrationTest do
 
       refute match?({:error, {:confinement_violation, _}}, result)
     end
+
+    @tag :capture_log
+    @tag :acceptance
+    test "strict confinement blocks unlisted skill shell through user message flow", ctx do
+      strict_confinement = %{
+        "different-skill" => %{
+          "paths" => [Path.join(ctx.fixture.allowed_dir, "**")],
+          "read_only_paths" => []
+        }
+      }
+
+      {:ok, {_task, root_pid}} =
+        create_task_from_grove(ctx,
+          confinement: strict_confinement,
+          confinement_mode: "strict",
+          model_pool: ["mock:strict-shell"],
+          test_mode: false,
+          test_opts: [
+            model_query_fn:
+              mock_query_fn_for_action(
+                action_response("execute_shell", %{
+                  "command" => "pwd",
+                  "working_dir" => ctx.fixture.outside_dir
+                })
+              )
+          ]
+        )
+
+      on_exit(fn -> stop_agent_tree(root_pid, ctx.deps.registry) end)
+
+      event =
+        send_user_message_and_wait_for_action(
+          root_pid,
+          ctx.deps.pubsub,
+          "Attempt strict shell from unlisted skill"
+        )
+
+      assert {:action_error, %{error: {:error, {:confinement_violation, details}}}} = event
+      assert details.working_dir == ctx.fixture.outside_dir
+      assert details.skill == "agentic-coding"
+      refute match?({:action_completed, _}, event)
+    end
   end
 
   describe "filesystem confinement - file_write (end-to-end)" do
@@ -208,6 +250,97 @@ defmodule Quoracle.Groves.HardEnforcementIntegrationTest do
       refute File.exists?(read_only_path)
       refute match?({:ok, %{action: "file_write"}}, result)
     end
+
+    @tag :capture_log
+    @tag :acceptance
+    test "strict confinement blocks unlisted skill file_write", ctx do
+      strict_confinement = %{
+        "different-skill" => %{
+          "paths" => [Path.join(ctx.fixture.allowed_dir, "**")],
+          "read_only_paths" => []
+        }
+      }
+
+      blocked_path = Path.join(ctx.fixture.allowed_dir, "strict-blocked-write.txt")
+
+      {:ok, {_task, root_pid}} =
+        create_task_from_grove(ctx,
+          confinement: strict_confinement,
+          confinement_mode: "strict",
+          model_pool: ["mock:strict-file-write"],
+          test_mode: false,
+          test_opts: [
+            model_query_fn:
+              mock_query_fn_for_action(
+                action_response("file_write", %{
+                  "path" => blocked_path,
+                  "mode" => "write",
+                  "content" => "blocked"
+                })
+              )
+          ]
+        )
+
+      on_exit(fn -> stop_agent_tree(root_pid, ctx.deps.registry) end)
+
+      assert {:action_error, %{error: {:error, {:confinement_violation, details}}}} =
+               send_user_message_and_wait_for_action(
+                 root_pid,
+                 ctx.deps.pubsub,
+                 "Attempt strict file write from unlisted skill"
+               )
+
+      assert details.path == blocked_path
+      assert details.access_type == :write
+      assert details.skill == "agentic-coding"
+      refute File.exists?(blocked_path)
+    end
+
+    @tag :acceptance
+    test "strict confinement allows listed skill file_write within paths", ctx do
+      strict_confinement = %{
+        "agentic-coding" => %{
+          "paths" => [Path.join(ctx.fixture.allowed_dir, "**")],
+          "read_only_paths" => []
+        }
+      }
+
+      allowed_path = Path.join(ctx.fixture.allowed_dir, "strict-allowed-write.txt")
+
+      {:ok, {_task, root_pid}} =
+        create_task_from_grove(ctx,
+          confinement: strict_confinement,
+          confinement_mode: "strict",
+          model_pool: ["mock:strict-file-write-allowed"],
+          test_mode: false,
+          test_opts: [
+            model_query_fn:
+              mock_query_fn_for_action(
+                action_response("file_write", %{
+                  "path" => allowed_path,
+                  "mode" => "write",
+                  "content" => "strict allowed"
+                })
+              )
+          ]
+        )
+
+      on_exit(fn -> stop_agent_tree(root_pid, ctx.deps.registry) end)
+
+      event =
+        send_user_message_and_wait_for_action(
+          root_pid,
+          ctx.deps.pubsub,
+          "Write within strict confinement for listed skill"
+        )
+
+      assert {:action_completed,
+              %{result: {:ok, %{action: "file_write", path: ^allowed_path, created: true}}}} =
+               event
+
+      assert File.read!(allowed_path) == "strict allowed"
+      refute match?({:action_error, _}, event)
+    end
   end
 
   describe "filesystem confinement - file_read (end-to-end)" do
@@ -279,6 +412,245 @@ defmodule Quoracle.Groves.HardEnforcementIntegrationTest do
       assert {:ok, %{action: "file_read", path: ^read_only_path, content: content}} = result
       assert content =~ "1\treadonly read"
       refute match?({:error, {:confinement_violation, _}}, result)
+    end
+
+    @tag :capture_log
+    @tag :acceptance
+    test "strict confinement blocks unlisted skill file_read through user message flow", ctx do
+      strict_confinement = %{
+        "different-skill" => %{
+          "paths" => [Path.join(ctx.fixture.allowed_dir, "**")],
+          "read_only_paths" => []
+        }
+      }
+
+      blocked_path = Path.join(ctx.fixture.allowed_dir, "strict-blocked-read.txt")
+
+      blocked_file =
+        Path.join(System.tmp_dir!(), Path.relative_to(blocked_path, System.tmp_dir!()))
+
+      File.write!(blocked_file, "strict blocked read")
+
+      {:ok, {_task, root_pid}} =
+        create_task_from_grove(ctx,
+          confinement: strict_confinement,
+          confinement_mode: "strict",
+          model_pool: ["mock:strict-file-read"],
+          test_mode: false,
+          test_opts: [
+            model_query_fn:
+              mock_query_fn_for_action(
+                action_response("file_read", %{
+                  "path" => blocked_path
+                })
+              )
+          ]
+        )
+
+      on_exit(fn -> stop_agent_tree(root_pid, ctx.deps.registry) end)
+
+      event =
+        send_user_message_and_wait_for_action(
+          root_pid,
+          ctx.deps.pubsub,
+          "Attempt strict file read from unlisted skill"
+        )
+
+      assert {:action_error, %{error: {:error, {:confinement_violation, details}}}} = event
+      assert details.path == blocked_path
+      assert details.access_type == :read
+      assert details.skill == "agentic-coding"
+      refute match?({:action_completed, _}, event)
+    end
+  end
+
+  describe "template var confinement (end-to-end)" do
+    @tag :capture_log
+    @tag :integration
+    @tag :acceptance
+    test "child with resolved grove_vars enforces confinement", ctx do
+      template_base_name = Path.relative_to(ctx.fixture.base_dir, System.tmp_dir!())
+
+      template_root =
+        Path.join(System.tmp_dir!(), Path.join([template_base_name, "template-workspaces"]))
+
+      child_workspace = "child-a"
+
+      child_dir =
+        Path.join(
+          System.tmp_dir!(),
+          Path.join([template_base_name, "template-workspaces", child_workspace])
+        )
+
+      sibling_dir =
+        Path.join(
+          System.tmp_dir!(),
+          Path.join([template_base_name, "template-workspaces", "child-b"])
+        )
+
+      root_message = "Spawn template child for #{child_workspace}"
+      child_message = "Write inside your resolved workspace"
+      allowed_path = Path.join(child_dir, "allowed.txt")
+
+      File.mkdir_p!(child_dir)
+      File.mkdir_p!(sibling_dir)
+
+      template_confinement = %{
+        "agentic-coding" => %{
+          "paths" => [Path.join([template_root, "{child_workspace}", "**"])],
+          "read_only_paths" => []
+        }
+      }
+
+      {:ok, {_task, root_pid}} =
+        create_task_from_grove(ctx,
+          confinement: template_confinement,
+          confinement_mode: "strict",
+          model_pool: ["mock:template-child-allowed"],
+          test_mode: false,
+          skip_initial_consultation: true,
+          spawn_complete_notify: self(),
+          test_opts: [
+            model_query_fn:
+              template_spawn_query_fn(
+                root_message,
+                child_message,
+                ctx.profile.name,
+                child_workspace,
+                action_response("file_write", %{
+                  "path" => allowed_path,
+                  "mode" => "write",
+                  "content" => "template allowed"
+                })
+              )
+          ]
+        )
+
+      on_exit(fn -> stop_agent_tree(root_pid, ctx.deps.registry) end)
+
+      assert {:ok, root_state} = Core.get_state(root_pid)
+
+      {child_pid, child_id} =
+        send_user_message_and_wait_for_child_spawn(
+          root_pid,
+          root_state.agent_id,
+          ctx.deps.pubsub,
+          root_message
+        )
+
+      on_exit(fn -> stop_agent_tree(child_pid, ctx.deps.registry) end)
+
+      event =
+        send_user_message_and_wait_for_agent_action(
+          child_pid,
+          child_id,
+          ctx.deps.pubsub,
+          child_message,
+          "file_write"
+        )
+
+      assert {:action_completed,
+              %{
+                agent_id: ^child_id,
+                result: {:ok, %{action: "file_write", path: ^allowed_path, created: true}}
+              }} =
+               event
+
+      assert File.read!(allowed_path) == "template allowed"
+      refute match?({:action_error, _}, event)
+    end
+
+    @tag :capture_log
+    @tag :integration
+    @tag :acceptance
+    test "child with resolved grove_vars blocked on sibling path", ctx do
+      template_base_name = Path.relative_to(ctx.fixture.base_dir, System.tmp_dir!())
+
+      template_root =
+        Path.join(System.tmp_dir!(), Path.join([template_base_name, "template-workspaces"]))
+
+      child_workspace = "child-a"
+
+      child_dir =
+        Path.join(
+          System.tmp_dir!(),
+          Path.join([template_base_name, "template-workspaces", child_workspace])
+        )
+
+      sibling_dir =
+        Path.join(
+          System.tmp_dir!(),
+          Path.join([template_base_name, "template-workspaces", "child-b"])
+        )
+
+      root_message = "Spawn template child for #{child_workspace}"
+      child_message = "Write outside your resolved workspace"
+      blocked_path = Path.join(sibling_dir, "blocked.txt")
+
+      File.mkdir_p!(child_dir)
+      File.mkdir_p!(sibling_dir)
+
+      template_confinement = %{
+        "agentic-coding" => %{
+          "paths" => [Path.join([template_root, "{child_workspace}", "**"])],
+          "read_only_paths" => []
+        }
+      }
+
+      {:ok, {_task, root_pid}} =
+        create_task_from_grove(ctx,
+          confinement: template_confinement,
+          confinement_mode: "strict",
+          model_pool: ["mock:template-child-blocked"],
+          test_mode: false,
+          skip_initial_consultation: true,
+          spawn_complete_notify: self(),
+          test_opts: [
+            model_query_fn:
+              template_spawn_query_fn(
+                root_message,
+                child_message,
+                ctx.profile.name,
+                child_workspace,
+                action_response("file_write", %{
+                  "path" => blocked_path,
+                  "mode" => "write",
+                  "content" => "template blocked"
+                })
+              )
+          ]
+        )
+
+      on_exit(fn -> stop_agent_tree(root_pid, ctx.deps.registry) end)
+
+      assert {:ok, root_state} = Core.get_state(root_pid)
+
+      {child_pid, child_id} =
+        send_user_message_and_wait_for_child_spawn(
+          root_pid,
+          root_state.agent_id,
+          ctx.deps.pubsub,
+          root_message
+        )
+
+      on_exit(fn -> stop_agent_tree(child_pid, ctx.deps.registry) end)
+
+      event =
+        send_user_message_and_wait_for_agent_action(
+          child_pid,
+          child_id,
+          ctx.deps.pubsub,
+          child_message,
+          "file_write"
+        )
+
+      assert {:action_error,
+              %{agent_id: ^child_id, error: {:error, {:confinement_violation, details}}}} = event
+
+      assert details.path == blocked_path
+      assert details.access_type == :write
+      refute File.exists?(blocked_path)
+      refute match?({:action_completed, _}, event)
     end
   end
 
@@ -429,6 +801,7 @@ defmodule Quoracle.Groves.HardEnforcementIntegrationTest do
       refute captured_prompt =~ "BLOCKED ACTION: totally_unknown_action"
     end
 
+    @tag :capture_log
     @tag :acceptance
     @tag :r17
     test "R17: child agent inherits action blocking from parent grove", ctx do
@@ -485,6 +858,7 @@ defmodule Quoracle.Groves.HardEnforcementIntegrationTest do
   end
 
   describe "confinement inheritance" do
+    @tag :capture_log
     @tag :acceptance
     test "child agent inherits confinement from parent", ctx do
       {:ok, {_task, root_pid}} = create_task_from_grove(ctx)
@@ -502,7 +876,8 @@ defmodule Quoracle.Groves.HardEnforcementIntegrationTest do
           "immediate_context" => "integration",
           "approach_guidance" => "follow parent",
           "skills" => ["agentic-coding"],
-          "profile" => ctx.profile.name
+          "profile" => ctx.profile.name,
+          "grove_vars" => %{"child_workspace" => "inheritance-check"}
         }
       }
 
@@ -558,12 +933,20 @@ defmodule Quoracle.Groves.HardEnforcementIntegrationTest do
       pubsub: ctx.deps.pubsub,
       grove_skills_path: ctx.grove.skills_path,
       grove_hard_rules: Keyword.get(opts, :hard_rules, ctx.hard_rules),
-      grove_confinement: Keyword.get(opts, :confinement, ctx.confinement)
+      grove_confinement: Keyword.get(opts, :confinement, ctx.confinement),
+      grove_topology: Keyword.get(opts, :grove_topology, ctx.grove.topology),
+      grove_path: Keyword.get(opts, :grove_path, ctx.grove.path)
     ]
 
     create_opts =
       maybe_put(create_opts, :test_opts, Keyword.get(opts, :test_opts))
       |> maybe_put(:governance_rules, Keyword.get(opts, :governance_rules))
+      |> maybe_put(:grove_confinement_mode, Keyword.get(opts, :confinement_mode))
+      |> maybe_put(:model_pool, Keyword.get(opts, :model_pool))
+      |> maybe_put(:test_mode, Keyword.get(opts, :test_mode))
+      |> maybe_put(:skip_auto_consensus, Keyword.get(opts, :skip_auto_consensus))
+      |> maybe_put(:skip_initial_consultation, Keyword.get(opts, :skip_initial_consultation))
+      |> maybe_put(:spawn_complete_notify, Keyword.get(opts, :spawn_complete_notify))
 
     TaskManager.create_task(task_fields, agent_fields, create_opts)
   end
@@ -586,6 +969,147 @@ defmodule Quoracle.Groves.HardEnforcementIntegrationTest do
     action_id = "hard-enforce-#{System.unique_integer([:positive])}"
 
     GenServer.call(agent_pid, {:process_action, action_map, action_id}, 30_000)
+  end
+
+  defp send_user_message_and_wait_for_action(agent_pid, pubsub, content) do
+    :ok = Phoenix.PubSub.subscribe(pubsub, "actions:all")
+    :ok = Core.send_user_message(agent_pid, content)
+
+    receive do
+      {:action_completed, event} -> {:action_completed, event}
+      {:action_error, event} -> {:action_error, event}
+    after
+      30_000 -> flunk("Timed out waiting for action event")
+    end
+  end
+
+  defp send_user_message_and_wait_for_child_spawn(root_pid, root_agent_id, pubsub, content) do
+    :ok = Phoenix.PubSub.subscribe(pubsub, "actions:all")
+    :ok = Core.send_user_message(root_pid, content)
+
+    wait_for_child_spawn_or_root_failure(root_agent_id)
+  end
+
+  defp send_user_message_and_wait_for_agent_action(agent_pid, agent_id, pubsub, content, action) do
+    :ok = Phoenix.PubSub.subscribe(pubsub, "actions:all")
+    :ok = Core.send_user_message(agent_pid, content)
+
+    receive_matching_action_event(agent_id, action)
+  end
+
+  defp receive_matching_action_event(agent_id, action) do
+    receive do
+      {:action_completed, %{agent_id: ^agent_id, result: {:ok, %{action: ^action}}} = event} ->
+        {:action_completed, event}
+
+      {:action_error,
+       %{agent_id: ^agent_id, error: {:error, {:confinement_violation, _}}} = event} ->
+        {:action_error, event}
+
+      {:action_completed, _other_event} ->
+        receive_matching_action_event(agent_id, action)
+
+      {:action_error, _other_event} ->
+        receive_matching_action_event(agent_id, action)
+    after
+      30_000 -> flunk("Timed out waiting for matching action event")
+    end
+  end
+
+  defp wait_for_child_spawn_or_root_failure(root_agent_id) do
+    receive do
+      {:spawn_complete, child_id, {:ok, child_pid}} ->
+        {child_pid, child_id}
+
+      {:spawn_complete, child_id, {:error, reason}} ->
+        flunk("Child #{child_id} failed to spawn: #{inspect(reason)}")
+
+      {:action_error, %{agent_id: ^root_agent_id, error: error}} ->
+        flunk("Root agent failed before spawning child: #{inspect(error)}")
+
+      {:action_completed,
+       %{agent_id: ^root_agent_id, result: {:ok, %{action: "spawn", agent_id: _child_id}}}} ->
+        wait_for_child_spawn_or_root_failure(root_agent_id)
+
+      {:action_completed, %{agent_id: ^root_agent_id}} ->
+        # Non-spawn action (e.g. orient) completed first — keep waiting for spawn
+        wait_for_child_spawn_or_root_failure(root_agent_id)
+
+      {:action_completed, _other_event} ->
+        wait_for_child_spawn_or_root_failure(root_agent_id)
+
+      {:action_error, _other_event} ->
+        wait_for_child_spawn_or_root_failure(root_agent_id)
+    after
+      30_000 -> flunk("Timed out waiting for child spawn")
+    end
+  end
+
+  defp mock_query_fn_for_action(first_response_json) do
+    {:ok, counter_pid} = Agent.start_link(fn -> 0 end)
+
+    fn _messages, [model_id], _opts ->
+      call_number = Agent.get_and_update(counter_pid, fn n -> {n + 1, n + 1} end)
+
+      response_json =
+        if call_number == 1, do: first_response_json, else: orient_response()
+
+      {:ok,
+       %{
+         successful_responses: [%{model: model_id, content: response_json}],
+         failed_models: []
+       }}
+    end
+  end
+
+  defp template_spawn_query_fn(
+         root_message,
+         child_message,
+         profile_name,
+         child_workspace,
+         child_action_json
+       ) do
+    {:ok, counter_pid} = Agent.start_link(fn -> 0 end)
+
+    fn messages, [model_id], _opts ->
+      call_number = Agent.get_and_update(counter_pid, fn n -> {n + 1, n + 1} end)
+      latest_user_message = latest_user_message(messages)
+
+      response_json =
+        cond do
+          call_number == 1 and String.contains?(latest_user_message, root_message) ->
+            action_response("spawn_child", %{
+              "task_description" => "Template confinement child task",
+              "success_criteria" => "inherits resolved confinement",
+              "immediate_context" => "template variable integration",
+              "approach_guidance" => "operate within resolved workspace",
+              "skills" => ["agentic-coding"],
+              "profile" => profile_name,
+              "grove_vars" => %{"child_workspace" => child_workspace}
+            })
+
+          String.contains?(latest_user_message, child_message) ->
+            child_action_json
+
+          true ->
+            orient_response()
+        end
+
+      {:ok,
+       %{
+         successful_responses: [%{model: model_id, content: response_json}],
+         failed_models: []
+       }}
+    end
+  end
+
+  defp action_response(action, params) do
+    Jason.encode!(%{
+      "action" => action,
+      "params" => params,
+      "reasoning" => "Strict confinement acceptance coverage",
+      "wait" => true
+    })
   end
 
   defp action_block_hard_rules do
@@ -644,6 +1168,17 @@ defmodule Quoracle.Groves.HardEnforcementIntegrationTest do
       "reasoning" => "Action-block prompt capture response",
       "wait" => true
     })
+  end
+
+  defp latest_user_message(messages) do
+    messages
+    |> Enum.filter(&(&1.role == "user"))
+    |> List.last()
+    |> case do
+      nil -> ""
+      %{content: content} when is_binary(content) -> content
+      _ -> ""
+    end
   end
 
   defp maybe_put(opts, _key, nil), do: opts
@@ -723,6 +1258,12 @@ defmodule Quoracle.Groves.HardEnforcementIntegrationTest do
           message: "Blocked by grove hard rule."
           scope:
             - agentic-coding
+    topology:
+      edges:
+        - parent: agentic-coding
+          child: agentic-coding
+          required_context:
+            - child_workspace
     confinement:
       agentic-coding:
         paths:

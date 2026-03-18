@@ -248,6 +248,26 @@ defmodule Quoracle.Agent.CorePersistenceTest do
       # Use unique agent_id to prevent restoration_mode from previous runs
       agent_id = "conv-agent-#{System.unique_integer([:positive])}"
 
+      # model_query_fn forces real consensus pipeline (not fast-path)
+      # so model_histories get populated for persistence verification
+      mock_query_fn = fn _messages, [model_id], _opts ->
+        response_json =
+          Jason.encode!(%{
+            "action" => "orient",
+            "params" => %{
+              "current_situation" => "Processing task",
+              "goal_clarity" => "Clear objectives",
+              "available_resources" => "Full capabilities",
+              "key_challenges" => "None identified",
+              "delegation_consideration" => "none"
+            },
+            "reasoning" => "Mock reasoning for #{model_id}",
+            "wait" => true
+          })
+
+        {:ok, %{successful_responses: [%{model: model_id, content: response_json}]}}
+      end
+
       config = %{
         agent_id: agent_id,
         task_id: task.id,
@@ -255,6 +275,7 @@ defmodule Quoracle.Agent.CorePersistenceTest do
         models: ["test-model"],
         test_mode: true,
         force_persist: true,
+        test_opts: [model_query_fn: mock_query_fn],
         sandbox_owner: sandbox_owner
       }
 

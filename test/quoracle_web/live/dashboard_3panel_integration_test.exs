@@ -42,6 +42,12 @@ defmodule QuoracleWeb.Dashboard3PanelIntegrationTest do
     }
   end
 
+  defp create_db_only_task(prompt) do
+    %Quoracle.Tasks.Task{}
+    |> Quoracle.Tasks.Task.changeset(%{prompt: prompt, status: "running"})
+    |> Quoracle.Repo.insert!()
+  end
+
   describe "R1: 3-Panel Layout" do
     # R1: [INTEGRATION] test - WHEN dashboard renders THEN displays 3 panels with correct widths
     test "dashboard displays 3-panel layout", %{conn: conn} = context do
@@ -180,9 +186,6 @@ defmodule QuoracleWeb.Dashboard3PanelIntegrationTest do
       assert {:error, :not_found} = TaskManager.get_task(task.id)
     end
 
-    # Note: stop_task handler test removed - stop_task was replaced by pause_task
-    # in async pause implementation. The existing pause_task test at line 111 covers this.
-
     test "Dashboard handles submit_prompt event from TaskTree", %{conn: conn} = context do
       {:ok, view, _html} = mount_dashboard(conn, context)
 
@@ -279,6 +282,90 @@ defmodule QuoracleWeb.Dashboard3PanelIntegrationTest do
   end
 
   describe "R5: No Task Selection State" do
+    @tag :acceptance
+    test "selecting agent with many active agents is responsive", %{conn: conn} = context do
+      tasks = Enum.map(1..35, fn i -> create_db_only_task("Responsive selection task #{i}") end)
+
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{
+          "pubsub" => context.pubsub,
+          "registry" => context.registry,
+          "dynsup" => context.dynsup,
+          "sandbox_owner" => context.sandbox_owner,
+          "log_debounce_ms" => 0
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      target_task = List.last(tasks)
+      target_agent_id = "responsive-agent-35"
+
+      Enum.with_index(tasks, 1)
+      |> Enum.each(fn {task, index} ->
+        agent_id = "responsive-agent-#{index}"
+
+        send(
+          view.pid,
+          {:agent_spawned,
+           %{agent_id: agent_id, task_id: task.id, parent_id: nil, timestamp: DateTime.utc_now()}}
+        )
+
+        send(
+          view.pid,
+          {:log_entry,
+           %{
+             id: index,
+             agent_id: agent_id,
+             level: :info,
+             message: "log for #{agent_id}",
+             timestamp: DateTime.utc_now()
+           }}
+        )
+      end)
+
+      # Two renders: first processes log_entry (buffers + sends :flush_log_updates),
+      # second processes :flush_log_updates (merges buffer into logs map)
+      render(view)
+      render(view)
+
+      view_pid = view.pid
+      :erlang.trace(view_pid, true, [:call])
+      :erlang.trace_pattern({Quoracle.Costs.Aggregator, :batch_totals, 2}, true, [])
+
+      on_exit(fn ->
+        if Process.alive?(view_pid) do
+          :erlang.trace(view_pid, false, [:call])
+        end
+
+        :erlang.trace_pattern({Quoracle.Costs.Aggregator, :batch_totals, 2}, false, [])
+      end)
+
+      view
+      |> element("[phx-click='select_agent'][phx-value-agent-id='#{target_agent_id}']")
+      |> render_click()
+
+      logs_html = view |> element("#logs") |> render()
+
+      refute_receive {:trace, ^view_pid, :call,
+                      {Quoracle.Costs.Aggregator, :batch_totals, [_agent_ids, _task_ids]}},
+                     0
+
+      assert logs_html =~ "log for #{target_agent_id}"
+      refute logs_html =~ "log for responsive-agent-1"
+      assert render(view) =~ target_task.id
+    end
+
     # R5: [UNIT] test - WHEN dashboard mounts THEN no current_task_id in assigns
     test "dashboard has no current_task_id state", %{conn: conn} = context do
       {:ok, view, _html} = mount_dashboard(conn, context)
@@ -314,6 +401,260 @@ defmodule QuoracleWeb.Dashboard3PanelIntegrationTest do
           :exit, _reason -> :ok
         end
       end)
+    end
+  end
+
+  describe "packet 2 acceptance coverage" do
+    @tag :acceptance
+    test "dashboard route shows task-tree costs after cost recording", %{conn: conn} = context do
+      {:ok, {task, agent_pid}} =
+        create_task_with_cleanup("Acceptance cost path", Keyword.new(context))
+
+      {:ok, %{agent_id: agent_id}} = GenServer.call(agent_pid, :get_state)
+
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{
+          "pubsub" => context.pubsub,
+          "registry" => context.registry,
+          "dynsup" => context.dynsup,
+          "sandbox_owner" => context.sandbox_owner,
+          "cost_debounce_ms" => 0
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      {:ok, _cost} =
+        Quoracle.Costs.Recorder.record(
+          %{
+            agent_id: agent_id,
+            task_id: task.id,
+            cost_type: "llm_consensus",
+            cost_usd: Decimal.new("0.33"),
+            metadata: %{"model_spec" => "anthropic:claude-sonnet"}
+          },
+          pubsub: context.pubsub
+        )
+
+      render(view)
+      render(view)
+
+      task_tree_html = view |> element("#task-tree") |> render()
+
+      assert task_tree_html =~ task.id
+      assert task_tree_html =~ "cost-badge-tasktree-#{agent_id}"
+      assert task_tree_html =~ "$0.33"
+      refute task_tree_html =~ "$0.99"
+    end
+
+    test "state_changed does not trigger Mailbox update", %{conn: conn} = context do
+      task = create_db_only_task("State change mailbox isolation")
+      agent_id = "state-agent-#{System.unique_integer([:positive])}"
+      message_id = System.unique_integer([:positive])
+      mailbox_test_pid = self()
+
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{
+          "pubsub" => context.pubsub,
+          "registry" => context.registry,
+          "dynsup" => context.dynsup,
+          "sandbox_owner" => context.sandbox_owner,
+          "mailbox_test_pid" => mailbox_test_pid
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      assert_receive {:mailbox_updated, initial_keys}, 1_000
+      assert :agent_alive_map in initial_keys
+      refute :agents in initial_keys
+
+      send(
+        view.pid,
+        {:agent_spawned,
+         %{agent_id: agent_id, task_id: task.id, parent_id: nil, timestamp: DateTime.utc_now()}}
+      )
+
+      render(view)
+
+      assert_receive {:mailbox_updated, spawned_keys}, 1_000
+      assert :agent_alive_map in spawned_keys
+      refute :agents in spawned_keys
+
+      send(
+        view.pid,
+        {:agent_message,
+         %{
+           id: message_id,
+           from: :agent,
+           sender_id: agent_id,
+           content: "State change mailbox message",
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      render(view)
+
+      assert_receive {:mailbox_updated, message_keys}, 1_000
+      assert :messages in message_keys
+      refute :agents in message_keys
+
+      view
+      |> element("[phx-click='toggle_message'][phx-value-message-id='#{message_id}']")
+      |> render_click()
+
+      mailbox_html_before_state_change = view |> element("#mailbox") |> render()
+
+      assert mailbox_html_before_state_change =~ "Type your reply..."
+      refute mailbox_html_before_state_change =~ "Agent no longer active"
+      refute mailbox_html_before_state_change =~ "disabled"
+
+      flush_mailbox_updates()
+
+      send(view.pid, {:state_changed, %{agent_id: agent_id, new_state: :paused}})
+      render(view)
+
+      refute_receive {:mailbox_updated, _keys}, 200
+
+      mailbox_html_after_state_change = view |> element("#mailbox") |> render()
+      task_tree_html_after_state_change = view |> element("#task-tree") |> render()
+
+      assert mailbox_html_after_state_change =~ "Type your reply..."
+      refute mailbox_html_after_state_change =~ "Agent no longer active"
+      refute mailbox_html_after_state_change =~ "disabled"
+      assert task_tree_html_after_state_change =~ agent_id
+      assert task_tree_html_after_state_change =~ "paused"
+    end
+
+    @tag :acceptance
+    test "dashboard route submits mailbox reply and disables it after termination",
+         %{conn: conn} = context do
+      task = create_db_only_task("Acceptance mailbox path")
+      agent_id = "acceptance-mailbox-agent-#{System.unique_integer([:positive])}"
+      message_id = System.unique_integer([:positive])
+      reply_content = "Acceptance reply content"
+
+      Registry.register(context.registry, {:agent, agent_id}, %{pid: self(), parent_id: nil})
+
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{
+          "pubsub" => context.pubsub,
+          "registry" => context.registry,
+          "dynsup" => context.dynsup,
+          "sandbox_owner" => context.sandbox_owner
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      send(
+        view.pid,
+        {:agent_spawned,
+         %{agent_id: agent_id, task_id: task.id, parent_id: nil, timestamp: DateTime.utc_now()}}
+      )
+
+      render(view)
+
+      send(
+        view.pid,
+        {:agent_message,
+         %{
+           id: message_id,
+           from: :agent,
+           sender_id: agent_id,
+           content: "Acceptance mailbox message",
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      render(view)
+
+      view
+      |> element("[phx-click='toggle_message'][phx-value-message-id='#{message_id}']")
+      |> render_click()
+
+      mailbox_html = view |> element("#mailbox") |> render()
+
+      assert mailbox_html =~ "Acceptance mailbox message"
+      assert mailbox_html =~ "Type your reply..."
+      refute mailbox_html =~ "Agent no longer active"
+      refute mailbox_html =~ "disabled"
+
+      view
+      |> element("#message-#{message_id} textarea[name='content']")
+      |> render_change(%{"content" => reply_content})
+
+      changed_mailbox_html = view |> element("#mailbox") |> render()
+
+      changed_textarea =
+        changed_mailbox_html
+        |> Floki.parse_document!()
+        |> Floki.find("textarea[name='content']")
+        |> Floki.text()
+
+      assert changed_textarea == reply_content
+
+      view
+      |> form("#message-#{message_id} form[phx-submit='send_reply']", %{
+        "content" => reply_content
+      })
+      |> render_submit()
+
+      assert_receive {:"$gen_cast", {:send_user_message, ^reply_content}}, 1_000
+
+      mailbox_html_after_reply = view |> element("#mailbox") |> render()
+
+      cleared_textarea =
+        mailbox_html_after_reply
+        |> Floki.parse_document!()
+        |> Floki.find("textarea[name='content']")
+        |> Floki.text()
+
+      assert cleared_textarea == ""
+      refute mailbox_html_after_reply =~ "Acceptance reply content"
+
+      Phoenix.PubSub.broadcast(
+        context.pubsub,
+        "agents:lifecycle",
+        {:agent_terminated, %{agent_id: agent_id}}
+      )
+
+      render(view)
+      mailbox_html_after_termination = view |> element("#mailbox") |> render()
+
+      assert mailbox_html_after_termination =~ "Acceptance mailbox message"
+      assert mailbox_html_after_termination =~ "Agent no longer active"
+      assert mailbox_html_after_termination =~ "disabled"
     end
   end
 
@@ -399,6 +740,96 @@ defmodule QuoracleWeb.Dashboard3PanelIntegrationTest do
     end
   end
 
+  describe "packet 1 acceptance coverage" do
+    @tag :acceptance
+    test "dashboard route preserves nested task tree interactions", %{conn: conn} = context do
+      tasks = Enum.map(1..2, fn i -> create_db_only_task("Acceptance task tree path #{i}") end)
+
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{
+          "pubsub" => context.pubsub,
+          "registry" => context.registry,
+          "dynsup" => context.dynsup,
+          "sandbox_owner" => context.sandbox_owner
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      [task_one, task_two] = tasks
+
+      send(
+        view.pid,
+        {:agent_spawned,
+         %{
+           agent_id: "root_acceptance",
+           task_id: task_one.id,
+           parent_id: nil,
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      send(
+        view.pid,
+        {:agent_spawned,
+         %{
+           agent_id: "child_acceptance",
+           task_id: task_one.id,
+           parent_id: "root_acceptance",
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      send(
+        view.pid,
+        {:agent_spawned,
+         %{
+           agent_id: "sibling_acceptance",
+           task_id: task_two.id,
+           parent_id: nil,
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      render(view)
+
+      view
+      |> element("[phx-click='toggle_expand'][phx-value-agent-id='root_acceptance']")
+      |> render_click()
+
+      view
+      |> element("[phx-click='select_agent'][phx-value-agent-id='child_acceptance']")
+      |> render_click()
+
+      html = render(view)
+
+      # Acceptance: both tasks visible
+      assert html =~ task_one.id
+      assert html =~ task_two.id
+      # Acceptance: agents visible with correct IDs
+      assert html =~ "root_acceptance"
+      assert html =~ "child_acceptance"
+      assert html =~ "sibling_acceptance"
+      # Acceptance: selecting child_acceptance filtered logs (empty for new agent)
+      assert html =~ "No logs"
+      # Packet 1: agents rendered via AgentNode LiveComponent
+      assert html =~ ~s(id="agent-node-root_acceptance")
+      # Negative: no crashes, no empty state
+      refute html =~ "No active tasks"
+      refute html =~ "FunctionClauseError"
+    end
+  end
+
   # Helper functions
 
   defp mount_dashboard(conn, %{
@@ -415,5 +846,13 @@ defmodule QuoracleWeb.Dashboard3PanelIntegrationTest do
       "sandbox_owner" => owner
     })
     |> live("/")
+  end
+
+  defp flush_mailbox_updates do
+    receive do
+      {:mailbox_updated, _keys} -> flush_mailbox_updates()
+    after
+      0 -> :ok
+    end
   end
 end

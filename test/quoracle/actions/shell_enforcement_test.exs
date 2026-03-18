@@ -205,6 +205,28 @@ defmodule Quoracle.Actions.ShellEnforcementTest do
                  opts
                )
     end
+
+    test "shell with strict confinement blocks unlisted skill", %{opts: opts} do
+      confinement = %{
+        "different-skill" => %{
+          "paths" => ["/tmp/**"],
+          "read_only_paths" => []
+        }
+      }
+
+      opts =
+        Keyword.put(opts, :parent_config, %{
+          grove_confinement: confinement,
+          grove_confinement_mode: "strict",
+          skill_name: "agentic-coding"
+        })
+
+      result = Shell.execute(%{command: "pwd", working_dir: System.tmp_dir!()}, "agent-1", opts)
+
+      assert {:error, {:confinement_violation, details}} = result
+      assert details.working_dir == System.tmp_dir!()
+      assert details.skill == "agentic-coding"
+    end
   end
 
   describe "passthrough without grove config" do

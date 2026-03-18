@@ -109,6 +109,33 @@ defmodule Quoracle.Agent.ConfigManagerTest do
       assert is_nil(normalized.grove_schemas)
       assert is_nil(normalized.grove_workspace)
     end
+
+    test "R-CFG1: preserves grove_confinement_mode from config", %{deps: deps} do
+      config = %{
+        agent_id: "confinement-mode-agent",
+        parent_pid: self(),
+        test_mode: true,
+        model_pool: ["test-model-1"],
+        registry: deps.registry,
+        dynsup: deps.dynsup,
+        pubsub: deps.pubsub,
+        grove_confinement_mode: "strict"
+      }
+
+      normalized = ConfigManager.normalize_config(config)
+
+      assert Map.has_key?(normalized, :grove_confinement_mode)
+      assert normalized.grove_confinement_mode == "strict"
+
+      state =
+        ConfigManager.setup_agent(normalized,
+          pubsub: deps.pubsub,
+          registry: deps.registry,
+          dynsup: deps.dynsup
+        )
+
+      assert Map.get(state, :grove_confinement_mode) == "strict"
+    end
   end
 
   describe "register_agent/1 - atomic registration" do

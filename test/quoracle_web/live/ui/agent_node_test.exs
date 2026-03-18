@@ -43,6 +43,29 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
     live_isolated(conn, QuoracleWeb.LiveComponentTestHelper, session: session)
   end
 
+  defp render_packet1_task_tree(conn, agents, tasks, extra_assigns, sandbox_owner) do
+    live_isolated(conn, QuoracleWeb.LiveComponentTestHelper,
+      session: %{
+        "sandbox_owner" => sandbox_owner,
+        "component" => QuoracleWeb.UI.TaskTree,
+        "assigns" =>
+          Map.merge(
+            %{
+              agents: agents,
+              tasks: tasks,
+              selected_agent_id: nil,
+              agent_alive_map: %{},
+              message_forms: %{},
+              cost_data: %{agents: %{}, tasks: %{}},
+              use_precomputed_costs: true,
+              root_pid: self()
+            },
+            extra_assigns
+          )
+      }
+    )
+  end
+
   defp create_test_agent do
     %{
       agent_id: "test_agent_1",
@@ -52,6 +75,55 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
       children: ["child_1", "child_2"],
       current_action: "orient",
       created_at: ~U[2024-01-01 10:00:00Z]
+    }
+  end
+
+  defp create_packet1_agents do
+    %{
+      "root_1" => %{
+        agent_id: "root_1",
+        task_id: "task_1",
+        status: :working,
+        parent_id: nil,
+        children: ["child_1", "child_2"],
+        todos: [
+          %{content: "Root todo", state: :todo}
+        ],
+        budget_data: %{allocated: Decimal.new("100.00"), committed: Decimal.new("5.00")},
+        spent: Decimal.new("20.00"),
+        over_budget: false
+      },
+      "child_1" => %{
+        agent_id: "child_1",
+        task_id: "task_1",
+        status: :idle,
+        parent_id: "root_1",
+        children: ["grand_1"],
+        todos: [
+          %{content: "Child todo", state: :pending}
+        ]
+      },
+      "child_2" => %{
+        agent_id: "child_2",
+        task_id: "task_1",
+        status: :completed,
+        parent_id: "root_1",
+        children: []
+      },
+      "grand_1" => %{
+        agent_id: "grand_1",
+        task_id: "task_1",
+        status: :working,
+        parent_id: "child_1",
+        children: ["great_1"]
+      },
+      "great_1" => %{
+        agent_id: "great_1",
+        task_id: "task_1",
+        status: :idle,
+        parent_id: "grand_1",
+        children: []
+      }
     }
   end
 
@@ -846,68 +918,14 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
       html = render(view2)
       assert html =~ "$0.15"
     end
-
-    test "expanded agent shows cost summary with type breakdown", %{
-      conn: conn,
-      task: task,
-      agent_record: agent_record,
-      sandbox_owner: sandbox_owner
-    } do
-      # Record multiple cost types
-      {:ok, _} =
-        Repo.insert(%AgentCost{
-          agent_id: agent_record.agent_id,
-          task_id: task.id,
-          cost_type: "llm_consensus",
-          cost_usd: Decimal.new("0.10"),
-          metadata: %{}
-        })
-
-      {:ok, _} =
-        Repo.insert(%AgentCost{
-          agent_id: agent_record.agent_id,
-          task_id: task.id,
-          cost_type: "llm_embedding",
-          cost_usd: Decimal.new("0.02"),
-          metadata: %{}
-        })
-
-      agent = %{
-        agent_id: agent_record.agent_id,
-        task_id: agent_record.task_id,
-        status: :working,
-        parent_id: nil,
-        children: []
-      }
-
-      # Render in expanded mode (AgentNode expanded, but CostDisplay summary starts collapsed)
-      {:ok, view, _html} =
-        render_isolated(conn, agent, 0, true, false, false, false, sandbox_owner)
-
-      html = render(view)
-
-      # Verify CostDisplay summary is present with total cost
-      assert html =~ "$0.12"
-
-      # Click to expand the CostDisplay summary to see type breakdown
-      # CostDisplay internal expanded state starts false, type breakdown only visible after click
-      # The phx-click is on a child div inside .cost-summary
-      view |> element(".cost-summary .cursor-pointer") |> render_click()
-
-      expanded_html = render(view)
-
-      # Now type breakdown should be visible (shows user-friendly labels, not raw cost_type)
-      assert expanded_html =~ "Consensus"
-      assert expanded_html =~ "Embeddings"
-    end
   end
 
   # ============================================================
-  # R8-R14: costs_updated_at & Per-Model Breakdown (fix-ui-costs-20251213)
-  # Tests for costs_updated_at propagation and detail mode display.
+  # R8-R14: Cost Display & Per-Model Breakdown (fix-ui-costs-20251213)
+  # Tests for cost data propagation and detail mode display.
   # ============================================================
 
-  describe "R8-R14: costs_updated_at & per-model" do
+  describe "R8-R14: cost display & per-model" do
     alias Quoracle.Costs.AgentCost
     alias Quoracle.Repo
 
@@ -932,8 +950,8 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
       {:ok, task: task, agent_record: agent_record}
     end
 
-    # R8: costs_updated_at Accept [UNIT]
-    test "R8: accepts costs_updated_at assign", %{
+    # R8: Accepts cost assigns [UNIT]
+    test "R8: accepts cost assigns and renders agent", %{
       conn: conn,
       agent_record: agent_record,
       sandbox_owner: sandbox_owner
@@ -946,9 +964,8 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
         children: []
       }
 
-      costs_updated_at = System.monotonic_time()
+      cost_data = %{agents: %{agent_record.agent_id => Decimal.new("0.05")}, tasks: %{}}
 
-      # Render with costs_updated_at in session
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.LiveComponentTestHelper,
           session: %{
@@ -960,7 +977,8 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
               expanded: false,
               selected: false,
               agent_alive: false,
-              costs_updated_at: costs_updated_at,
+              cost_data: cost_data,
+              use_precomputed_costs: true,
               root_pid: self()
             }
           }
@@ -969,18 +987,19 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
       # CRITICAL: Cleanup LiveView before sandbox owner exits
       html = render(view)
 
-      # Component should render without error when costs_updated_at is provided
+      # Component should render with agent info and pre-computed cost
       assert html =~ agent_record.agent_id
+      assert html =~ "$0.05"
     end
 
-    # R9: CostDisplay Badge with Trigger [INTEGRATION]
-    test "R9: passes costs_updated_at to CostDisplay badge", %{
+    # R9: CostDisplay Badge [INTEGRATION]
+    test "R9: CostDisplay badge shows agent cost", %{
       conn: conn,
       task: task,
       agent_record: agent_record,
       sandbox_owner: sandbox_owner
     } do
-      # Record a cost
+      # Record a cost in DB (for detail/summary lazy-load)
       {:ok, _} =
         Repo.insert(%AgentCost{
           agent_id: agent_record.agent_id,
@@ -998,6 +1017,9 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
         children: []
       }
 
+      # Pre-computed cost_data from batch query
+      cost_data = %{agents: %{agent_record.agent_id => Decimal.new("0.08")}, tasks: %{}}
+
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.LiveComponentTestHelper,
           session: %{
@@ -1009,7 +1031,8 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
               expanded: false,
               selected: false,
               agent_alive: false,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: cost_data,
+              use_precomputed_costs: true,
               root_pid: self()
             }
           }
@@ -1017,120 +1040,16 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
 
       html = render(view)
 
-      # CostDisplay badge should show the cost
+      # CostDisplay badge should show the pre-computed cost
       assert html =~ "$0.08"
     end
 
-    # R10: Summary Mode in Expanded View [INTEGRATION]
-    test "R10: expanded view includes cost summary", %{
-      conn: conn,
-      task: task,
-      agent_record: agent_record,
-      sandbox_owner: sandbox_owner
-    } do
-      # Record costs
-      {:ok, _} =
-        Repo.insert(%AgentCost{
-          agent_id: agent_record.agent_id,
-          task_id: task.id,
-          cost_type: "llm_consensus",
-          cost_usd: Decimal.new("0.15"),
-          metadata: %{}
-        })
+    # R10-R11: Removed — expanded cost summary/detail sections were removed in v7.0.
+    # Per-model cost breakdown is available at the task level (TaskTree CostDisplay detail mode).
+    # Agent nodes show only the cost badge inline.
 
-      agent = %{
-        agent_id: agent_record.agent_id,
-        task_id: agent_record.task_id,
-        status: :working,
-        parent_id: nil,
-        children: []
-      }
-
-      # Render expanded
-      {:ok, view, _html} =
-        live_isolated(conn, QuoracleWeb.LiveComponentTestHelper,
-          session: %{
-            "sandbox_owner" => sandbox_owner,
-            "component" => QuoracleWeb.UI.AgentNode,
-            "assigns" => %{
-              agent: agent,
-              depth: 0,
-              expanded: true,
-              selected: false,
-              agent_alive: false,
-              costs_updated_at: System.monotonic_time(),
-              root_pid: self()
-            }
-          }
-        )
-
-      html = render(view)
-
-      # Expanded view should include cost summary mode
-      assert html =~ "cost-summary"
-    end
-
-    # R11: Detail Mode in Expanded View [INTEGRATION]
-    test "R11: expanded view includes per-model cost breakdown", %{
-      conn: conn,
-      task: task,
-      agent_record: agent_record,
-      sandbox_owner: sandbox_owner
-    } do
-      # Record costs with different models
-      {:ok, _} =
-        Repo.insert(%AgentCost{
-          agent_id: agent_record.agent_id,
-          task_id: task.id,
-          cost_type: "llm_consensus",
-          cost_usd: Decimal.new("0.35"),
-          metadata: %{"model_spec" => "anthropic:claude-sonnet"}
-        })
-
-      {:ok, _} =
-        Repo.insert(%AgentCost{
-          agent_id: agent_record.agent_id,
-          task_id: task.id,
-          cost_type: "llm_consensus",
-          cost_usd: Decimal.new("0.07"),
-          metadata: %{"model_spec" => "openai:gpt-4o"}
-        })
-
-      agent = %{
-        agent_id: agent_record.agent_id,
-        task_id: agent_record.task_id,
-        status: :working,
-        parent_id: nil,
-        children: []
-      }
-
-      # Render expanded
-      {:ok, view, _html} =
-        live_isolated(conn, QuoracleWeb.LiveComponentTestHelper,
-          session: %{
-            "sandbox_owner" => sandbox_owner,
-            "component" => QuoracleWeb.UI.AgentNode,
-            "assigns" => %{
-              agent: agent,
-              depth: 0,
-              expanded: true,
-              selected: false,
-              agent_alive: false,
-              costs_updated_at: System.monotonic_time(),
-              root_pid: self()
-            }
-          }
-        )
-
-      html = render(view)
-
-      # Expanded view should include detail mode with per-model breakdown
-      assert html =~ "claude-sonnet"
-      assert html =~ "gpt-4o"
-    end
-
-    # R12: Recursive costs_updated_at Propagation [UNIT]
-    test "R12: passes costs_updated_at to child AgentNodes", %{
+    # R12: Recursive cost propagation [UNIT]
+    test "R12: propagates cost data to child AgentNodes", %{
       conn: conn,
       task: task,
       agent_record: agent_record,
@@ -1176,6 +1095,15 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
         }
       }
 
+      # Pre-computed cost_data with values for both parent and child
+      cost_data = %{
+        agents: %{
+          agent_record.agent_id => Decimal.new("0.10"),
+          child_agent.agent_id => Decimal.new("0.03")
+        },
+        tasks: %{}
+      }
+
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.LiveComponentTestHelper,
           session: %{
@@ -1185,7 +1113,7 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
               agents: agents,
               tasks: tasks,
               selected_agent_id: nil,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: cost_data,
               root_pid: self()
             }
           }
@@ -1198,12 +1126,12 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
 
       html = render(view)
 
-      # Child should be rendered (with costs_updated_at propagated)
+      # Child should be rendered with cost_data propagated through the tree
       assert html =~ child_agent.agent_id
     end
 
-    # R13: Cost Update Without Refresh [SYSTEM]
-    @tag :acceptance
+    # R13: Cost Update Without Refresh [INTEGRATION]
+    @tag :integration
     test "R13: agent costs update when new cost recorded", %{
       conn: conn,
       task: task,
@@ -1218,8 +1146,6 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
         children: []
       }
 
-      initial_timestamp = System.monotonic_time()
-
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.LiveComponentTestHelper,
           session: %{
@@ -1231,7 +1157,8 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
               expanded: false,
               selected: false,
               agent_alive: false,
-              costs_updated_at: initial_timestamp,
+              cost_data: %{agents: %{}, tasks: %{}},
+              use_precomputed_costs: true,
               root_pid: self()
             }
           }
@@ -1251,14 +1178,16 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
           metadata: %{}
         })
 
-      # Simulate parent bumping costs_updated_at (triggers component re-render)
-      new_timestamp = System.monotonic_time()
-
+      # Simulate parent pushing updated cost_data with pre-computed total
       send(
         view.pid,
         {:update_component,
          %{
-           costs_updated_at: new_timestamp
+           cost_data: %{
+             agents: %{agent_record.agent_id => Decimal.new("0.25")},
+             tasks: %{}
+           },
+           use_precomputed_costs: true
          }}
       )
 
@@ -1268,66 +1197,8 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
       assert html =~ "$0.25"
     end
 
-    # R14: Per-Model Data Display [INTEGRATION]
-    test "R14: detail mode shows model, requests, tokens, cost", %{
-      conn: conn,
-      task: task,
-      agent_record: agent_record,
-      sandbox_owner: sandbox_owner
-    } do
-      # Record costs with full metadata
-      {:ok, _} =
-        Repo.insert(%AgentCost{
-          agent_id: agent_record.agent_id,
-          task_id: task.id,
-          cost_type: "llm_consensus",
-          cost_usd: Decimal.new("0.35"),
-          metadata: %{
-            "model_spec" => "anthropic:claude-sonnet",
-            "input_tokens" => 10000,
-            "output_tokens" => 2000
-          }
-        })
-
-      agent = %{
-        agent_id: agent_record.agent_id,
-        task_id: agent_record.task_id,
-        status: :working,
-        parent_id: nil,
-        children: []
-      }
-
-      # Render expanded to see detail mode
-      {:ok, view, _html} =
-        live_isolated(conn, QuoracleWeb.LiveComponentTestHelper,
-          session: %{
-            "sandbox_owner" => sandbox_owner,
-            "component" => QuoracleWeb.UI.AgentNode,
-            "assigns" => %{
-              agent: agent,
-              depth: 0,
-              expanded: true,
-              selected: false,
-              agent_alive: false,
-              costs_updated_at: System.monotonic_time(),
-              root_pid: self()
-            }
-          }
-        )
-
-      html = render(view)
-
-      # Detail mode should show model name
-      assert html =~ "claude-sonnet"
-
-      # Detail mode should show cost
-      assert html =~ "$0.35"
-
-      # v2.0: Detail mode shows input/output tokens separately in table
-      # input_tokens: 10000 = "10K", output_tokens: 2000 = "2K"
-      assert html =~ "10K"
-      assert html =~ "2K"
-    end
+    # R14: Removed — per-model detail view was removed from AgentNode in v7.0.
+    # Per-model breakdown is shown at the task level via TaskTree CostDisplay detail mode.
   end
 
   # ============================================================
@@ -1335,6 +1206,268 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
   # Packet 6 (UI Components)
   # Tests for BudgetBadge rendering in AgentNode.
   # ============================================================
+
+  describe "Packet 1 ARC criteria (UI_AgentNode v7.0)" do
+    defp packet1_tasks do
+      %{
+        "task_1" => %{
+          id: "task_1",
+          prompt: "Packet 1 task",
+          root_agent_id: "root_1",
+          status: "running",
+          updated_at: ~U[2026-03-17 10:00:00Z]
+        }
+      }
+    end
+
+    test "R20: AgentNode is rendered as LiveComponent within TaskTree", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        render_packet1_task_tree(
+          conn,
+          create_packet1_agents(),
+          packet1_tasks(),
+          %{},
+          sandbox_owner
+        )
+
+      assert render(view) =~ ~s(id="agent-node-root_1")
+    end
+
+    test "R21: children are rendered from agents map lookup", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        render_packet1_task_tree(
+          conn,
+          create_packet1_agents(),
+          packet1_tasks(),
+          %{},
+          sandbox_owner
+        )
+
+      view
+      |> element("[phx-click='toggle_expand'][phx-value-agent-id='root_1']")
+      |> render_click()
+
+      html = render(view)
+
+      assert html =~ ~s(id="agent-node-child_1")
+      assert html =~ ~s(id="agent-node-child_2")
+    end
+
+    test "R22: nil agent renders empty without crash", %{conn: conn, sandbox_owner: sandbox_owner} do
+      agents = %{
+        "root_1" => %{
+          agent_id: "root_1",
+          task_id: "task_1",
+          status: :working,
+          parent_id: nil,
+          children: ["missing_child"]
+        }
+      }
+
+      {:ok, view, _html} =
+        render_packet1_task_tree(conn, agents, packet1_tasks(), %{}, sandbox_owner)
+
+      view
+      |> element("[phx-click='toggle_expand'][phx-value-agent-id='root_1']")
+      |> render_click()
+
+      # Missing child should render empty without crash
+      refute render(view) =~ "FunctionClauseError"
+    end
+
+    test "R23: toggle_expand routes to parent component", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        render_packet1_task_tree(
+          conn,
+          create_packet1_agents(),
+          packet1_tasks(),
+          %{},
+          sandbox_owner
+        )
+
+      refute render(view) =~ "Child todo"
+
+      view
+      |> element("[phx-click='toggle_expand'][phx-value-agent-id='root_1']")
+      |> render_click()
+
+      assert render(view) =~ "Child todo"
+    end
+
+    test "R24: select_agent routes through parent to dashboard", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        render_packet1_task_tree(
+          conn,
+          create_packet1_agents(),
+          packet1_tasks(),
+          %{selected_agent_id: "root_1"},
+          sandbox_owner
+        )
+
+      assert render(view) =~ "agent-selected"
+    end
+
+    test "R25: message form rendered via MessageForm submodule for alive root agents", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      extra = %{
+        agent_alive_map: %{"root_1" => true},
+        message_forms: %{"root_1" => %{expanded: true, input: "hello"}}
+      }
+
+      {:ok, view, _html} =
+        render_packet1_task_tree(
+          conn,
+          create_packet1_agents(),
+          packet1_tasks(),
+          extra,
+          sandbox_owner
+        )
+
+      html = render(view)
+      assert html =~ ~s(phx-submit="send_direct_message_tree")
+      assert html =~ "hello"
+    end
+
+    test "R26: todos rendered via TodoDisplay submodule", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        render_packet1_task_tree(
+          conn,
+          create_packet1_agents(),
+          packet1_tasks(),
+          %{},
+          sandbox_owner
+        )
+
+      assert render(view) =~ "Root todo"
+    end
+
+    test "R27: cost badge shows precomputed total", %{conn: conn, sandbox_owner: sandbox_owner} do
+      extra = %{cost_data: %{agents: %{"root_1" => Decimal.new("0.42")}, tasks: %{}}}
+
+      {:ok, view, _html} =
+        render_packet1_task_tree(
+          conn,
+          create_packet1_agents(),
+          packet1_tasks(),
+          extra,
+          sandbox_owner
+        )
+
+      assert render(view) =~ "$0.42"
+    end
+
+    test "R28: budget badge renders for budgeted agent", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        render_packet1_task_tree(
+          conn,
+          create_packet1_agents(),
+          packet1_tasks(),
+          %{},
+          sandbox_owner
+        )
+
+      assert render(view) =~ "budget-badge"
+    end
+
+    test "R29: duplicate child IDs are deduplicated", %{conn: conn, sandbox_owner: sandbox_owner} do
+      agents =
+        put_in(create_packet1_agents(), ["root_1", :children], ["child_1", "child_1", "child_2"])
+
+      {:ok, view, _html} =
+        render_packet1_task_tree(conn, agents, packet1_tasks(), %{}, sandbox_owner)
+
+      view
+      |> element("[phx-click='toggle_expand'][phx-value-agent-id='root_1']")
+      |> render_click()
+
+      assert length(Regex.scan(~r/id="agent-node-child_1"/, render(view))) == 1
+    end
+
+    test "R30: three-level deep tree renders with correct depth", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        render_packet1_task_tree(
+          conn,
+          create_packet1_agents(),
+          packet1_tasks(),
+          %{},
+          sandbox_owner
+        )
+
+      # Expand all levels
+      view
+      |> element("[phx-click='toggle_expand'][phx-value-agent-id='root_1']")
+      |> render_click()
+
+      view
+      |> element("[phx-click='toggle_expand'][phx-value-agent-id='child_1']")
+      |> render_click()
+
+      view
+      |> element("[phx-click='toggle_expand'][phx-value-agent-id='grand_1']")
+      |> render_click()
+
+      html = render(view)
+      assert html =~ "great_1"
+      assert html =~ ~s(id="agent-node-great_1")
+    end
+
+    test "agent node renders correctly as LiveComponent within TaskTree", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      extra = %{
+        selected_agent_id: "root_1",
+        agent_alive_map: %{"root_1" => true},
+        message_forms: %{"root_1" => %{expanded: true, input: "hello"}},
+        cost_data: %{agents: %{"root_1" => Decimal.new("0.42")}, tasks: %{}}
+      }
+
+      {:ok, view, _html} =
+        render_packet1_task_tree(
+          conn,
+          create_packet1_agents(),
+          packet1_tasks(),
+          extra,
+          sandbox_owner
+        )
+
+      view
+      |> element("[phx-click='toggle_expand'][phx-value-agent-id='root_1']")
+      |> render_click()
+
+      html = render(view)
+
+      assert html =~ ~s(id="agent-node-root_1")
+      assert html =~ "Root todo"
+      assert html =~ "hello"
+      assert html =~ "$0.42"
+      assert html =~ "budget-badge"
+      assert html =~ "child_1"
+    end
+  end
 
   describe "R15-R19: budget badge integration" do
     alias Quoracle.Repo

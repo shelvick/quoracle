@@ -22,7 +22,8 @@ defmodule Quoracle.Actions.Schema.AgentSchemas do
         :sibling_context,
         :downstream_constraints,
         :skills,
-        :budget
+        :budget,
+        :grove_vars
       ],
       param_types: %{
         task_description: :string,
@@ -39,7 +40,8 @@ defmodule Quoracle.Actions.Schema.AgentSchemas do
         # NOTE: models types removed - see optional_params comment
         downstream_constraints: :string,
         skills: {:list, :string},
-        budget: :string
+        budget: :string,
+        grove_vars: :map
       },
       param_descriptions: %{
         task_description:
@@ -67,7 +69,9 @@ defmodule Quoracle.Actions.Schema.AgentSchemas do
         skills:
           "List of skill names to pre-load into the child's system prompt. Skills provide domain knowledge (e.g., ['elixir-testing', 'api-design']). Available skills are listed in your system prompt. The child will have this knowledge immediately without needing to learn_skills.",
         budget:
-          "Budget allocation for child agent in USD (e.g., '50.00'). If omitted, child gets unlimited budget. Must be a positive decimal string. Parent must have sufficient available budget."
+          "Budget allocation for child agent in USD (e.g., '50.00'). If omitted, child gets unlimited budget. Must be a positive decimal string. Parent must have sufficient available budget.",
+        grove_vars:
+          "Template variables for inherited grove configuration, such as confinement path placeholders. Keys are variable names and values are replacement strings for patterns like {child_workspace}."
       },
       consensus_rules: %{
         task_description: {:semantic_similarity, threshold: 0.95},
@@ -82,7 +86,8 @@ defmodule Quoracle.Actions.Schema.AgentSchemas do
         sibling_context: :structural_merge,
         downstream_constraints: {:semantic_similarity, threshold: 0.90},
         skills: :union_merge,
-        budget: :exact_match
+        budget: :exact_match,
+        grove_vars: :exact_match
       }
     },
     wait: %{

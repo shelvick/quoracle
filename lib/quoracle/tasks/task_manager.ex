@@ -199,6 +199,7 @@ defmodule Quoracle.Tasks.TaskManager do
         |> maybe_put(:governance_config, Keyword.get(opts, :governance_config))
         |> maybe_put(:grove_hard_rules, Keyword.get(opts, :grove_hard_rules))
         |> maybe_put(:grove_confinement, Keyword.get(opts, :grove_confinement))
+        |> maybe_put(:grove_confinement_mode, Keyword.get(opts, :grove_confinement_mode))
         |> maybe_put(:grove_skills_path, Keyword.get(opts, :grove_skills_path))
         |> maybe_put(:grove_topology, Keyword.get(opts, :grove_topology))
         |> maybe_put(:grove_path, Keyword.get(opts, :grove_path))
@@ -207,6 +208,8 @@ defmodule Quoracle.Tasks.TaskManager do
         |> maybe_put(:model_pool, Keyword.get(opts, :model_pool))
         |> maybe_put(:force_init_error, Keyword.get(opts, :force_init_error))
         |> maybe_put(:test_opts, Keyword.get(opts, :test_opts))
+        |> maybe_put(:skip_initial_consultation, Keyword.get(opts, :skip_initial_consultation))
+        |> maybe_put(:spawn_complete_notify, Keyword.get(opts, :spawn_complete_notify))
         |> maybe_put(:force_persist, Keyword.get(opts, :force_persist))
 
       case AgentDynSup.start_agent(dynsup_pid, agent_config) do

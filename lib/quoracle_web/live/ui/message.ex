@@ -2,13 +2,12 @@ defmodule QuoracleWeb.UI.Message do
   use QuoracleWeb, :live_component
 
   @moduledoc """
-  Message component with accordion design (collapsed/expanded views).
-
-  Packet 1: Display only - chevron, preview, badges
-  Packet 2: Reply functionality (TBD)
+  Message component with accordion display and optional reply form.
   """
 
+  @doc false
   @impl true
+  @spec update(map(), Phoenix.LiveView.Socket.t()) :: {:ok, Phoenix.LiveView.Socket.t()}
   def update(assigns, socket) do
     socket =
       socket
@@ -18,7 +17,9 @@ defmodule QuoracleWeb.UI.Message do
     {:ok, socket}
   end
 
+  @doc false
   @impl true
+  @spec render(map()) :: Phoenix.LiveView.Rendered.t()
   def render(assigns) do
     # Use the ID from the message struct (mailbox ensures it exists)
     msg_id = assigns.message.id
@@ -60,7 +61,11 @@ defmodule QuoracleWeb.UI.Message do
 
       <%= if @expanded and @reply_form_visible and @message.from == :agent do %>
         <div class="reply-form-container ml-9 mt-3">
-          <form phx-submit="send_reply" phx-target={@myself} phx-value-message-id={@message.id}>
+          <form
+            phx-submit="send_reply"
+            phx-target={@myself}
+            phx-value-message-id={@message.id}
+          >
             <textarea
               name="content"
               phx-change="update_reply"
@@ -87,45 +92,70 @@ defmodule QuoracleWeb.UI.Message do
     """
   end
 
+  @doc false
   @impl true
+  @spec handle_event(binary(), map(), Phoenix.LiveView.Socket.t()) ::
+          {:noreply, Phoenix.LiveView.Socket.t()}
   def handle_event("toggle_message", %{"message-id" => message_id}, socket) do
     message_id = String.to_integer(message_id)
     send(socket.assigns.target, {:toggle_message, message_id})
     {:noreply, socket}
   end
 
-  @impl true
+  @doc false
   def handle_event("send_reply", params, socket) do
     if socket.assigns.agent_alive do
       content = params["content"] || ""
       message_id = socket.assigns.message.id
 
-      # Send reply to appropriate destination
-      send_reply_message(socket, socket.assigns.target, message_id, content)
-
-      {:noreply, assign(socket, :reply_input, "")}
+      case send_reply_message(socket, socket.assigns.target, message_id, content) do
+        :ok -> {:noreply, assign(socket, :reply_input, "")}
+        :error -> {:noreply, socket}
+      end
     else
       {:noreply, socket}
     end
   end
 
-  @impl true
+  @doc false
   def handle_event("update_reply", %{"content" => content}, socket) do
     {:noreply, assign(socket, :reply_input, content)}
   end
 
-  # Send to PID directly (used in tests)
+  # Send to PID directly (used in standalone component tests)
   defp send_reply_message(_socket, target, message_id, content) when is_pid(target) do
     send(target, {:send_reply, message_id, content})
+    :ok
   end
 
-  # Send to LiveView root when target is component ref (used in production)
-  defp send_reply_message(socket, target, message_id, content) when not is_nil(target) do
+  # Send directly to the agent when registry is available (used in Mailbox/Dashboard)
+  defp send_reply_message(socket, _target, _message_id, content) do
+    case socket.assigns[:registry] do
+      nil ->
+        send_reply_via_root(socket, socket.assigns.target, socket.assigns.message.id, content)
+
+      registry ->
+        send_reply_via_registry(socket.assigns.message, registry, content)
+    end
+  end
+
+  defp send_reply_via_registry(%{sender_id: sender_id}, registry, content) do
+    case Registry.lookup(registry, {:agent, sender_id}) do
+      [{agent_pid, _}] ->
+        Quoracle.Agent.Core.send_user_message(agent_pid, content)
+        :ok
+
+      [] ->
+        :error
+    end
+  end
+
+  defp send_reply_via_root(socket, target, message_id, content) when not is_nil(target) do
     send(socket.root_pid, {:send_reply, message_id, content})
+    :ok
   end
 
-  # No target specified
-  defp send_reply_message(_socket, nil, _message_id, _content), do: :ok
+  defp send_reply_via_root(_socket, nil, _message_id, _content), do: :error
 
   defp phx_target(target, myself) when is_pid(target), do: myself
   defp phx_target(target, _myself), do: target

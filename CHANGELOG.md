@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-03-18
+
+### Added
+
+- Quoracle logo (SVG) displayed in navigation header, replacing the text link.
+- Strict confinement mode for groves with `grove_vars` template variable resolution at spawn time.
+
+### Changed
+
+- AgentNode evolved to recursive LiveComponent for per-node DOM diffing instead of full-tree re-renders.
+- Log panel uses debounce timer and pre-computed `display_logs` to reduce render overhead.
+- Dashboard cost queries batched with precomputed data flow for lower DB pressure.
+- Mailbox panel fully isolated with dedicated PubSub subscriptions.
+- CostDisplay breakdown cache invalidated automatically when `total_cost` changes.
+- Initial cost data hydrated at mount time instead of lazy-loading.
+- Header streamlined: gear icon replaces Settings text link, reduced whitespace.
+
+### Removed
+
+- Dead signals, stale `cost_id_prefix` references, and unused assigns cleaned up from dashboard.
+
 ## [0.2.1] - 2026-03-12
 
 ### Fixed

@@ -1964,15 +1964,15 @@ defmodule QuoracleWeb.DashboardLiveTest do
   end
 
   # ============================================================
-  # R17-R21: costs_updated_at Re-render Trigger (fix-ui-costs-20251213)
-  # Tests for costs_updated_at initialization, handler, and propagation.
+  # R17-R21: cost_data Re-render Trigger (fix-ui-costs-20251213)
+  # Tests for cost_data initialization, handler, and propagation.
   # ============================================================
 
-  describe "R17-R21: costs_updated_at trigger" do
+  describe "R17-R21: cost_data trigger" do
     import Test.AgentTestHelpers
 
-    # R17: costs_updated_at Initialization [UNIT]
-    test "R17: initializes costs_updated_at on mount", %{
+    # R17: cost_data Initialization [UNIT]
+    test "R17: initializes cost_data on mount", %{
       conn: conn,
       pubsub: pubsub,
       registry: registry,
@@ -2000,16 +2000,19 @@ defmodule QuoracleWeb.DashboardLiveTest do
         end
       end)
 
-      # Get the socket assigns to verify costs_updated_at is set
-      # costs_updated_at should be a monotonic time integer
+      # Get the socket assigns to verify cost_data is set
+      # cost_data should be a map with :agents and :tasks keys
       socket_assigns = :sys.get_state(view.pid).socket.assigns
 
-      assert Map.has_key?(socket_assigns, :costs_updated_at)
-      assert is_integer(socket_assigns.costs_updated_at)
+      assert Map.has_key?(socket_assigns, :cost_data)
+      assert is_map(socket_assigns.cost_data)
+      assert Map.has_key?(socket_assigns.cost_data, :agents)
+      assert Map.has_key?(socket_assigns.cost_data, :tasks)
+      assert socket_assigns.cost_data == %{agents: %{}, tasks: %{}}
     end
 
     # R18: Cost Recorded Handler [INTEGRATION]
-    test "R18: handle_info bumps costs_updated_at on cost_recorded", %{
+    test "R18: handle_info assigns cost_data on cost_recorded flush", %{
       conn: conn,
       pubsub: pubsub,
       registry: registry,
@@ -2038,9 +2041,10 @@ defmodule QuoracleWeb.DashboardLiveTest do
         end
       end)
 
-      # Get initial costs_updated_at
+      # Get initial cost_data
       initial_assigns = :sys.get_state(view.pid).socket.assigns
-      initial_timestamp = initial_assigns.costs_updated_at
+      initial_cost_data = initial_assigns.cost_data
+      assert initial_cost_data == %{agents: %{}, tasks: %{}}
 
       # Send cost_recorded event — 0ms debounce fires before next render
       send(view.pid, {:cost_recorded, %{task_id: "some-task", cost_usd: Decimal.new("0.05")}})
@@ -2049,16 +2053,20 @@ defmodule QuoracleWeb.DashboardLiveTest do
       # Second render processes :flush_cost_updates (timer already fired)
       render(view)
 
-      # Get updated costs_updated_at
+      # After flush, cost_data contains batch_totals result
       updated_assigns = :sys.get_state(view.pid).socket.assigns
-      updated_timestamp = updated_assigns.costs_updated_at
+      updated_cost_data = updated_assigns.cost_data
 
-      # Should have bumped to a new value
-      assert updated_timestamp > initial_timestamp
+      assert is_map(updated_cost_data)
+      assert is_map(updated_cost_data.agents)
+      assert is_map(updated_cost_data.tasks)
+      # No agents/tasks in state, so batch_totals returns empty maps
+      assert updated_cost_data.agents == %{}
+      assert updated_cost_data.tasks == %{}
     end
 
-    # R19: Timestamp Monotonicity [UNIT]
-    test "R19: costs_updated_at strictly increases on each update", %{
+    # R19: cost_data updates on each flush [UNIT]
+    test "R19: cost_data is assigned on each flush_cost_updates", %{
       conn: conn,
       pubsub: pubsub,
       registry: registry,
@@ -2087,30 +2095,23 @@ defmodule QuoracleWeb.DashboardLiveTest do
         end
       end)
 
-      # Get initial timestamp
+      # Get initial cost_data
       initial_assigns = :sys.get_state(view.pid).socket.assigns
-      initial_timestamp = initial_assigns.costs_updated_at
+      initial_cost_data = initial_assigns.cost_data
+      assert initial_cost_data == %{agents: %{}, tasks: %{}}
 
       # Send multiple cost_recorded events — 0ms debounce fires between renders
-      collected_timestamps =
-        Enum.map(1..5, fn i ->
-          send(view.pid, {:cost_recorded, %{task_id: "task-#{i}", cost_usd: Decimal.new("0.01")}})
-          render(view)
-          # Timer fires within 1ms, second render processes :flush_cost_updates
-          render(view)
+      # Each flush should assign cost_data with the correct structure
+      Enum.each(1..5, fn i ->
+        send(view.pid, {:cost_recorded, %{task_id: "task-#{i}", cost_usd: Decimal.new("0.01")}})
+        render(view)
+        # Timer fires within 1ms, second render processes :flush_cost_updates
+        render(view)
 
-          assigns = :sys.get_state(view.pid).socket.assigns
-          assigns.costs_updated_at
-        end)
-
-      # Combine initial with collected (already in chronological order)
-      timestamps = [initial_timestamp | collected_timestamps]
-
-      # Each timestamp should be strictly greater than the previous
-      timestamps
-      |> Enum.chunk_every(2, 1, :discard)
-      |> Enum.each(fn [prev, curr] ->
-        assert curr > prev, "Expected #{curr} > #{prev}"
+        assigns = :sys.get_state(view.pid).socket.assigns
+        assert is_map(assigns.cost_data)
+        assert is_map(assigns.cost_data.agents)
+        assert is_map(assigns.cost_data.tasks)
       end)
     end
 
@@ -2144,8 +2145,10 @@ defmodule QuoracleWeb.DashboardLiveTest do
         end
       end)
 
-      initial_timestamp =
-        :sys.get_state(view.pid).socket.assigns.costs_updated_at
+      initial_cost_data =
+        :sys.get_state(view.pid).socket.assigns.cost_data
+
+      assert initial_cost_data == %{agents: %{}, tasks: %{}}
 
       # Send a burst of 10 cost events — all should be absorbed by debounce
       for i <- 1..10 do
@@ -2154,12 +2157,12 @@ defmodule QuoracleWeb.DashboardLiveTest do
 
       render(view)
 
-      # Timestamp should NOT have changed yet (timer still pending)
-      mid_timestamp =
-        :sys.get_state(view.pid).socket.assigns.costs_updated_at
+      # cost_data should NOT have changed yet (timer still pending)
+      mid_cost_data =
+        :sys.get_state(view.pid).socket.assigns.cost_data
 
-      assert mid_timestamp == initial_timestamp,
-             "Debounce should hold — timestamp must not change before timer fires"
+      assert mid_cost_data == initial_cost_data,
+             "Debounce should hold — cost_data must not change before timer fires"
 
       # Timer ref should be set (proving a timer was scheduled)
       timer = :sys.get_state(view.pid).socket.assigns.cost_refresh_timer
@@ -2170,15 +2173,17 @@ defmodule QuoracleWeb.DashboardLiveTest do
       send(view.pid, :flush_cost_updates)
       render(view)
 
-      final_timestamp =
-        :sys.get_state(view.pid).socket.assigns.costs_updated_at
+      final_cost_data =
+        :sys.get_state(view.pid).socket.assigns.cost_data
 
-      assert final_timestamp > initial_timestamp,
-             "Flush should bump timestamp after burst"
+      # After flush, cost_data should have the correct structure
+      assert is_map(final_cost_data)
+      assert Map.has_key?(final_cost_data, :agents)
+      assert Map.has_key?(final_cost_data, :tasks)
     end
 
-    # R20: costs_updated_at Propagation [INTEGRATION]
-    test "R20: costs_updated_at passed to TaskTree component", %{
+    # R20: Cost propagation to TaskTree [INTEGRATION]
+    test "R20: cost_recorded propagates to TaskTree component", %{
       conn: conn,
       pubsub: pubsub,
       registry: registry,
@@ -2215,11 +2220,11 @@ defmodule QuoracleWeb.DashboardLiveTest do
         end
       end)
 
-      # Send cost_recorded to bump timestamp
+      # Send cost_recorded to trigger cost_data refresh
       send(view.pid, {:cost_recorded, %{task_id: task.id, cost_usd: Decimal.new("0.10")}})
       html = render(view)
 
-      # TaskTree component should receive costs_updated_at prop
+      # TaskTree component should receive cost_data prop
       # This is verified by checking the component is rendered with the prop
       # (the actual prop passing happens in the template)
       assert has_element?(view, "#task-tree")
@@ -2304,6 +2309,360 @@ defmodule QuoracleWeb.DashboardLiveTest do
       refute html =~ "Decimal.new"
       refute html =~ "#Decimal"
       refute html =~ "%Decimal"
+    end
+  end
+
+  describe "UI_Dashboard v19.0 packet 2" do
+    test "flush_cost_updates assigns batch cost_data", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, {task, agent_pid}} =
+        create_task_with_cleanup("Batch cost flush test",
+          sandbox_owner: sandbox_owner,
+          dynsup: dynsup,
+          registry: registry,
+          pubsub: pubsub,
+          force_persist: true
+        )
+
+      {:ok, %{agent_id: agent_id}} = GenServer.call(agent_pid, :get_state)
+
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      {:ok, _cost} =
+        Quoracle.Costs.Recorder.record_silent(%{
+          agent_id: agent_id,
+          task_id: task.id,
+          cost_type: "llm_consensus",
+          cost_usd: Decimal.new("0.42"),
+          metadata: %{"model_spec" => "anthropic:claude-sonnet"}
+        })
+
+      send(view.pid, :flush_cost_updates)
+      render(view)
+
+      task_cost_html = view |> element("#task-cost-#{task.id}") |> render()
+      agent_cost_html = view |> element("#cost-badge-tasktree-#{agent_id}") |> render()
+
+      assert task_cost_html =~ "$0.42"
+      assert agent_cost_html =~ "$0.42"
+    end
+
+    test "TaskTree receives cost_data assign", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, {task, agent_pid}} =
+        create_task_with_cleanup("TaskTree cost_data test",
+          sandbox_owner: sandbox_owner,
+          dynsup: dynsup,
+          registry: registry,
+          pubsub: pubsub,
+          force_persist: true
+        )
+
+      {:ok, %{agent_id: agent_id}} = GenServer.call(agent_pid, :get_state)
+
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      {:ok, _cost} =
+        Quoracle.Costs.Recorder.record_silent(%{
+          agent_id: agent_id,
+          task_id: task.id,
+          cost_type: "llm_consensus",
+          cost_usd: Decimal.new("0.17"),
+          metadata: %{"model_spec" => "anthropic:claude-sonnet"}
+        })
+
+      send(view.pid, :flush_cost_updates)
+      render(view)
+
+      task_tree_html = view |> element("#task-tree") |> render()
+
+      assert task_tree_html =~ task.id
+      assert task_tree_html =~ "$0.17"
+      assert task_tree_html =~ "cost-badge-tasktree-#{agent_id}"
+    end
+
+    test "Mailbox receives agent_alive_map not agents", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      task = create_db_only_task("Mailbox agent_alive_map test")
+      mailbox_test_pid = self()
+
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner,
+            "mailbox_test_pid" => mailbox_test_pid
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      assert_receive {:mailbox_updated, initial_keys}, 1_000
+      assert :agent_alive_map in initial_keys
+      refute :agents in initial_keys
+
+      agent_id = "mailbox-agent-#{System.unique_integer([:positive])}"
+      message_id = System.unique_integer([:positive])
+
+      send(
+        view.pid,
+        {:agent_spawned,
+         %{agent_id: agent_id, task_id: task.id, parent_id: nil, timestamp: DateTime.utc_now()}}
+      )
+
+      render(view)
+
+      assert_receive {:mailbox_updated, spawned_keys}, 1_000
+      assert :agent_alive_map in spawned_keys
+      refute :agents in spawned_keys
+
+      send(
+        view.pid,
+        {:agent_message,
+         %{
+           id: message_id,
+           from: :agent,
+           sender_id: agent_id,
+           content: "Mailbox uses agent_alive_map",
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      render(view)
+
+      assert_receive {:mailbox_updated, message_keys}, 1_000
+      assert :messages in message_keys
+      refute :agents in message_keys
+
+      view
+      |> element("[phx-click='toggle_message'][phx-value-message-id='#{message_id}']")
+      |> render_click()
+
+      mailbox_html = view |> element("#mailbox") |> render()
+
+      assert mailbox_html =~ "Mailbox uses agent_alive_map"
+      assert mailbox_html =~ "Type your reply..."
+      refute mailbox_html =~ "Agent no longer active"
+      refute mailbox_html =~ "disabled"
+    end
+
+    test "log_entry handler buffers log for debounced flush" do
+      alias QuoracleWeb.DashboardLive.MessageHandlers
+
+      existing_selected_log = %{
+        id: 1,
+        agent_id: "selected-agent",
+        level: :info,
+        message: "existing selected log",
+        timestamp: DateTime.utc_now()
+      }
+
+      other_log = %{
+        id: 2,
+        agent_id: "other-agent",
+        level: :info,
+        message: "other log",
+        timestamp: DateTime.utc_now()
+      }
+
+      new_selected_log = %{
+        id: 3,
+        agent_id: "selected-agent",
+        level: :warn,
+        message: "new selected log",
+        timestamp: DateTime.utc_now()
+      }
+
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          __changed__: %{},
+          logs: %{
+            "selected-agent" => [existing_selected_log],
+            "other-agent" => [other_log]
+          },
+          selected_agent_id: "selected-agent",
+          filtered_logs: [],
+          log_buffer: [],
+          log_refresh_timer: nil,
+          log_debounce_ms: 5_000
+        }
+      }
+
+      {:noreply, updated_socket} = MessageHandlers.handle_log_entry(new_selected_log, socket)
+
+      # v20.0: Log is buffered, not immediately in logs map
+      assert updated_socket.assigns.log_buffer == [new_selected_log]
+      assert updated_socket.assigns.log_refresh_timer != nil
+
+      # logs map unchanged (log is in buffer, not yet flushed)
+      assert updated_socket.assigns.logs["selected-agent"] == [existing_selected_log]
+    end
+
+    test "select_agent recomputes filtered_logs for selected agent" do
+      alias QuoracleWeb.DashboardLive.EventHandlers
+      alias QuoracleWeb.DashboardLive.DataLoader
+
+      selected_log = %{
+        id: 1,
+        agent_id: "agent-2",
+        level: :info,
+        message: "selected agent log",
+        timestamp: DateTime.utc_now()
+      }
+
+      other_log = %{
+        id: 2,
+        agent_id: "agent-1",
+        level: :info,
+        message: "other agent log",
+        timestamp: DateTime.utc_now()
+      }
+
+      logs = %{
+        "agent-1" => [other_log],
+        "agent-2" => [selected_log]
+      }
+
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          __changed__: %{},
+          logs: logs,
+          selected_agent_id: nil,
+          filtered_logs: DataLoader.get_filtered_logs(logs, nil)
+        }
+      }
+
+      {:noreply, updated_socket} =
+        EventHandlers.handle_select_agent(%{"agent-id" => "agent-2"}, socket)
+
+      assert updated_socket.assigns.selected_agent_id == "agent-2"
+      assert updated_socket.assigns.filtered_logs == [selected_log]
+    end
+
+    test "cost_data includes costs for all active agents", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      task_specs =
+        Enum.map(1..10, fn index ->
+          task = create_db_only_task("Many active agents cost test #{index}")
+          agent_id = "batch-agent-#{index}"
+          %{task: task, agent_id: agent_id}
+        end)
+
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      Enum.each(task_specs, fn %{task: task, agent_id: agent_id} ->
+        send(
+          view.pid,
+          {:agent_spawned,
+           %{agent_id: agent_id, task_id: task.id, parent_id: nil, timestamp: DateTime.utc_now()}}
+        )
+
+        {:ok, _cost} =
+          Quoracle.Costs.Recorder.record_silent(%{
+            agent_id: agent_id,
+            task_id: task.id,
+            cost_type: "llm_consensus",
+            cost_usd: Decimal.new("0.01"),
+            metadata: %{"model_spec" => "anthropic:claude-sonnet"}
+          })
+      end)
+
+      render(view)
+      send(view.pid, :flush_cost_updates)
+      render(view)
+
+      task_tree_html = view |> element("#task-tree") |> render()
+
+      Enum.each(task_specs, fn %{task: task, agent_id: agent_id} ->
+        assert task_tree_html =~ "task-cost-#{task.id}"
+        assert task_tree_html =~ "cost-badge-tasktree-#{agent_id}"
+      end)
+
+      assert length(Regex.scan(~r/\$0\.01/, task_tree_html)) >= 20
     end
   end
 
@@ -3521,6 +3880,719 @@ defmodule QuoracleWeb.DashboardLiveTest do
              "Orphan should not hijack root_agent_id during restoration. " <>
                "Expected: r9-real-root, " <>
                "Got: #{inspect(socket_assigns.tasks[task.id][:root_agent_id])}"
+    end
+  end
+
+  describe "v20.0: log debounce timer" do
+    # R84: [UNIT] WHEN log_entry arrives THEN log is added to log_buffer (not immediately to logs assign)
+    test "R84: log_entry buffers log instead of immediate assign", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner,
+            "log_debounce_ms" => 5_000
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # Verify initial state
+      initial_assigns = :sys.get_state(view.pid).socket.assigns
+      assert initial_assigns.log_buffer == []
+
+      # Send a log entry
+      log = %{
+        id: "log-r84-1",
+        agent_id: "agent-r84",
+        level: :info,
+        message: "R84 test log",
+        timestamp: DateTime.utc_now()
+      }
+
+      send(view.pid, {:log_entry, log})
+      render(view)
+
+      # Log should be in the buffer, NOT yet in the logs map
+      assigns_after = :sys.get_state(view.pid).socket.assigns
+      assert length(assigns_after.log_buffer) == 1
+      assert Enum.any?(assigns_after.log_buffer, &(&1[:id] == "log-r84-1"))
+
+      # logs map should NOT have the log yet (it's still buffered)
+      agent_logs = Map.get(assigns_after.logs, "agent-r84", [])
+
+      refute Enum.any?(agent_logs, &(&1[:id] == "log-r84-1")),
+             "Log should be buffered, not immediately in logs map"
+
+      # Cancel the pending timer to avoid leaks
+      if assigns_after.log_refresh_timer && assigns_after.log_refresh_timer != :immediate do
+        Process.cancel_timer(assigns_after.log_refresh_timer)
+      end
+    end
+
+    # R85: [UNIT] WHEN first log_entry arrives AND no timer pending THEN timer is started
+    test "R85: first log_entry starts debounce timer", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner,
+            "log_debounce_ms" => 5_000
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # Verify no timer initially
+      initial_assigns = :sys.get_state(view.pid).socket.assigns
+      assert initial_assigns.log_refresh_timer == nil
+
+      # Send first log entry
+      send(
+        view.pid,
+        {:log_entry,
+         %{
+           id: "log-r85-1",
+           agent_id: "agent-r85",
+           level: :info,
+           message: "R85 first log",
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      render(view)
+
+      # Timer should now be set
+      assigns_after = :sys.get_state(view.pid).socket.assigns
+
+      assert assigns_after.log_refresh_timer != nil,
+             "Debounce timer should be started on first log entry"
+
+      # Cancel timer to avoid leaks
+      if assigns_after.log_refresh_timer && assigns_after.log_refresh_timer != :immediate do
+        Process.cancel_timer(assigns_after.log_refresh_timer)
+      end
+    end
+
+    # R86: [UNIT] WHEN log_entry arrives AND timer already pending THEN log buffered without starting new timer
+    test "R86: subsequent log_entries buffer without new timer", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner,
+            "log_debounce_ms" => 5_000
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # Send first log to start the timer
+      send(
+        view.pid,
+        {:log_entry,
+         %{
+           id: "log-r86-1",
+           agent_id: "agent-r86",
+           level: :info,
+           message: "R86 first log",
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      render(view)
+
+      # Capture the first timer reference
+      assigns_after_first = :sys.get_state(view.pid).socket.assigns
+      first_timer = assigns_after_first.log_refresh_timer
+      assert first_timer != nil
+
+      # Send second log — timer should NOT change
+      send(
+        view.pid,
+        {:log_entry,
+         %{
+           id: "log-r86-2",
+           agent_id: "agent-r86",
+           level: :warn,
+           message: "R86 second log",
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      render(view)
+
+      assigns_after_second = :sys.get_state(view.pid).socket.assigns
+      second_timer = assigns_after_second.log_refresh_timer
+
+      # Timer reference should be the same (no new timer started)
+      assert second_timer == first_timer,
+             "Subsequent log entries should not start a new timer"
+
+      # Both logs should be buffered
+      assert length(assigns_after_second.log_buffer) == 2
+
+      # Cancel timer to avoid leaks
+      if second_timer && second_timer != :immediate do
+        Process.cancel_timer(second_timer)
+      end
+    end
+
+    # R87: [UNIT] WHEN :flush_log_updates fires THEN all buffered logs merged into logs map AND buffer cleared AND timer cleared
+    test "R87: flush_log_updates merges buffer and clears state", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner,
+            "log_debounce_ms" => 5_000
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # Send multiple logs from different agents
+      for i <- 1..3 do
+        send(
+          view.pid,
+          {:log_entry,
+           %{
+             id: "log-r87-#{i}",
+             agent_id: "agent-r87-#{rem(i, 2)}",
+             level: :info,
+             message: "R87 log #{i}",
+             timestamp: DateTime.utc_now()
+           }}
+        )
+      end
+
+      render(view)
+
+      # Verify logs are buffered
+      assigns_before_flush = :sys.get_state(view.pid).socket.assigns
+      assert length(assigns_before_flush.log_buffer) == 3
+      assert assigns_before_flush.log_refresh_timer != nil
+
+      # Cancel the pending timer and manually flush
+      if assigns_before_flush.log_refresh_timer != :immediate do
+        Process.cancel_timer(assigns_before_flush.log_refresh_timer)
+      end
+
+      send(view.pid, :flush_log_updates)
+      render(view)
+
+      # After flush: buffer cleared, timer cleared, logs merged
+      assigns_after_flush = :sys.get_state(view.pid).socket.assigns
+
+      assert assigns_after_flush.log_buffer == [],
+             "Buffer should be empty after flush"
+
+      assert assigns_after_flush.log_refresh_timer == nil,
+             "Timer should be cleared after flush"
+
+      # Logs should now be in the logs map
+      all_logs_count =
+        assigns_after_flush.logs
+        |> Map.values()
+        |> List.flatten()
+        |> length()
+
+      assert all_logs_count >= 3,
+             "All 3 buffered logs should be merged into logs map"
+    end
+
+    # R88: [INTEGRATION] WHEN :flush_log_updates fires THEN filtered_logs assign is recomputed
+    test "R88: flush_log_updates recomputes filtered_logs", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner,
+            "log_debounce_ms" => 5_000
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # No agent selected, so filtered_logs = all logs
+      initial_assigns = :sys.get_state(view.pid).socket.assigns
+      initial_filtered = initial_assigns.filtered_logs
+
+      # Send a log entry
+      send(
+        view.pid,
+        {:log_entry,
+         %{
+           id: "log-r88-1",
+           agent_id: "agent-r88",
+           level: :info,
+           message: "R88 visible log",
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      render(view)
+
+      # filtered_logs should NOT have changed yet (log is buffered)
+      mid_assigns = :sys.get_state(view.pid).socket.assigns
+
+      assert mid_assigns.filtered_logs == initial_filtered,
+             "filtered_logs should not change before flush"
+
+      # Manually flush
+      if mid_assigns.log_refresh_timer && mid_assigns.log_refresh_timer != :immediate do
+        Process.cancel_timer(mid_assigns.log_refresh_timer)
+      end
+
+      send(view.pid, :flush_log_updates)
+      render(view)
+
+      # filtered_logs should now include the new log
+      final_assigns = :sys.get_state(view.pid).socket.assigns
+
+      assert Enum.any?(final_assigns.filtered_logs, &(&1[:id] == "log-r88-1")),
+             "filtered_logs should be recomputed after flush and include the new log"
+    end
+
+    # R89: [UNIT] WHEN log_id already exists in persisted logs THEN log is rejected (not buffered)
+    test "R89: duplicate log_id in persisted logs rejected before buffering", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner,
+            "log_debounce_ms" => 0
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # First, send a log and flush it so it's in the persisted logs map
+      send(
+        view.pid,
+        {:log_entry,
+         %{
+           id: "log-r89-dup",
+           agent_id: "agent-r89",
+           level: :info,
+           message: "R89 original log",
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      # With 0ms debounce: first render processes log_entry, second processes flush
+      render(view)
+      render(view)
+
+      # Verify log is in the persisted logs
+      assigns_after_first = :sys.get_state(view.pid).socket.assigns
+      agent_logs = Map.get(assigns_after_first.logs, "agent-r89", [])
+      assert Enum.any?(agent_logs, &(&1[:id] == "log-r89-dup"))
+
+      # Now send a duplicate with the same id
+      send(
+        view.pid,
+        {:log_entry,
+         %{
+           id: "log-r89-dup",
+           agent_id: "agent-r89",
+           level: :info,
+           message: "R89 duplicate log",
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      render(view)
+      render(view)
+
+      # Buffer should be empty — duplicate rejected
+      assigns_after_dup = :sys.get_state(view.pid).socket.assigns
+
+      assert assigns_after_dup.log_buffer == [],
+             "Duplicate log_id should be rejected, not buffered"
+
+      # Only one log with that ID should exist
+      final_agent_logs = Map.get(assigns_after_dup.logs, "agent-r89", [])
+      dup_count = Enum.count(final_agent_logs, &(&1[:id] == "log-r89-dup"))
+      assert dup_count == 1, "Only one log with the duplicate ID should exist"
+    end
+
+    # R89b: [UNIT] WHEN log_id already exists in pending buffer THEN log is rejected (not double-buffered)
+    test "R89b: duplicate log_id in pending buffer rejected", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner,
+            "log_debounce_ms" => 5_000
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # Send a log to the buffer
+      send(
+        view.pid,
+        {:log_entry,
+         %{
+           id: "log-r89b-dup",
+           agent_id: "agent-r89b",
+           level: :info,
+           message: "R89b original buffered log",
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      render(view)
+
+      # Log should be in buffer
+      assigns_after_first = :sys.get_state(view.pid).socket.assigns
+      assert length(assigns_after_first.log_buffer) == 1
+
+      # Send duplicate with same id
+      send(
+        view.pid,
+        {:log_entry,
+         %{
+           id: "log-r89b-dup",
+           agent_id: "agent-r89b",
+           level: :info,
+           message: "R89b duplicate buffered log",
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      render(view)
+
+      # Buffer should still have only 1 entry — duplicate rejected
+      assigns_after_dup = :sys.get_state(view.pid).socket.assigns
+
+      assert length(assigns_after_dup.log_buffer) == 1,
+             "Duplicate log_id should not be double-buffered"
+
+      # Cancel timer to avoid leaks
+      if assigns_after_dup.log_refresh_timer && assigns_after_dup.log_refresh_timer != :immediate do
+        Process.cancel_timer(assigns_after_dup.log_refresh_timer)
+      end
+    end
+
+    # R90: [UNIT] WHEN user selects agent THEN filtered_logs updated immediately (no debounce)
+    test "R90: select_agent updates filtered_logs immediately", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner,
+            "log_debounce_ms" => 0
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # Add some logs for two agents (flush immediately with 0ms debounce)
+      for agent <- ["agent-r90-a", "agent-r90-b"] do
+        send(
+          view.pid,
+          {:log_entry,
+           %{
+             id: "log-#{agent}",
+             agent_id: agent,
+             level: :info,
+             message: "Log from #{agent}",
+             timestamp: DateTime.utc_now()
+           }}
+        )
+
+        render(view)
+        render(view)
+      end
+
+      # Verify all logs visible (no agent selected)
+      assigns_before = :sys.get_state(view.pid).socket.assigns
+      assert length(assigns_before.filtered_logs) >= 2
+
+      # Select agent — should IMMEDIATELY filter logs (no debounce)
+      send(view.pid, {:select_agent, "agent-r90-a"})
+      render(view)
+
+      assigns_after = :sys.get_state(view.pid).socket.assigns
+      assert assigns_after.selected_agent_id == "agent-r90-a"
+
+      # filtered_logs should be updated immediately to show only agent-r90-a's logs
+      assert Enum.all?(assigns_after.filtered_logs, &(&1[:agent_id] == "agent-r90-a")),
+             "Select agent should immediately filter logs without debounce"
+
+      # Verify log_buffer assign exists (v20.0 adds this)
+      assert Map.has_key?(assigns_after, :log_buffer),
+             "log_buffer assign should exist after v20.0 implementation"
+    end
+
+    # R91: [INTEGRATION] WHEN log_debounce_ms is 0 THEN flush happens synchronously via send/2
+    test "R91: zero debounce flushes synchronously", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner,
+            "log_debounce_ms" => 0
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # Send log entry with 0ms debounce
+      send(
+        view.pid,
+        {:log_entry,
+         %{
+           id: "log-r91-sync",
+           agent_id: "agent-r91",
+           level: :info,
+           message: "R91 synchronous flush log",
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      # First render processes log_entry (buffers + sends :flush_log_updates via send/2)
+      render(view)
+      # Second render processes :flush_log_updates (merges buffer into logs)
+      render(view)
+
+      # Log should be in the logs map after two renders
+      assigns = :sys.get_state(view.pid).socket.assigns
+      agent_logs = Map.get(assigns.logs, "agent-r91", [])
+
+      assert Enum.any?(agent_logs, &(&1[:id] == "log-r91-sync")),
+             "With 0ms debounce, log should be in logs map after two renders"
+
+      # Buffer should be empty
+      assert assigns.log_buffer == []
+      # Timer should be cleared
+      assert assigns.log_refresh_timer == nil
+    end
+
+    @tag :acceptance
+    test "log entries are visible after debounce flush", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      # Use real route (acceptance test) with 0ms debounce
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{
+          "pubsub" => pubsub,
+          "registry" => registry,
+          "dynsup" => dynsup,
+          "sandbox_owner" => sandbox_owner,
+          "log_debounce_ms" => 0
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      # Simulate an agent spawning logs
+      agent_id = "acceptance-log-agent-#{System.unique_integer([:positive])}"
+      task = create_db_only_task("Acceptance log debounce")
+
+      send(
+        view.pid,
+        {:agent_spawned,
+         %{
+           agent_id: agent_id,
+           task_id: task.id,
+           parent_id: nil,
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      render(view)
+
+      # Send a log entry — with 0ms debounce, flush is synchronous
+      send(
+        view.pid,
+        {:log_entry,
+         %{
+           id: "acceptance-log-1",
+           agent_id: agent_id,
+           level: :info,
+           message: "Acceptance log debounce visible",
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      # Two renders: first processes log_entry, second processes :flush_log_updates
+      render(view)
+      render(view)
+
+      # Verify log is visible in the log panel
+      logs_html = view |> element("#logs") |> render()
+      assert logs_html =~ "Acceptance log debounce visible"
+
+      # Negative assertion: no error state
+      refute logs_html =~ "FunctionClauseError"
+      refute logs_html =~ "KeyError"
+
+      # Verify log_buffer assign exists (v20.0 adds this)
+      assigns = :sys.get_state(view.pid).socket.assigns
+
+      assert Map.has_key?(assigns, :log_buffer),
+             "log_buffer assign should exist after v20.0 implementation"
     end
   end
 end

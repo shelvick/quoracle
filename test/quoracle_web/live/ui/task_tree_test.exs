@@ -73,6 +73,77 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
     }
   end
 
+  defp create_packet1_agents do
+    %{
+      "root_1" => %{
+        agent_id: "root_1",
+        task_id: "task_1",
+        status: :working,
+        parent_id: nil,
+        children: ["child_1", "child_2"],
+        todos: [%{content: "Root todo", state: :todo}],
+        budget_data: %{allocated: Decimal.new("100.00"), committed: Decimal.new("5.00")}
+      },
+      "child_1" => %{
+        agent_id: "child_1",
+        task_id: "task_1",
+        status: :idle,
+        parent_id: "root_1",
+        children: ["grand_1"],
+        todos: [%{content: "Child todo", state: :pending}]
+      },
+      "child_2" => %{
+        agent_id: "child_2",
+        task_id: "task_1",
+        status: :completed,
+        parent_id: "root_1",
+        children: []
+      },
+      "grand_1" => %{
+        agent_id: "grand_1",
+        task_id: "task_1",
+        status: :working,
+        parent_id: "child_1",
+        children: []
+      }
+    }
+  end
+
+  defp create_packet1_tasks do
+    %{
+      "task_1" => %{
+        id: "task_1",
+        prompt: "Packet 1 task",
+        root_agent_id: "root_1",
+        status: "running",
+        updated_at: ~U[2026-03-17 10:00:00Z]
+      }
+    }
+  end
+
+  defp render_packet1_tree(conn, agents, tasks, extra_assigns, sandbox_owner) do
+    live_isolated(conn, QuoracleWeb.LiveComponentTestHelper,
+      session: %{
+        "sandbox_owner" => sandbox_owner,
+        "component" => QuoracleWeb.UI.TaskTree,
+        "assigns" =>
+          Map.merge(
+            %{
+              agents: agents,
+              tasks: tasks,
+              selected_agent_id: nil,
+              agent_alive_map: %{},
+              message_forms: %{},
+              cost_data: %{agents: %{}, tasks: %{}},
+              use_precomputed_costs: true,
+              root_pid: self()
+            },
+            extra_assigns
+          )
+      }
+    )
+  end
+
   describe "rendering" do
     test "displays agent hierarchy as tree", %{conn: conn, sandbox_owner: sandbox_owner} do
       # Component will be rendered in isolation
@@ -851,7 +922,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
 
   # ============================================================
   # R11-R15: Task-Level Cost Display (fix-ui-costs-20251213)
-  # Tests for CostDisplay in task header and costs_updated_at propagation.
+  # Tests for CostDisplay in task header and cost_data propagation.
   # ============================================================
 
   describe "R11-R15: task-level cost display" do
@@ -915,7 +986,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents,
               tasks: tasks,
               selected_agent_id: nil,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: %{agents: %{}, tasks: %{}},
               root_pid: self()
             }
           }
@@ -983,7 +1054,10 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents,
               tasks: tasks,
               selected_agent_id: nil,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: %{
+                agents: %{agent_record.agent_id => Decimal.new("0.35")},
+                tasks: %{task.id => Decimal.new("0.35")}
+              },
               root_pid: self()
             }
           }
@@ -995,15 +1069,13 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
       assert html =~ "$0.35"
     end
 
-    # R13: costs_updated_at Propagation to AgentNode [UNIT]
-    test "R13: costs_updated_at passed to AgentNode components", %{
+    # R13: cost_data Propagation to AgentNode [UNIT]
+    test "R13: cost_data passed to AgentNode components", %{
       conn: conn,
       sandbox_owner: sandbox_owner
     } do
       agents = create_test_agents()
       tasks = create_test_tasks()
-
-      costs_updated_at = System.monotonic_time()
 
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.LiveComponentTestHelper,
@@ -1014,7 +1086,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents,
               tasks: tasks,
               selected_agent_id: nil,
-              costs_updated_at: costs_updated_at,
+              cost_data: %{agents: %{}, tasks: %{}},
               root_pid: self()
             }
           }
@@ -1027,7 +1099,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
 
       html = render(view)
 
-      # AgentNode should be rendered (costs_updated_at propagated internally)
+      # AgentNode should be rendered (cost_data propagated internally)
       assert html =~ "child_1"
       assert html =~ "child_2"
     end
@@ -1085,7 +1157,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents,
               tasks: tasks,
               selected_agent_id: nil,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: %{agents: %{}, tasks: %{}},
               root_pid: self()
             }
           }
@@ -1098,7 +1170,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
     end
 
     # R15: Cost Update Without Refresh [SYSTEM]
-    @tag :acceptance
+    @tag :integration
     test "R15: task cost updates when agent costs change", %{
       conn: conn,
       task: task,
@@ -1125,8 +1197,6 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
         }
       }
 
-      initial_timestamp = System.monotonic_time()
-
       {:ok, view, _html} =
         live_isolated(conn, QuoracleWeb.LiveComponentTestHelper,
           session: %{
@@ -1136,7 +1206,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents,
               tasks: tasks,
               selected_agent_id: nil,
-              costs_updated_at: initial_timestamp,
+              cost_data: %{agents: %{}, tasks: %{}},
               root_pid: self()
             }
           }
@@ -1156,25 +1226,26 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
           metadata: %{}
         })
 
-      # Simulate parent bumping costs_updated_at (triggers re-render)
-      new_timestamp = System.monotonic_time()
-
+      # Simulate parent pushing updated cost_data with batch totals
       send(
         view.pid,
         {:update_component,
          %{
-           costs_updated_at: new_timestamp
+           cost_data: %{
+             agents: %{agent_record.agent_id => Decimal.new("0.50")},
+             tasks: %{task.id => Decimal.new("0.50")}
+           }
          }}
       )
 
       html = render(view)
 
-      # Cost should now show (after costs_updated_at bump triggers re-query)
+      # Cost should now show via precomputed cost_data
       assert html =~ "$0.50"
     end
 
     # R16: Task Per-Model Cost Breakdown [ACCEPTANCE]
-    @tag :acceptance
+    @tag :integration
     test "R16: user sees per-model cost breakdown at task level", %{
       conn: conn,
       task: task,
@@ -1237,7 +1308,10 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents,
               tasks: tasks,
               selected_agent_id: nil,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: %{
+                agents: %{agent_record.agent_id => Decimal.new("0.35")},
+                tasks: %{task.id => Decimal.new("0.35")}
+              },
               root_pid: self()
             }
           }
@@ -1333,7 +1407,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents,
               tasks: tasks,
               selected_agent_id: nil,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: %{agents: %{}, tasks: %{}},
               root_pid: self()
             }
           }
@@ -1391,7 +1465,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents,
               tasks: tasks,
               selected_agent_id: nil,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: %{agents: %{}, tasks: %{}},
               root_pid: self()
             }
           }
@@ -1451,7 +1525,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents,
               tasks: tasks,
               selected_agent_id: nil,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: %{agents: %{}, tasks: %{task.id => Decimal.new("35.00")}},
               root_pid: self()
             }
           }
@@ -1518,7 +1592,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents,
               tasks: tasks,
               selected_agent_id: nil,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: %{agents: %{}, tasks: %{small_budget_task.id => Decimal.new("15.00")}},
               root_pid: self()
             }
           }
@@ -1567,7 +1641,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents,
               tasks: tasks,
               selected_agent_id: nil,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: %{agents: %{}, tasks: %{}},
               root_pid: self()
             }
           }
@@ -1588,12 +1662,15 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
           metadata: %{}
         })
 
-      # Bump costs_updated_at to trigger re-render
+      # Push updated cost_data with the new cost
       send(
         view.pid,
         {:update_component,
          %{
-           costs_updated_at: System.monotonic_time()
+           cost_data: %{
+             agents: %{},
+             tasks: %{task.id => Decimal.new("45.00")}
+           }
          }}
       )
 
@@ -1675,7 +1752,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents_low,
               tasks: tasks_low,
               selected_agent_id: nil,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: %{agents: %{}, tasks: %{task_low.id => Decimal.new("50.00")}},
               root_pid: self()
             }
           }
@@ -1717,7 +1794,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents_high,
               tasks: tasks_high,
               selected_agent_id: nil,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: %{agents: %{}, tasks: %{task_high.id => Decimal.new("90.00")}},
               root_pid: self()
             }
           }
@@ -1775,7 +1852,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents,
               tasks: tasks,
               selected_agent_id: nil,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: %{agents: %{}, tasks: %{}},
               root_pid: self()
             }
           }
@@ -1785,6 +1862,160 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
 
       # Should show a progress bar with specific class
       assert html =~ "task-budget-progress"
+    end
+  end
+
+  describe "Packet 1 ARC criteria (UI_TaskTree v13.0)" do
+    test "R36: agent nodes rendered as LiveComponent instances", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      agents = create_packet1_agents()
+      tasks = create_packet1_tasks()
+
+      {:ok, view, _html} = render_packet1_tree(conn, agents, tasks, %{}, sandbox_owner)
+
+      html = render(view)
+
+      # After Packet 1: root agent rendered via AgentNode LiveComponent (has id="agent-node-...")
+      assert html =~ ~s(id="agent-node-root_1")
+    end
+
+    test "R37: toggle_expand via AgentNode routes to TaskTree", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      agents = create_packet1_agents()
+      tasks = create_packet1_tasks()
+
+      {:ok, view, _html} = render_packet1_tree(conn, agents, tasks, %{}, sandbox_owner)
+
+      refute render(view) =~ "Child todo"
+
+      view
+      |> element("[phx-click='toggle_expand'][phx-value-agent-id='root_1']")
+      |> render_click()
+
+      assert render(view) =~ "Child todo"
+    end
+
+    test "R38: select_agent via AgentNode routes to dashboard", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      agents = create_packet1_agents()
+      tasks = create_packet1_tasks()
+
+      {:ok, view, _html} =
+        render_packet1_tree(conn, agents, tasks, %{selected_agent_id: "root_1"}, sandbox_owner)
+
+      html = render(view)
+
+      assert html =~ "agent-selected"
+      # After Packet 1: rendered via AgentNode LiveComponent
+      assert html =~ ~s(id="agent-node-root_1")
+    end
+
+    test "R39: direct message via AgentNode sends to dashboard", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      agents = create_packet1_agents()
+      tasks = create_packet1_tasks()
+
+      {:ok, view, _html} =
+        render_packet1_tree(
+          conn,
+          agents,
+          tasks,
+          %{
+            agent_alive_map: %{"root_1" => true},
+            message_forms: %{"root_1" => %{expanded: true, input: "hello"}}
+          },
+          sandbox_owner
+        )
+
+      html = render(view)
+
+      assert html =~ ~s(phx-submit="send_direct_message_tree")
+      assert html =~ "hello"
+      assert html =~ ~s(data-agent-id="root_1")
+    end
+
+    test "R40: agent cost and budget badges render correctly", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      agents = create_packet1_agents()
+      tasks = create_packet1_tasks()
+
+      {:ok, view, _html} =
+        render_packet1_tree(
+          conn,
+          agents,
+          tasks,
+          %{
+            cost_data: %{agents: %{"root_1" => Decimal.new("0.42")}, tasks: %{}}
+          },
+          sandbox_owner
+        )
+
+      html = render(view)
+
+      assert html =~ "$0.42"
+      assert html =~ ~s(id="cost-badge-tasktree-root_1")
+      assert html =~ "budget-badge"
+    end
+
+    test "R41: expanded agent shows children as nested AgentNode components", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      agents = create_packet1_agents()
+      tasks = create_packet1_tasks()
+
+      {:ok, view, _html} = render_packet1_tree(conn, agents, tasks, %{}, sandbox_owner)
+
+      view
+      |> element("[phx-click='toggle_expand'][phx-value-agent-id='root_1']")
+      |> render_click()
+
+      html = render(view)
+
+      assert html =~ "child_1"
+      assert html =~ "child_2"
+    end
+
+    test "TaskTree renders agent tree with correct visual output", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      agents = create_packet1_agents()
+      tasks = create_packet1_tasks()
+
+      {:ok, view, _html} =
+        render_packet1_tree(
+          conn,
+          agents,
+          tasks,
+          %{
+            selected_agent_id: "root_1",
+            agent_alive_map: %{"root_1" => true},
+            cost_data: %{agents: %{"root_1" => Decimal.new("0.42")}, tasks: %{}}
+          },
+          sandbox_owner
+        )
+
+      view
+      |> element("[phx-click='toggle_expand'][phx-value-agent-id='root_1']")
+      |> render_click()
+
+      html = render(view)
+
+      # After Packet 1: rendered via AgentNode LiveComponent
+      assert html =~ ~s(id="agent-node-root_1")
+      assert html =~ "Child todo"
+      assert html =~ ~s(id="cost-badge-tasktree-root_1")
     end
   end
 
@@ -1888,7 +2119,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents,
               tasks: tasks,
               selected_agent_id: nil,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: %{agents: %{}, tasks: %{}},
               root_pid: self()
             }
           }
@@ -1938,7 +2169,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents,
               tasks: tasks,
               selected_agent_id: nil,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: %{agents: %{}, tasks: %{}},
               root_pid: self()
             }
           }
@@ -1987,7 +2218,7 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
               agents: agents,
               tasks: tasks,
               selected_agent_id: nil,
-              costs_updated_at: System.monotonic_time(),
+              cost_data: %{agents: %{}, tasks: %{}},
               root_pid: self()
             }
           }

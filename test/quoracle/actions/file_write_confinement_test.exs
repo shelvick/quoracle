@@ -166,6 +166,31 @@ defmodule Quoracle.Actions.FileWriteConfinementTest do
     refute File.exists?(blocked_in_workspace)
   end
 
+  test "file_write with strict confinement blocks unlisted skill", %{blocked_dir: blocked_dir} do
+    path = Path.join(blocked_dir, "strict-blocked.txt")
+
+    confinement = %{
+      "different-skill" => %{
+        "paths" => [Path.join(blocked_dir, "**")],
+        "read_only_paths" => []
+      }
+    }
+
+    opts = [
+      parent_config: %{
+        grove_confinement: confinement,
+        grove_confinement_mode: "strict",
+        skill_name: "agentic-coding"
+      }
+    ]
+
+    assert {:error, {:confinement_violation, %{path: ^path, access_type: :write} = details}} =
+             FileWrite.execute(%{path: path, mode: :write, content: "blocked"}, "agent-1", opts)
+
+    assert details.skill == "agentic-coding"
+    refute File.exists?(path)
+  end
+
   test "file_write without confinement passes through", %{blocked_dir: blocked_dir} do
     path = Path.join(blocked_dir, "passthrough.txt")
 

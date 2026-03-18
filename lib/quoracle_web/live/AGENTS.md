@@ -3,7 +3,7 @@
 ## DashboardLive (6-module architecture, 3-panel layout)
 
 **Modules:**
-- Main coordinator (316 lines): 3-panel UI (Unified TaskTree 5/12, Logs 1/3, Mailbox 1/4), task persistence, pause/resume, real-time updates
+- Main coordinator (493 lines): 3-panel UI (Unified TaskTree 5/12, Logs 1/3, Mailbox 1/4), task persistence, pause/resume, real-time updates, cost debounce, log debounce
 - DataLoader (231 lines): Extracted data loading/merging helpers (2025-12 REFACTOR)
   - load_tasks_from_db/2: Query DB + Registry, merge state
   - merge_task_state/2: Combine persisted tasks with live agents
@@ -117,4 +117,29 @@ TaskManager, TaskRestorer, RegistryQueries, Core, PubSub, UI.TaskTree, UI.LogVie
   - Falls back to bare `task_description` when user_prompt is empty
   - Replaces bare `task_description` send (bug: fields were being discarded since Jan 2026 user_prompt removal refactor)
 
-Test coverage: 51 dashboard_live_test (48 base + 3 new R6-R9), 16 dashboard_delete_integration_test, 16 dashboard_3panel_integration_test, 16 buffer_integration_test (UI persistence R17-R24, R35-R42), 28+ grove_integration_test (R69 grove_confinement threading), 2 dashboard_create_task_integration_test (R71-R76 initial message acceptance tests)
+## Dashboard Performance — Batch Costs + Panel Isolation (2026-03-16, fix-20260316-051518)
+- **DashboardLive v19.0**: Batch cost queries + panel render isolation
+  - `cost_data` assign replaces `costs_updated_at` — contains pre-computed `%{agents: %{}, tasks: %{}}` from `Aggregator.batch_totals/2`
+  - `filtered_logs` assign pre-computed in handlers instead of inline in render
+  - `agent_alive_map` passed to Mailbox instead of full `@agents` map
+  - Initial cost hydration: `send(self(), :flush_cost_updates)` on connected mount
+- **MessageHandlers**: `recompute_filtered_logs/1` private function called in 4 handlers (handle_select_agent, handle_agent_spawned, handle_delete_agent, handle_log_entry)
+- **Render**: TaskTree receives `cost_data`, LogView receives `filtered_logs`, Mailbox receives `agent_alive_map`
+
+Test coverage: 69 dashboard_live_test, 16 dashboard_delete_integration_test, 20 dashboard_3panel_integration_test, 16 buffer_integration_test (UI persistence R17-R24, R35-R42), 28+ grove_integration_test (R69 grove_confinement threading), 2 dashboard_create_task_integration_test (R71-R76 initial message acceptance tests)
+
+## Dashboard Performance — Log Debounce + AgentNode LiveComponent (2026-03-17, perf-20260317-034445)
+- **DashboardLive v20.0**: Log debounce timer (300ms default, mirrors cost debounce)
+  - `log_buffer`, `log_refresh_timer`, `log_debounce_ms` assigns in mount (both branches)
+  - `handle_info(:flush_log_updates)`: merges buffer (reversed for chronological order) into logs, recomputes filtered_logs, clears buffer+timer
+  - Session-injectable: `"log_debounce_ms" => 0` for deterministic tests (two-render pattern)
+- **MessageHandlers v20.0**: `handle_log_entry/2` buffers + schedules timer instead of immediate assign
+  - Dedup against both `socket.assigns.logs` AND `socket.assigns.log_buffer`
+  - `schedule_log_flush/1`: `send/2` for 0ms, `Process.send_after/3` for production
+  - `@default_log_debounce_ms 300` module attribute
+- **TaskTree v13.0**: `render_agent_node/1` function component replaced with `<.live_component module={AgentNode}>`
+  - Per-node diffing: each AgentNode has independent update/2 lifecycle
+  - Events route to TaskTree via phx-target={@target}
+- **LogView v5.0**: Pre-compute `display_logs` in `update/2` instead of inline filtering in render
+  - `display_logs/2` private helper: filter_by_level + Enum.take(-100)
+  - Render uses `@display_logs` directly

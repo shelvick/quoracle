@@ -19,6 +19,7 @@ defmodule Quoracle.Actions.Spawn.TopologyResolver do
     parent_config = Map.get(deps, :parent_config, %{})
     topology = Map.get(deps, :grove_topology) || Map.get(parent_config, :grove_topology)
     grove_path = Map.get(deps, :grove_path) || Map.get(parent_config, :grove_path)
+    grove_vars = Map.get(params, :grove_vars) || Map.get(params, "grove_vars")
 
     child_skill_names = normalize_skill_names(Map.get(params, :skills))
 
@@ -28,36 +29,18 @@ defmodule Quoracle.Actions.Spawn.TopologyResolver do
       |> Enum.map(&Map.get(&1, :name))
       |> Enum.filter(&is_binary/1)
 
-    edge = SpawnContractResolver.find_edge(topology, parent_skill_names, child_skill_names)
+    case SpawnContractResolver.find_edge(topology, parent_skill_names, child_skill_names) do
+      edge when is_map(edge) ->
+        apply_matched_spawn_contract(edge, grove_path, params, grove_vars)
 
-    cond do
-      not is_map(edge) ->
+      _ ->
         if is_map(topology) and child_skill_names != [] do
           Logger.info(
             "Spawn: no topology edge for parent skills #{inspect(parent_skill_names)} -> child skills #{inspect(child_skill_names)}"
           )
         end
 
-        {:ok, params}
-
-      not is_binary(grove_path) ->
-        {:ok, params}
-
-      true ->
-        case SpawnContractResolver.resolve_auto_inject(edge, grove_path, params) do
-          {:ok, injected} ->
-            merged =
-              params
-              |> Map.put(:skills, injected.skills)
-              |> maybe_put_param(:profile, injected.profile)
-              |> maybe_put_param(:downstream_constraints, injected.constraints)
-
-            {:ok, merged}
-
-          {:error, reason} ->
-            Logger.warning("Spawn contract auto-inject failed: #{inspect(reason)}")
-            {:ok, params}
-        end
+        {:ok, strip_grove_vars(params)}
     end
   end
 
@@ -131,7 +114,43 @@ defmodule Quoracle.Actions.Spawn.TopologyResolver do
   @doc """
   Puts a parameter only if the value is non-nil.
   """
-  @spec maybe_put_param(map(), atom(), String.t() | nil) :: map()
+  @spec maybe_put_param(map(), atom(), term() | nil) :: map()
   def maybe_put_param(map, _key, nil), do: map
   def maybe_put_param(map, key, value), do: Map.put(map, key, value)
+
+  @spec apply_matched_spawn_contract(map(), String.t() | nil, map(), map() | nil) ::
+          {:ok, map()} | {:error, term()}
+  defp apply_matched_spawn_contract(edge, grove_path, params, grove_vars) do
+    :ok = SpawnContractResolver.validate_required_context(edge, grove_vars)
+
+    if is_binary(grove_path) do
+      case SpawnContractResolver.resolve_auto_inject(edge, grove_path, params) do
+        {:ok, injected} ->
+          merged =
+            params
+            |> maybe_put_param(:skills, non_empty_skills(injected.skills))
+            |> maybe_put_param(:profile, injected.profile)
+            |> maybe_put_param(:downstream_constraints, injected.constraints)
+
+          {:ok, merged}
+
+        {:error, reason} ->
+          Logger.warning("Spawn contract auto-inject failed: #{inspect(reason)}")
+          {:ok, params}
+      end
+    else
+      {:ok, params}
+    end
+  end
+
+  @spec non_empty_skills([String.t()]) :: [String.t()] | nil
+  defp non_empty_skills([]), do: nil
+  defp non_empty_skills(skills) when is_list(skills), do: skills
+
+  @spec strip_grove_vars(map()) :: map()
+  defp strip_grove_vars(params) when is_map(params) do
+    params
+    |> Map.delete(:grove_vars)
+    |> Map.delete("grove_vars")
+  end
 end

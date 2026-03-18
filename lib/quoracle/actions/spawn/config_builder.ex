@@ -120,6 +120,7 @@ defmodule Quoracle.Actions.Spawn.ConfigBuilder do
       normalized_params
       |> Map.delete(:_profile_data)
       |> Map.delete(:_skills_metadata)
+      |> Map.delete(:grove_vars)
 
     # Pass sandbox_owner for test DB access in LLM summarization Tasks
     # v16.0: Include cost context so FieldTransformer.maybe_add_cost_context/2 can record costs
@@ -187,6 +188,7 @@ defmodule Quoracle.Actions.Spawn.ConfigBuilder do
       :governance_config,
       :grove_hard_rules,
       :grove_confinement,
+      :grove_confinement_mode,
       :grove_topology,
       :grove_path,
       :grove_skills_path,
@@ -194,12 +196,16 @@ defmodule Quoracle.Actions.Spawn.ConfigBuilder do
       :grove_workspace,
       # Test isolation - required for spawned children in tests
       :model_pool,
+      :test_opts,
       :simulate_failure,
       :test_pid,
       :force_init_error
     ]
 
-    inherited_from_parent = Map.take(parent_config, inheritable_keys)
+    inherited_from_parent =
+      parent_config
+      |> Map.take(inheritable_keys)
+      |> resolve_confinement_templates(Map.get(normalized_params, :grove_vars))
 
     # Build config with essential fields
     # Start with inherited config to preserve whitelisted fields (temperature, etc.)
@@ -321,4 +327,49 @@ defmodule Quoracle.Actions.Spawn.ConfigBuilder do
         end
     end
   end
+
+  @spec resolve_confinement_templates(map(), map() | nil) :: map()
+  defp resolve_confinement_templates(config, grove_vars)
+       when not is_map(config) or grove_vars in [nil, %{}],
+       do: config
+
+  defp resolve_confinement_templates(config, grove_vars) when is_map(grove_vars) do
+    case Map.get(config, :grove_confinement) do
+      confinement when is_map(confinement) ->
+        Map.put(config, :grove_confinement, resolve_confinement_map(confinement, grove_vars))
+
+      _ ->
+        config
+    end
+  end
+
+  @spec resolve_confinement_map(map(), map()) :: map()
+  defp resolve_confinement_map(confinement, grove_vars) do
+    Map.new(confinement, fn {skill_name, entry} ->
+      {skill_name, resolve_confinement_entry(entry, grove_vars)}
+    end)
+  end
+
+  @spec resolve_confinement_entry(term(), map()) :: term()
+  defp resolve_confinement_entry(entry, grove_vars) when is_map(entry) do
+    entry
+    |> Map.update("paths", [], &Enum.map(&1, fn path -> resolve_template(path, grove_vars) end))
+    |> Map.update(
+      "read_only_paths",
+      [],
+      &Enum.map(&1, fn path -> resolve_template(path, grove_vars) end)
+    )
+  end
+
+  defp resolve_confinement_entry(entry, _grove_vars), do: entry
+
+  @spec resolve_template(term(), map()) :: term()
+  defp resolve_template(path, grove_vars) when is_binary(path) do
+    Enum.reduce(grove_vars, path, fn {key, replacement}, acc ->
+      placeholder = "{" <> to_string(key) <> "}"
+      String.replace(acc, placeholder, to_string(replacement))
+    end)
+  end
+
+  defp resolve_template(value, _grove_vars), do: value
 end

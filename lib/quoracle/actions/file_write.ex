@@ -66,9 +66,10 @@ defmodule Quoracle.Actions.FileWrite do
   defp validate_confinement(path, mode, opts) when mode in [:write, :edit] do
     parent_config = Keyword.get(opts, :parent_config, %{})
     confinement = parent_config_value(parent_config, :grove_confinement)
+    confinement_mode = parent_config_value(parent_config, :grove_confinement_mode)
     skill_name = parent_config_value(parent_config, :skill_name)
 
-    HardRuleEnforcer.check_file_access(path, :write, confinement, skill_name)
+    HardRuleEnforcer.check_file_access(path, :write, confinement, skill_name, confinement_mode)
   end
 
   defp validate_confinement(_path, _mode, _opts), do: :ok

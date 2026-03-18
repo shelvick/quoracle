@@ -91,7 +91,6 @@ defmodule Quoracle.Agent.Consensus.TestMode do
       !Keyword.has_key?(opts, :seed_action) &&
       !Keyword.get(opts, :track_temperatures, false) &&
       !Keyword.get(opts, :force_condense, false) &&
-      !Keyword.get(opts, :force_persist, false) &&
       !Map.get(state, :force_reflection, false) &&
       !Keyword.get(opts, :force_reflection, false) &&
       !any_simulate_flags?(opts)
