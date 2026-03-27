@@ -4,7 +4,7 @@ defmodule Quoracle.MixProject do
   def project do
     [
       app: :quoracle,
-      version: "0.2.2",
+      version: "0.2.3",
       elixir: "~> 1.18",
       listeners: [Phoenix.CodeReloader],
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -155,7 +155,7 @@ defmodule Quoracle.MixProject do
 
       # LLM client
       {:req_llm, "~> 1.5"},
-      {:llm_db, "~> 2026.2", override: true},
+      {:llm_db, "~> 2026.3", override: true},
       {:req_cassette, "~> 0.5", only: :test},
 
       # Image resizing

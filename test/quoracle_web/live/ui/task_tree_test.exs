@@ -144,6 +144,21 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
     )
   end
 
+  defp live_components!(view) do
+    assert {:ok, components} = Phoenix.LiveView.Debug.live_components(view.pid)
+    components
+  end
+
+  defp agent_node_component!(view, id) do
+    component =
+      Enum.find(live_components!(view), fn component ->
+        component.module == QuoracleWeb.UI.AgentNode and component.id == id
+      end)
+
+    assert component, "expected AgentNode component #{id} to be rendered"
+    component
+  end
+
   describe "rendering" do
     test "displays agent hierarchy as tree", %{conn: conn, sandbox_owner: sandbox_owner} do
       # Component will be rendered in isolation
@@ -2016,6 +2031,175 @@ defmodule QuoracleWeb.UI.TaskTreeTest do
       assert html =~ ~s(id="agent-node-root_1")
       assert html =~ "Child todo"
       assert html =~ ~s(id="cost-badge-tasktree-root_1")
+    end
+  end
+
+  describe "Packet 2 ARC criteria (UI_TaskTree v14.0)" do
+    test "R55: passes agent_cost scalar to AgentNode", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        render_packet1_tree(
+          conn,
+          create_packet1_agents(),
+          create_packet1_tasks(),
+          %{
+            cost_data: %{
+              agents: %{
+                "root_1" => Decimal.new("0.42"),
+                "child_1" => Decimal.new("0.12")
+              },
+              tasks: %{}
+            },
+            agent_alive_map: %{"root_1" => true, "child_1" => false}
+          },
+          sandbox_owner
+        )
+
+      component = agent_node_component!(view, "agent-node-root_1")
+
+      assert Map.get(component.assigns, :agent_cost) == Decimal.new("0.42")
+      refute Map.has_key?(component.assigns, :cost_data)
+    end
+
+    test "R56: passes agent_message_form scalar to AgentNode", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      message_form = %{expanded: true, input: "hello from packet 2"}
+
+      {:ok, view, _html} =
+        render_packet1_tree(
+          conn,
+          create_packet1_agents(),
+          create_packet1_tasks(),
+          %{
+            agent_alive_map: %{"root_1" => true},
+            message_forms: %{"root_1" => message_form}
+          },
+          sandbox_owner
+        )
+
+      component = agent_node_component!(view, "agent-node-root_1")
+
+      assert Map.get(component.assigns, :agent_message_form) == message_form
+      refute Map.has_key?(component.assigns, :message_forms)
+    end
+
+    test "R57: omits full maps from AgentNode assigns", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        render_packet1_tree(
+          conn,
+          create_packet1_agents(),
+          create_packet1_tasks(),
+          %{
+            cost_data: %{agents: %{"root_1" => Decimal.new("0.42")}, tasks: %{}},
+            agent_alive_map: %{"root_1" => true},
+            message_forms: %{"root_1" => %{expanded: true, input: "hello"}}
+          },
+          sandbox_owner
+        )
+
+      component = agent_node_component!(view, "agent-node-root_1")
+
+      assert Map.get(component.assigns, :agent_cost) == Decimal.new("0.42")
+      assert Map.get(component.assigns, :agent_message_form) == %{expanded: true, input: "hello"}
+      refute Map.has_key?(component.assigns, :cost_data)
+      refute Map.has_key?(component.assigns, :agent_alive_map)
+      refute Map.has_key?(component.assigns, :message_forms)
+    end
+
+    test "R58: enriches display agents before render", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        render_packet1_tree(
+          conn,
+          create_packet1_agents(),
+          create_packet1_tasks(),
+          %{
+            cost_data: %{
+              agents: %{
+                "root_1" => Decimal.new("0.42"),
+                "child_1" => Decimal.new("0.12")
+              },
+              tasks: %{}
+            },
+            agent_alive_map: %{"root_1" => true, "child_1" => false}
+          },
+          sandbox_owner
+        )
+
+      display_agents = agent_node_component!(view, "agent-node-root_1").assigns.agents
+
+      assert Map.get(display_agents["root_1"], :ui_total_cost) == Decimal.new("0.42")
+      assert Map.get(display_agents["root_1"], :ui_alive) == true
+      assert Map.get(display_agents["child_1"], :ui_total_cost) == Decimal.new("0.12")
+      assert Map.get(display_agents["child_1"], :ui_alive) == false
+    end
+
+    test "R59: cost badge still renders from scalar cost", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        render_packet1_tree(
+          conn,
+          create_packet1_agents(),
+          create_packet1_tasks(),
+          %{
+            cost_data: %{
+              agents: %{
+                "root_1" => Decimal.new("0.42"),
+                "child_1" => Decimal.new("0.12")
+              },
+              tasks: %{}
+            }
+          },
+          sandbox_owner
+        )
+
+      view
+      |> element("[phx-click='toggle_expand'][phx-value-agent-id='root_1']")
+      |> render_click()
+
+      html = render(view)
+      child_component = agent_node_component!(view, "agent-node-child_1")
+
+      assert html =~ "$0.42"
+      assert html =~ "$0.12"
+      assert child_component.assigns.agent_cost == Decimal.new("0.12")
+    end
+
+    test "R60: message form still works with scalar prop", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      message_form = %{expanded: true, input: "hello from packet 2"}
+
+      {:ok, view, _html} =
+        render_packet1_tree(
+          conn,
+          create_packet1_agents(),
+          create_packet1_tasks(),
+          %{
+            agent_alive_map: %{"root_1" => true},
+            message_forms: %{"root_1" => message_form}
+          },
+          sandbox_owner
+        )
+
+      html = render(view)
+      component = agent_node_component!(view, "agent-node-root_1")
+
+      assert html =~ ~s(phx-submit="send_direct_message_tree")
+      assert html =~ "hello from packet 2"
+      assert component.assigns.agent_message_form == message_form
     end
   end
 

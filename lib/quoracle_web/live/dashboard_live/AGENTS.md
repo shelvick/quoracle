@@ -9,6 +9,7 @@
 
 ## Subdirectories
 - message_handlers/helpers.ex: Shared helper functions for MessageHandlers
+- log_detail_truncation.ex: LogDetailTruncation module — truncate_buffered_logs/1, store_log_detail/2, maybe_truncate_raw_responses/1, maybe_truncate_sent_messages/1 (extracted in v21.0, perf-20260321-012101)
 
 ## Extracted Grove Handlers (fix-20260311-211553 REFACTOR)
 4 grove-related `handle_info` handlers extracted from `dashboard_live.ex` to `message_handlers.ex` for 500-line limit compliance:

@@ -3,9 +3,9 @@
 ## Test Files
 
 ### Dashboard Tests
-- dashboard_live_test.exs: 51 tests (48 base + 3 pause/resume pipeline R6-R9)
+- dashboard_live_test.exs: 69 tests (51 base + perf v19-v21 cost/truncation/lazy-load tests)
 - dashboard_delete_integration_test.exs: 16 tests
-- dashboard_3panel_integration_test.exs: 16 tests
+- dashboard_3panel_integration_test.exs: 20 tests
 - buffer_integration_test.exs: 16 tests (UI persistence R17-R24, R35-R42)
 - dashboard_async_pause_test.exs: async pause/resume
 - dashboard_auto_subscription_test.exs: auto-subscribe to agent topics

@@ -43,6 +43,15 @@ defmodule QuoracleWeb.UI.TaskTree do
       |> assign_new(:profiles, fn -> [] end)
       |> assign_new(:groves, fn -> [] end)
       |> assign_new(:groves_path, fn -> nil end)
+      |> assign(
+        :display_agents,
+        enrich_display_agents(
+          assigns[:agents] || socket.assigns[:agents] || %{},
+          assigns[:cost_data] || socket.assigns[:cost_data] || %{agents: %{}, tasks: %{}},
+          assigns[:agent_alive_map] || socket.assigns[:agent_alive_map] || %{},
+          assigns[:message_forms] || socket.assigns[:message_forms] || %{}
+        )
+      )
 
     {:ok, socket}
   end
@@ -192,17 +201,16 @@ defmodule QuoracleWeb.UI.TaskTree do
                 <.live_component
                   module={AgentNode}
                   id={"agent-node-#{task[:root_agent_id]}"}
-                  agent={@agents[task[:root_agent_id]]}
-                  agents={@agents}
+                  agent={@display_agents[task[:root_agent_id]]}
+                  agents={@display_agents}
                   selected_agent_id={@selected_agent_id}
                   expanded_set={@expanded}
                   depth={0}
                   target={@myself}
-                  agent_alive_map={@agent_alive_map || %{}}
                   agent_alive={Map.get(@agent_alive_map || %{}, task[:root_agent_id], false)}
                   root_pid={@root_pid}
-                  message_forms={@message_forms}
-                  cost_data={@cost_data}
+                  agent_message_form={Map.get(@message_forms || %{}, task[:root_agent_id], %{})}
+                  agent_cost={get_in(@cost_data, [:agents, task[:root_agent_id]])}
                   use_precomputed_costs={@use_precomputed_costs}
                   component_prefix="tasktree-"
                 />
@@ -224,6 +232,18 @@ defmodule QuoracleWeb.UI.TaskTree do
   end
 
   defp task_total(cost_data, task_id), do: get_in(cost_data, [:tasks, task_id])
+
+  defp enrich_display_agents(agents, cost_data, agent_alive_map, message_forms) do
+    Enum.into(agents, %{}, fn {agent_id, agent} ->
+      enriched_agent =
+        agent
+        |> Map.put(:ui_total_cost, get_in(cost_data, [:agents, agent_id]))
+        |> Map.put(:ui_alive, Map.get(agent_alive_map, agent_id, false))
+        |> Map.put(:ui_message_form, Map.get(message_forms, agent_id, %{}))
+
+      {agent_id, enriched_agent}
+    end)
+  end
 
   @doc """
   Handles expand/collapse toggle for agent nodes.

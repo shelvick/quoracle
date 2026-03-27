@@ -66,6 +66,47 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
     )
   end
 
+  defp render_centralized_agent_node(conn, agent, extra_assigns, sandbox_owner) do
+    live_isolated(conn, QuoracleWeb.LiveComponentTestHelper,
+      session: %{
+        "sandbox_owner" => sandbox_owner,
+        "component" => QuoracleWeb.UI.AgentNode,
+        "assigns" =>
+          Map.merge(
+            %{
+              id: "agent-node-#{agent[:agent_id]}",
+              agent: agent,
+              agents: %{agent[:agent_id] => agent},
+              depth: 0,
+              selected_agent_id: nil,
+              expanded_set: MapSet.new(),
+              agent_alive: false,
+              target: "#task-tree",
+              use_precomputed_costs: true,
+              component_prefix: "tasktree-",
+              root_pid: self()
+            },
+            extra_assigns
+          )
+      }
+    )
+  end
+
+  defp live_components!(view) do
+    assert {:ok, components} = Phoenix.LiveView.Debug.live_components(view.pid)
+    components
+  end
+
+  defp agent_node_component!(view, id) do
+    component =
+      Enum.find(live_components!(view), fn component ->
+        component.module == QuoracleWeb.UI.AgentNode and component.id == id
+      end)
+
+    assert component, "expected AgentNode component #{id} to be rendered"
+    component
+  end
+
   defp create_test_agent do
     %{
       agent_id: "test_agent_1",
@@ -1199,6 +1240,169 @@ defmodule QuoracleWeb.UI.AgentNodeTest do
 
     # R14: Removed — per-model detail view was removed from AgentNode in v7.0.
     # Per-model breakdown is shown at the task level via TaskTree CostDisplay detail mode.
+  end
+
+  describe "Packet 2 ARC criteria (UI_AgentNode v8.0)" do
+    test "R31: cost badge uses scalar agent_cost", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      agent = %{create_test_agent() | children: []}
+
+      {:ok, view, _html} =
+        render_centralized_agent_node(
+          conn,
+          agent,
+          %{
+            agent_cost: Decimal.new("0.45"),
+            cost_data: %{agents: %{agent.agent_id => Decimal.new("9.99")}, tasks: %{}}
+          },
+          sandbox_owner
+        )
+
+      html = render(view)
+      component = agent_node_component!(view, "agent-node-#{agent.agent_id}")
+
+      assert component.assigns.agent_cost == Decimal.new("0.45")
+      assert html =~ "$0.45"
+      refute html =~ "$9.99"
+    end
+
+    test "R32: message form uses scalar agent_message_form", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      agent = %{create_test_agent() | children: [], parent_id: nil}
+      scalar_form = %{expanded: true, input: "scalar hello"}
+
+      {:ok, view, _html} =
+        render_centralized_agent_node(
+          conn,
+          agent,
+          %{
+            agent_alive: true,
+            agent_alive_map: %{agent.agent_id => true},
+            agent_message_form: scalar_form,
+            message_forms: %{"#{agent.agent_id}" => %{expanded: true, input: "map hello"}}
+          },
+          sandbox_owner
+        )
+
+      html = render(view)
+      component = agent_node_component!(view, "agent-node-#{agent.agent_id}")
+
+      assert component.assigns.agent_message_form == scalar_form
+      assert html =~ ~s(phx-submit="send_direct_message_tree")
+      assert html =~ "scalar hello"
+      refute html =~ "map hello"
+    end
+
+    test "R33: budget badge uses scalar agent_cost", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      agent =
+        create_test_agent()
+        |> Map.put(:children, [])
+        |> Map.put(:budget_data, %{
+          allocated: Decimal.new("100.00"),
+          committed: Decimal.new("10.00")
+        })
+        |> Map.put(:spent, Decimal.new("0.00"))
+
+      {:ok, view, _html} =
+        render_centralized_agent_node(
+          conn,
+          agent,
+          %{
+            agent_cost: Decimal.new("25.00"),
+            cost_data: %{agents: %{agent.agent_id => Decimal.new("60.00")}, tasks: %{}}
+          },
+          sandbox_owner
+        )
+
+      html = render(view)
+
+      assert html =~ "$65.00 left"
+      refute html =~ "$30.00 left"
+    end
+
+    test "R34: legacy mode still uses cost_data and message_forms maps", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      agent = %{create_test_agent() | children: [], parent_id: nil}
+
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.LiveComponentTestHelper,
+          session: %{
+            "sandbox_owner" => sandbox_owner,
+            "component" => QuoracleWeb.UI.AgentNode,
+            "assigns" => %{
+              id: "agent-node-#{agent.agent_id}",
+              agent: agent,
+              depth: 0,
+              agent_alive: true,
+              agent_alive_map: %{agent.agent_id => true},
+              message_forms: %{agent.agent_id => %{expanded: true, input: "legacy hello"}},
+              cost_data: %{agents: %{agent.agent_id => Decimal.new("0.22")}, tasks: %{}},
+              use_precomputed_costs: true,
+              target: "#task-tree",
+              root_pid: self()
+            }
+          }
+        )
+
+      html = render(view)
+
+      # Legacy mode uses cost_data map for cost display
+      assert html =~ "$0.22"
+      # Legacy mode uses message_forms map for form content
+      assert html =~ "legacy hello"
+      refute html =~ "FunctionClauseError"
+    end
+
+    test "R35: children use scalar assigns from display_agents", %{
+      conn: conn,
+      sandbox_owner: sandbox_owner
+    } do
+      root_agent = %{create_test_agent() | children: ["child_1"]}
+
+      child_agent = %{
+        agent_id: "child_1",
+        task_id: "task_1",
+        status: :idle,
+        parent_id: root_agent.agent_id,
+        children: [],
+        ui_total_cost: Decimal.new("0.12"),
+        ui_alive: true
+      }
+
+      {:ok, view, _html} =
+        render_centralized_agent_node(
+          conn,
+          root_agent,
+          %{
+            agents: %{
+              root_agent.agent_id => Map.put(root_agent, :ui_total_cost, Decimal.new("0.42")),
+              child_agent.agent_id => child_agent
+            },
+            expanded_set: MapSet.new([root_agent.agent_id]),
+            agent_cost: Decimal.new("0.42"),
+            agent_alive: true,
+            agent_alive_map: %{},
+            cost_data: %{agents: %{}, tasks: %{}}
+          },
+          sandbox_owner
+        )
+
+      html = render(view)
+      child_component = agent_node_component!(view, "agent-node-child_1")
+
+      assert html =~ "$0.12"
+      assert child_component.assigns.agent_cost == Decimal.new("0.12")
+      assert child_component.assigns.agent_alive == true
+    end
   end
 
   # ============================================================

@@ -4,9 +4,9 @@
 # - Clones/updates llm_db from GitHub into ~/.cache/llm_db
 # - Checks which API credentials are available
 # - Pulls only from sources with valid credentials (+ public sources)
-# - Builds the snapshot via ETL pipeline
-# - Validates the manifest
-# - Copies updated provider data back to quoracle's deps/llm_db
+# - Builds a snapshot.json via ETL pipeline (llm_db v2026.3+)
+# - Validates the snapshot
+# - Copies snapshot.json back to quoracle's deps/llm_db
 #
 # Usage:
 #   ./scripts/update_llm_db.sh
@@ -154,78 +154,51 @@ if [[ $pull_ok -eq 0 ]]; then
 fi
 
 # ==========================================================================
-# Step 6: Build snapshot
+# Step 6: Build snapshot (v2026.3+ produces a single snapshot.json)
 # ==========================================================================
 step "Building snapshot"
 
-MIX_ENV=prod mix llm_db.build
+MIX_ENV=prod mix llm_db.build --install
 
 # ==========================================================================
-# Step 7: Validate manifest
+# Step 7: Validate snapshot
 # ==========================================================================
-step "Validating manifest"
+step "Validating snapshot"
 
-MANIFEST="${CACHE_DIR}/priv/llm_db/manifest.json"
-PROVIDERS_DIR="${CACHE_DIR}/priv/llm_db/providers"
+SNAPSHOT="${CACHE_DIR}/priv/llm_db/snapshot.json"
 
-# Check manifest exists and is valid JSON
-if [[ ! -f "$MANIFEST" ]]; then
-  fail "Manifest not found at $MANIFEST"
+if [[ ! -f "$SNAPSHOT" ]]; then
+  fail "Snapshot not found at $SNAPSHOT"
   exit 1
 fi
 
-# Validate JSON structure using Elixir (available in the project)
+# Validate JSON structure and print summary
 validation=$(MIX_ENV=prod mix run -e '
-  manifest = File.read!("priv/llm_db/manifest.json") |> Jason.decode!()
+  snapshot = File.read!("priv/llm_db/snapshot.json") |> Jason.decode!()
 
-  # Check required fields
-  unless Map.has_key?(manifest, "version"), do: raise "Missing version"
-  unless Map.has_key?(manifest, "providers"), do: raise "Missing providers"
-  unless is_list(manifest["providers"]), do: raise "providers is not a list"
+  unless Map.has_key?(snapshot, "providers"), do: raise "Missing providers key"
+  unless is_map(snapshot["providers"]), do: raise "providers is not a map"
 
-  providers = manifest["providers"]
-  providers_dir = "priv/llm_db/providers"
+  provider_count = map_size(snapshot["providers"])
+  model_count = Enum.sum(for {_, p} <- snapshot["providers"], do: map_size(p["models"] || %{}))
+  generated = snapshot["generated_at"] || "unknown"
 
-  # Check each listed provider has a JSON file
-  missing =
-    Enum.filter(providers, fn p ->
-      not File.exists?(Path.join(providers_dir, "#{p}.json"))
-    end)
-
-  if missing != [] do
-    raise "Missing provider files: #{Enum.join(missing, ", ")}"
-  end
-
-  # Check no orphaned provider files
-  on_disk =
-    providers_dir
-    |> File.ls!()
-    |> Enum.filter(&String.ends_with?(&1, ".json"))
-    |> Enum.map(&String.replace_suffix(&1, ".json", ""))
-    |> Enum.sort()
-
-  orphaned = on_disk -- providers
-
-  if orphaned != [] do
-    IO.puts("NOTE: #{length(orphaned)} stale provider files in cache (will not be copied)")
-  end
-
-  IO.puts("OK: manifest v#{manifest["version"]}, #{length(providers)} providers, #{length(on_disk)} files on disk")
+  IO.puts("OK: #{provider_count} providers, #{model_count} models, generated #{generated}")
 ' 2>&1)
 
 echo "$validation"
 
 if [[ "$validation" == *"OK:"* ]]; then
-  ok "Manifest is valid"
+  ok "Snapshot is valid"
 else
-  fail "Manifest validation failed"
+  fail "Snapshot validation failed"
   exit 1
 fi
 
 # ==========================================================================
-# Step 8: Copy results back to quoracle deps
+# Step 8: Copy snapshot to quoracle deps
 # ==========================================================================
-step "Copying updated data to quoracle"
+step "Copying updated snapshot to quoracle"
 
 if [[ ! -d "$DEPS_LLMDB" ]]; then
   fail "deps/llm_db not found at $DEPS_LLMDB — run 'mix deps.get' in quoracle first"
@@ -233,45 +206,10 @@ if [[ ! -d "$DEPS_LLMDB" ]]; then
 fi
 
 TARGET_PRIV="${DEPS_LLMDB}/priv/llm_db"
-TARGET_GENERATED="${DEPS_LLMDB}/lib/llm_db/generated"
-SOURCE_GENERATED="${CACHE_DIR}/lib/llm_db/generated/valid_providers.ex"
+mkdir -p "$TARGET_PRIV"
+cp "$SNAPSHOT" "${TARGET_PRIV}/snapshot.json"
 
-# Extract provider list from manifest (plain JSON parse, no mix needed)
-provider_list=$(python3 -c "
-import json, sys
-with open('${MANIFEST}') as f:
-    m = json.load(f)
-for p in m['providers']:
-    print(p)
-")
-
-# Wipe target providers dir and replace with exactly what the build produced.
-# This prevents stale files from the git clone (or previous builds) from
-# persisting and breaking the integrity check.
-rm -f "${TARGET_PRIV}/providers/"*.json
-cp "${MANIFEST}" "${TARGET_PRIV}/manifest.json"
-
-provider_count=0
-while IFS= read -r provider_id; do
-  src="${PROVIDERS_DIR}/${provider_id}.json"
-  if [[ -f "$src" ]]; then
-    cp "$src" "${TARGET_PRIV}/providers/"
-    provider_count=$((provider_count + 1))
-  else
-    warn "Provider '$provider_id' in manifest but missing from build output"
-  fi
-done <<< "$provider_list"
-
-# Copy regenerated valid_providers.ex (build may have added new provider atoms)
-if [[ -f "$SOURCE_GENERATED" ]]; then
-  mkdir -p "$TARGET_GENERATED"
-  cp "$SOURCE_GENERATED" "${TARGET_GENERATED}/valid_providers.ex"
-  ok "Copied valid_providers.ex"
-else
-  warn "valid_providers.ex not found in build output"
-fi
-
-ok "Copied manifest + ${provider_count} provider files to ${TARGET_PRIV}"
+ok "Copied snapshot.json to ${TARGET_PRIV}"
 
 # ==========================================================================
 # Step 9: Recompile quoracle to pick up new data

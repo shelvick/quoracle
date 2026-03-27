@@ -20,10 +20,12 @@ Two-tier tree:
 Coordinator → Answerers (one per question, dispatched via batch_async)
 ```
 
-The coordinator dispatches answerers directly using `batch_async` to handle
-dismissals and new spawns per consensus round. Answerers write their own
-answer files directly. After all answerers complete, a single `score-run.sh`
-call applies letter extraction and produces the report.
+The coordinator dispatches answerers directly using `batch_async` in a
+continuous replenishment loop. As answerers complete, the coordinator combines
+dismissals and replacement spawns in the same round so concurrency stays full
+until all questions are dispatched and no answerer children remain. Answerers
+write their own answer files directly. Only then does a single `score-run.sh`
+call apply letter extraction and produce the report.
 
 ## How To Run
 

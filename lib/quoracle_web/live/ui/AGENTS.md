@@ -5,9 +5,9 @@
 - GroveSelector: Grove dropdown component (2026-02), renders `<select>` with grove names from assigns, `for="grove-select"` label + `id="grove-select"` select (accessibility), emits `grove_selected` event
 - TaskFormFields: Reusable form components (text, textarea, enum_dropdown, list_input, budget_input), 250 lines
 - TaskBudgetEditor: Modal for editing task budget limits (2025-12), validates against spent+committed minimum
-- LogView: Log display, severity filter via pre-computed display_logs in update/2, auto-scroll (v5.0: render uses @display_logs)
-- AgentNode: Recursive LiveComponent (v7.0), per-node diffing, dual-mode (TaskTree integration + legacy isolated). Delegates to MessageForm/TodoDisplay/BudgetHelpers submodules. Accepts selected_agent_id + expanded_set from parent, computes booleans in update/2. component_prefix assign for CostDisplay ID disambiguation
-- LogEntry: Log rendering (351 lines), imports LogEntry.Helpers
+- LogView: Log display, severity filter via pre-computed display_logs in update/2, auto-scroll (v5.0: render uses @display_logs, v6.0: forwards root_pid to LogEntry)
+- AgentNode: Recursive LiveComponent (v8.0), per-node diffing, dual-mode (TaskTree integration + legacy isolated). Accepts per-node scalar assigns (agent_cost, agent_message_form) in centralized mode. assign_legacy_scalars/1 for backward compat. child_alive?/2, child_cost/2 helpers read from enriched display_agents. Delegates to MessageForm/TodoDisplay/BudgetHelpers submodules. component_prefix assign for CostDisplay ID disambiguation
+- LogEntry: Log rendering (351 lines), imports LogEntry.Helpers. v3.0: effective_metadata/1, metadata_truncated?/1, truncated?/1 for lazy-load full detail. fetch_full_detail handler with nil guard on root_pid. data-truncated attribute on response containers
 - LogEntry.Helpers: Formatting helpers (279 lines, 23 @spec), timestamp/level/metadata/role styling, LLM response formatting (2025-12)
 - Message: Accordion display, collapsed 80-char preview, reply forms with agent_alive control
 - CostDisplay: Cost display component (385 lines), 4 modes (:badge, :summary, :detail, :request)
@@ -19,11 +19,12 @@
 ## Stateful Components
 - Mailbox: Accordion inbox, v2.0: accepts agent_alive_map directly from parent (no lifecycle subscription), newest-first ordering
 
-## AgentNode v7.0 (2026-03, perf-20260317-034445)
+## AgentNode v8.0 (2026-03, perf-20260321-012101)
 - Unified recursive LiveComponent replacing TaskTree's render_agent_node/1 function component
 - Dual-mode: `has_centralized_state` check in update/2 detects TaskTree mode vs legacy isolated mode
-- TaskTree mode: receives selected_agent_id + expanded_set (MapSet), computes selected/expanded booleans
-- Legacy mode: receives selected/expanded booleans directly (backward compat for 59 existing tests)
+- TaskTree mode: receives per-node scalar assigns (agent_cost, agent_message_form, agent_alive) instead of full maps
+- Legacy mode: receives cost_data/message_forms/agent_alive_map via assign_new, converted to scalars via assign_legacy_scalars/1
+- child_alive?/2, child_cost/2: read from enriched display_agents (ui_alive, ui_total_cost)
 - Submodule delegation: MessageForm, TodoDisplay, BudgetHelpers (when @target set)
 - Event routing: phx-target={@target || @myself} — TaskTree handles all events in production
 - component_prefix assign: "" (legacy) or "tasktree-" (TaskTree) for CostDisplay ID disambiguation

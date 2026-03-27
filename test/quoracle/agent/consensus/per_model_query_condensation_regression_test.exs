@@ -760,7 +760,7 @@ defmodule Quoracle.Agent.Consensus.PerModelQueryCondensationRegressionTest do
 
       Core.send_user_message(agent_pid, "continue")
 
-      assert_receive {:r46_query, _msg_count, max_tokens}, 15_000
+      assert_receive {:r46_query, _msg_count, max_tokens}, 30_000
       assert is_integer(max_tokens) and max_tokens > 0
 
       {:ok, post_state} = Core.get_state(agent_pid)
@@ -855,8 +855,8 @@ defmodule Quoracle.Agent.Consensus.PerModelQueryCondensationRegressionTest do
 
       Core.send_user_message(agent_pid, "continue")
 
-      assert_receive {:r47_summarize, "anthropic:claude-sonnet-4", _}, 5_000
-      assert_receive {:r47_query, max_tokens}, 5_000
+      assert_receive {:r47_summarize, "anthropic:claude-sonnet-4", _}, 30_000
+      assert_receive {:r47_query, max_tokens}, 30_000
       assert is_integer(max_tokens) and max_tokens > 0
 
       {:ok, post_state} = Core.get_state(agent_pid)

@@ -10,14 +10,15 @@ defmodule QuoracleWeb.UI.TaskTree.MessageForm do
   Renders inline message form for sending direct messages to agents.
   """
   attr(:agent, :map, required: true)
-  attr(:agent_alive_map, :map, required: true)
-  attr(:message_forms, :map, default: %{})
+  attr(:agent_alive, :boolean, required: true)
+  attr(:agent_message_form, :map, default: %{})
   attr(:target, :any, required: true)
 
   def render(assigns) do
     ~H"""
-    <%= if Map.get(@agent_alive_map, @agent.agent_id, false) and is_nil(@agent[:parent_id]) do %>
-      <% message_form_expanded = Map.get(@message_forms || %{}, @agent.agent_id, %{expanded: false})[:expanded] || false %>
+    <%= if @agent_alive and is_nil(@agent[:parent_id]) do %>
+      <% message_form = @agent_message_form || %{} %>
+      <% message_form_expanded = Map.get(message_form, :expanded, false) %>
       <%= if message_form_expanded do %>
         <!-- Inline message form -->
         <div class="message-form ml-4 mt-2 p-2 bg-blue-50 rounded">
@@ -31,7 +32,7 @@ defmodule QuoracleWeb.UI.TaskTree.MessageForm do
               placeholder="Type your message..."
               class="w-full p-2 border rounded text-sm"
               rows="3"
-            ><%= Map.get(@message_forms, @agent.agent_id, %{input: ""})[:input] %></textarea>
+            ><%= Map.get(message_form, :input, "") %></textarea>
             <div class="flex gap-2 mt-2">
               <button
                 type="submit"

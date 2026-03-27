@@ -10,10 +10,14 @@ defmodule QuoracleWeb.UI.LogEntryTest do
 
   # Helper to render component in isolation
   defp render_isolated(conn, log, expanded \\ false) do
+    render_isolated_with_assigns(conn, %{log: log, expanded: expanded})
+  end
+
+  defp render_isolated_with_assigns(conn, assigns) do
     live_isolated(conn, QuoracleWeb.LiveComponentTestHelper,
       session: %{
         "component" => QuoracleWeb.UI.LogEntry,
-        "assigns" => %{log: log, expanded: expanded}
+        "assigns" => assigns
       }
     )
   end
@@ -366,6 +370,31 @@ defmodule QuoracleWeb.UI.LogEntryTest do
       assert has_element?(view, "[phx-click='copy_full'][phx-value-log-id='1']")
     end
 
+    test "copy_full uses full_detail metadata when loaded", %{conn: conn} do
+      log = %{
+        id: 999,
+        agent_id: "test_agent",
+        level: :debug,
+        message: "Copy full detail",
+        metadata: %{
+          raw_responses: [
+            %{model: "claude-3", text: String.duplicate("x", 200) <> "...", truncated?: true}
+          ]
+        },
+        timestamp: ~U[2024-01-01 10:00:00Z]
+      }
+
+      full_detail = %{raw_responses: [%{model: "claude-3", text: "FULL DETAIL TEXT"}]}
+
+      {:ok, view, _html} =
+        render_isolated_with_assigns(conn, %{log: log, expanded: true, full_detail: full_detail})
+
+      html = render(view)
+      assert html =~ "FULL DETAIL TEXT"
+      refute html =~ String.duplicate("x", 200) <> "..."
+      assert has_element?(view, "[phx-click='copy_full'][phx-value-log-id='999']")
+    end
+
     test "shows actions on hover", %{conn: conn} do
       log = create_test_log()
       {:ok, view, _html} = render_isolated(conn, log)
@@ -614,6 +643,234 @@ defmodule QuoracleWeb.UI.LogEntryTest do
 
       # Other types still work
       assert result =~ "cost_usd: 0.42"
+    end
+  end
+
+  describe "v3.0: lazy-loaded full log detail" do
+    test "R25: show full details button appears for truncated metadata entries", %{conn: conn} do
+      log = %{
+        id: 701,
+        agent_id: "test_agent",
+        level: :debug,
+        message: "Consensus detail truncated",
+        metadata: %{
+          raw_responses: [
+            %{
+              model: "claude-3",
+              text: String.duplicate("r", 200) <> "...",
+              truncated?: true
+            }
+          ]
+        },
+        timestamp: ~U[2024-01-01 10:00:00Z]
+      }
+
+      {:ok, view, _html} = render_isolated(conn, log, true)
+
+      html = render(view)
+
+      assert html =~ "Show full details..."
+      refute html =~ "Full detail no longer available"
+    end
+
+    test "R26: no show full details button when all entries non-truncated", %{conn: conn} do
+      # Log where NO entries have truncated?: true
+      log = %{
+        id: 702,
+        agent_id: "test_agent",
+        level: :debug,
+        message: "Consensus detail complete",
+        metadata: %{
+          raw_responses: [
+            %{
+              model: "claude-3",
+              text: "short response fully visible",
+              finish_reason: "stop"
+            }
+          ]
+        },
+        timestamp: ~U[2024-01-01 10:00:00Z]
+      }
+
+      {:ok, view, _html} = render_isolated(conn, log, true)
+
+      html = render(view)
+
+      # Non-truncated entries have no lazy-load affordance
+      refute html =~ "Show full details..."
+      refute html =~ "fetch_full_detail"
+      refute html =~ "Full detail no longer available"
+
+      # v3.0 renders response content within a truncation-aware container
+      # that marks each response with its truncation status
+      assert html =~ "data-truncated=\"false\""
+    end
+
+    test "R27: fetch_full_detail sends request to dashboard", %{conn: conn} do
+      log = %{
+        id: 703,
+        agent_id: "test_agent",
+        level: :debug,
+        message: "Fetch full detail",
+        metadata: %{
+          raw_responses: [
+            %{
+              model: "claude-3",
+              text: String.duplicate("x", 200) <> "...",
+              truncated?: true
+            }
+          ]
+        },
+        timestamp: ~U[2024-01-01 10:00:00Z]
+      }
+
+      {:ok, view, _html} =
+        render_isolated_with_assigns(conn, %{log: log, expanded: true, root_pid: self()})
+
+      assert render(view) =~ "Show full details..."
+
+      view
+      |> element("[phx-click='fetch_full_detail']")
+      |> render_click()
+
+      assert_receive {:fetch_log_detail, 703, "test-component"}, 1_000
+    end
+
+    test "R28: full detail replaces truncated response and prompt metadata in display", %{
+      conn: conn
+    } do
+      full_raw = "FULL-RAW-" <> String.duplicate("abcdefghijklmnopqrstuvwxyz", 10)
+      truncated_raw = String.slice(full_raw, 0, 200) <> "..."
+      full_prompt = "FULL-PROMPT-" <> String.duplicate("1234567890", 25)
+      truncated_prompt = String.slice(full_prompt, 0, 200) <> "..."
+
+      log = %{
+        id: 704,
+        agent_id: "test_agent",
+        level: :debug,
+        message: "Replace truncated metadata",
+        metadata: %{
+          raw_responses: [
+            %{
+              model: "claude-3",
+              text: truncated_raw,
+              truncated?: true
+            }
+          ],
+          sent_messages: [
+            %{
+              model_id: "claude-3",
+              messages: [
+                %{role: "user", content: truncated_prompt, truncated?: true}
+              ]
+            }
+          ]
+        },
+        timestamp: ~U[2024-01-01 10:00:00Z]
+      }
+
+      {:ok, view, _html} = render_isolated(conn, log, true)
+
+      view
+      |> element("[phx-click='toggle_sent_message'][phx-value-index='0']")
+      |> render_click()
+
+      view
+      |> element(
+        "[phx-click='toggle_sent_message_item'][phx-value-model-index='0'][phx-value-msg-index='0']"
+      )
+      |> render_click()
+
+      before_html = render(view)
+
+      assert before_html =~ truncated_raw
+      assert before_html =~ truncated_prompt
+      refute before_html =~ full_raw
+      refute before_html =~ full_prompt
+
+      send(
+        view.pid,
+        {:update_component,
+         %{
+           full_detail: %{
+             raw_responses: [%{model: "claude-3", text: full_raw}],
+             sent_messages: [
+               %{model_id: "claude-3", messages: [%{role: "user", content: full_prompt}]}
+             ]
+           }
+         }}
+      )
+
+      after_html = render(view)
+
+      assert after_html =~ full_raw
+      assert after_html =~ full_prompt
+      refute after_html =~ truncated_raw
+      refute after_html =~ truncated_prompt
+    end
+
+    test "R29: not_found detail shows unavailable message", %{conn: conn} do
+      log = %{
+        id: 705,
+        agent_id: "test_agent",
+        level: :debug,
+        message: "Missing full detail",
+        metadata: %{
+          raw_responses: [
+            %{
+              model: "claude-3",
+              text: String.duplicate("n", 200) <> "...",
+              truncated?: true
+            }
+          ]
+        },
+        timestamp: ~U[2024-01-01 10:00:00Z]
+      }
+
+      {:ok, view, _html} =
+        render_isolated_with_assigns(conn, %{log: log, expanded: true, full_detail: :not_found})
+
+      html = render(view)
+
+      assert html =~ "Full detail no longer available"
+      refute html =~ "Show full details..."
+    end
+
+    test "R30: fetch_full_detail is a no-op when root_pid is nil", %{conn: conn} do
+      truncated_raw = String.duplicate("z", 200) <> "..."
+
+      log = %{
+        id: 706,
+        agent_id: "test_agent",
+        level: :debug,
+        message: "Nil root pid safety",
+        metadata: %{
+          raw_responses: [
+            %{
+              model: "claude-3",
+              text: truncated_raw,
+              truncated?: true
+            }
+          ]
+        },
+        timestamp: ~U[2024-01-01 10:00:00Z]
+      }
+
+      {:ok, view, _html} =
+        render_isolated_with_assigns(conn, %{log: log, expanded: true, root_pid: nil})
+
+      assert render(view) =~ "Show full details..."
+
+      view
+      |> element("[phx-click='fetch_full_detail']")
+      |> render_click()
+
+      html = render(view)
+
+      assert html =~ "Show full details..."
+      assert html =~ truncated_raw
+      refute html =~ "Full detail no longer available"
+      refute_received {:fetch_log_detail, _, _}
     end
   end
 end

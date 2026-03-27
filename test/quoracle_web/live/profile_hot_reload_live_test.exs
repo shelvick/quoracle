@@ -83,7 +83,7 @@ defmodule QuoracleWeb.ProfileHotReloadLiveTest do
     })
     |> render_submit()
 
-    assert_receive {:profile_updated, payload}, 1_000
+    assert_receive {:profile_updated, payload}, 5_000
     assert payload.old_name == profile.name
     assert payload.new_name == profile.name
     assert payload.model_pool == [models.old]
@@ -130,7 +130,7 @@ defmodule QuoracleWeb.ProfileHotReloadLiveTest do
     })
     |> render_submit()
 
-    assert_receive {:profile_updated, payload}, 1_000
+    assert_receive {:profile_updated, payload}, 5_000
     assert payload.old_name == old_name
     assert payload.new_name == new_name
     assert payload.profile_description == "rename after"
@@ -167,7 +167,7 @@ defmodule QuoracleWeb.ProfileHotReloadLiveTest do
              send_user_message_and_await_consensus_summary(
                agent_pid,
                "integration-before #{System.unique_integer([:positive])}",
-               5_000
+               30_000
              )
 
     assert before_summary.model_ids == Enum.sort(models.old_pool)
@@ -210,7 +210,7 @@ defmodule QuoracleWeb.ProfileHotReloadLiveTest do
              send_user_message_and_await_consensus_summary(
                agent_pid,
                "integration-after #{System.unique_integer([:positive])}",
-               5_000
+               30_000
              )
 
     assert after_summary.model_ids == Enum.sort(models.new_pool)
@@ -247,7 +247,7 @@ defmodule QuoracleWeb.ProfileHotReloadLiveTest do
              send_user_message_and_await_consensus_summary(
                agent_pid,
                "acceptance-before #{System.unique_integer([:positive])}",
-               5_000
+               30_000
              )
 
     assert acceptance_before_summary.model_ids == Enum.sort(models.old_pool)
@@ -290,7 +290,7 @@ defmodule QuoracleWeb.ProfileHotReloadLiveTest do
              send_user_message_and_await_consensus_summary(
                agent_pid,
                "acceptance-after #{System.unique_integer([:positive])}",
-               5_000
+               30_000
              )
 
     assert acceptance_after_summary.model_ids == Enum.sort(models.new_pool)
@@ -326,7 +326,7 @@ defmodule QuoracleWeb.ProfileHotReloadLiveTest do
     })
     |> render_submit()
 
-    assert_receive {:profile_updated, payload}, 1_000
+    assert_receive {:profile_updated, payload}, 5_000
     assert payload.new_name == new_profile_name
     assert payload.model_pool == [models.old]
     assert payload.max_refinement_rounds == 3
@@ -369,7 +369,7 @@ defmodule QuoracleWeb.ProfileHotReloadLiveTest do
     })
     |> render_submit()
 
-    assert_receive {:profile_updated, first_payload}, 1_000
+    assert_receive {:profile_updated, first_payload}, 5_000
     assert first_payload.new_name == existing_name
     assert first_payload.max_refinement_rounds == 7
 

@@ -88,13 +88,13 @@ defmodule QuoracleWeb.UI.AgentNode do
           id={"cost-badge-#{@component_prefix}#{@agent[:agent_id]}"}
           mode={:badge}
           agent_id={@agent[:agent_id]}
-          total_cost={agent_total(@cost_data, @agent[:agent_id])}
+          total_cost={@agent_cost}
           precomputed_total_cost?={@use_precomputed_costs}
         />
 
         <!-- Budget Badge -->
         <%= if @agent[:budget_data] do %>
-          <BudgetBadge.budget_badge summary={build_agent_budget_summary(@agent, agent_cost_for_budget(@cost_data, @agent))} />
+          <BudgetBadge.budget_badge summary={build_agent_budget_summary(@agent, agent_cost_for_budget(@agent_cost, @agent))} />
         <% end %>
       </div>
 
@@ -102,8 +102,8 @@ defmodule QuoracleWeb.UI.AgentNode do
       <%= if @target do %>
         <MessageForm.render
           agent={@agent}
-          agent_alive_map={@agent_alive_map}
-          message_forms={@message_forms}
+          agent_alive={@agent_alive}
+          agent_message_form={@agent_message_form}
           target={@target}
         />
       <% else %>
@@ -182,20 +182,20 @@ defmodule QuoracleWeb.UI.AgentNode do
       <%= if @expanded and @agent[:children] do %>
         <div class="children ml-4">
           <%= for child_id <- Enum.uniq(@agent[:children]) do %>
+            <% child = lookup_child(@agents, child_id) %>
             <.live_component
               module={__MODULE__}
               id={"agent-node-#{child_id}"}
-              agent={lookup_child(@agents, child_id)}
+              agent={child}
               agents={@agents}
               selected_agent_id={@selected_agent_id}
               expanded_set={@expanded_set}
               depth={@depth + 1}
               target={@target || @myself}
-              agent_alive={Map.get(@agent_alive_map, child_id, false)}
-              agent_alive_map={@agent_alive_map}
+              agent_alive={child_alive?(child, assigns[:agent_alive_map])}
               root_pid={@root_pid}
-              message_forms={@message_forms}
-              cost_data={@cost_data}
+              agent_message_form={child_message_form(child, assigns[:message_forms])}
+              agent_cost={child_cost(child, assigns[:cost_data])}
               use_precomputed_costs={@use_precomputed_costs}
               component_prefix={@component_prefix}
             />
@@ -221,22 +221,23 @@ defmodule QuoracleWeb.UI.AgentNode do
       |> assign_new(:depth, fn -> 0 end)
       |> assign_new(:agent_alive, fn -> false end)
       |> assign_new(:agents, fn -> %{} end)
-      |> assign_new(:agent_alive_map, fn -> %{} end)
       |> assign_new(:target, fn -> nil end)
       |> assign_new(:root_pid, fn -> nil end)
-      |> assign_new(:message_forms, fn -> %{} end)
-      |> assign_new(:cost_data, fn -> %{agents: %{}, tasks: %{}} end)
+      |> assign_new(:agent_message_form, fn -> nil end)
+      |> assign_new(:agent_cost, fn -> nil end)
       |> assign_new(:use_precomputed_costs, fn -> false end)
       |> assign_new(:component_prefix, fn -> "" end)
       |> assign_new(:selected_agent_id, fn -> nil end)
       |> assign_new(:expanded_set, fn -> MapSet.new() end)
-      # Legacy assigns for isolated tests
-      |> assign_new(:message_form_expanded, fn -> false end)
-      |> assign_new(:message_input, fn -> "" end)
 
     # Compute booleans from centralized state when parent passes expanded_set/selected_agent_id.
     # When rendered in isolation (old tests pass expanded/selected directly), preserve those values.
     if has_centralized_state do
+      socket =
+        socket
+        |> assign_new(:selected_agent_id, fn -> nil end)
+        |> assign_new(:expanded_set, fn -> MapSet.new() end)
+
       agent = socket.assigns[:agent]
       agent_id = agent && agent[:agent_id]
 
@@ -249,17 +250,63 @@ defmodule QuoracleWeb.UI.AgentNode do
         socket
         |> assign_new(:expanded, fn -> false end)
         |> assign_new(:selected, fn -> false end)
+        |> assign_new(:agent_alive_map, fn -> %{} end)
+        |> assign_new(:message_forms, fn -> %{} end)
+        |> assign_new(:cost_data, fn -> %{agents: %{}, tasks: %{}} end)
+        |> assign_new(:message_form_expanded, fn -> false end)
+        |> assign_new(:message_input, fn -> "" end)
+        |> assign_legacy_scalars()
 
       {:ok, socket}
     end
   end
 
-  defp agent_total(cost_data, agent_id), do: get_in(cost_data, [:agents, agent_id])
+  defp agent_total(cost_data, agent_id), do: get_in(cost_data || %{}, [:agents, agent_id])
 
-  # For budget badge: use precomputed cost from cost_data, falling back to agent's
-  # own spent field (used by isolated tests that set spent directly on agent data)
-  defp agent_cost_for_budget(cost_data, agent) do
-    agent_total(cost_data, agent[:agent_id]) || agent[:spent]
+  # For budget badge: use scalar cost first, falling back to legacy/isolated agent data.
+  defp agent_cost_for_budget(agent_cost, agent) do
+    agent_cost || agent[:ui_total_cost] || agent[:spent]
+  end
+
+  defp assign_legacy_scalars(socket) do
+    agent = socket.assigns[:agent] || %{}
+    agent_id = agent[:agent_id]
+
+    message_form =
+      socket.assigns.agent_message_form || Map.get(socket.assigns.message_forms, agent_id, %{})
+
+    agent_cost =
+      socket.assigns.agent_cost || agent[:ui_total_cost] ||
+        agent_total(socket.assigns.cost_data, agent_id)
+
+    socket
+    |> assign(:agent_message_form, message_form)
+    |> assign(:agent_cost, agent_cost)
+    |> assign(
+      :message_form_expanded,
+      socket.assigns.message_form_expanded || Map.get(message_form, :expanded, false)
+    )
+    |> assign(
+      :message_input,
+      if(socket.assigns.message_input == "",
+        do: Map.get(message_form, :input, ""),
+        else: socket.assigns.message_input
+      )
+    )
+  end
+
+  defp child_cost(child, cost_data),
+    do: child[:ui_total_cost] || agent_total(cost_data, child[:agent_id])
+
+  defp child_alive?(child, agent_alive_map) do
+    case Map.fetch(child, :ui_alive) do
+      {:ok, alive} -> alive
+      :error -> Map.get(agent_alive_map || %{}, child[:agent_id], false)
+    end
+  end
+
+  defp child_message_form(child, message_forms) do
+    child[:ui_message_form] || Map.get(message_forms || %{}, child[:agent_id], %{})
   end
 
   # Look up child from agents map, falling back to a minimal stub when agents

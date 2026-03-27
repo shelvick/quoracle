@@ -1,5 +1,8 @@
 import Config
 
+# Allow snapshot updates without recompile (hash refreshes on next compile)
+config :llm_db, integrity_policy: :warn
+
 # Configure your database
 config :quoracle, Quoracle.Repo,
   username: "postgres",

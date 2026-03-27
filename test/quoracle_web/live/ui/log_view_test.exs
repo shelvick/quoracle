@@ -18,9 +18,13 @@ defmodule QuoracleWeb.UI.LogViewTest do
   end
 
   defp render_isolated(conn, logs, agent_id, pubsub) do
+    render_isolated_with_assigns(conn, %{logs: logs, agent_id: agent_id}, pubsub)
+  end
+
+  defp render_isolated_with_assigns(conn, assigns, pubsub \\ nil) do
     session = %{
       "component" => QuoracleWeb.UI.LogView,
-      "assigns" => %{logs: logs, agent_id: agent_id}
+      "assigns" => assigns
     }
 
     session =
@@ -564,6 +568,130 @@ defmodule QuoracleWeb.UI.LogViewTest do
       # In isolated testing, subscription happens but messages might not propagate
       # Test passes if no errors occur
       assert true
+    end
+  end
+
+  describe "v6.0: root_pid forwarding" do
+    # R11 (accept root_pid) and R13 (preserve after state change) are implicitly
+    # covered by R12 — LogView.update/2 already stores arbitrary assigns. The real
+    # new behavior is FORWARDING root_pid to LogEntry children in the render template.
+
+    test "R11-R12: LogView forwards root_pid to LogEntry enabling fetch_full_detail", %{
+      conn: conn
+    } do
+      root_pid = self()
+
+      logs = [
+        %{
+          id: 901,
+          agent_id: "agent_1",
+          level: :debug,
+          message: "truncated raw response",
+          metadata: %{
+            raw_responses: [
+              %{
+                model: "claude-3",
+                text: String.duplicate("r", 200) <> "...",
+                truncated?: true
+              }
+            ]
+          },
+          timestamp: ~U[2024-01-01 10:00:00Z]
+        },
+        %{
+          id: 902,
+          agent_id: "agent_2",
+          level: :debug,
+          message: "truncated sent message",
+          metadata: %{
+            sent_messages: [
+              %{
+                model_id: "gpt-4",
+                messages: [
+                  %{role: "user", content: String.duplicate("m", 200) <> "...", truncated?: true}
+                ]
+              }
+            ]
+          },
+          timestamp: ~U[2024-01-01 10:00:01Z]
+        }
+      ]
+
+      {:ok, view, _html} =
+        render_isolated_with_assigns(conn, %{logs: logs, agent_id: nil, root_pid: root_pid})
+
+      view
+      |> element("[phx-click='toggle_metadata'][phx-value-log-id='901']")
+      |> render_click()
+
+      first_expanded = render(view)
+      assert first_expanded =~ "Show full details..."
+
+      view
+      |> element("[phx-click='fetch_full_detail']")
+      |> render_click()
+
+      assert_receive {:fetch_log_detail, 901, "log-901"}, 1_000
+
+      view
+      |> element("[phx-click='toggle_metadata'][phx-value-log-id='902']")
+      |> render_click()
+
+      second_expanded = render(view)
+      assert second_expanded =~ "Show full details..."
+
+      view
+      |> element("#log-entry-902 [phx-click='fetch_full_detail']")
+      |> render_click()
+
+      assert_receive {:fetch_log_detail, 902, "log-902"}, 1_000
+    end
+
+    test "R13: root_pid forwarding works after level filter change", %{conn: conn} do
+      root_pid = self()
+
+      # Log with truncated metadata at :warn level — survives level filter change
+      logs = [
+        %{
+          id: 950,
+          agent_id: "agent_1",
+          level: :warn,
+          message: "Warning with truncated response",
+          metadata: %{
+            raw_responses: [
+              %{
+                model: "claude-3",
+                text: String.duplicate("w", 200) <> "...",
+                truncated?: true
+              }
+            ]
+          },
+          timestamp: ~U[2024-01-01 10:00:00Z]
+        }
+      ]
+
+      {:ok, view, _html} =
+        render_isolated_with_assigns(conn, %{logs: logs, agent_id: nil, root_pid: root_pid})
+
+      # Change level filter to :warn
+      view
+      |> element("[phx-click='set_min_level'][phx-value-level='warn']")
+      |> render_click()
+
+      # Log still visible after filter
+      html = render(view)
+      assert html =~ "Warning with truncated response"
+
+      # Expand metadata and click fetch — root_pid must still be forwarded to LogEntry
+      view
+      |> element("[phx-click='toggle_metadata'][phx-value-log-id='950']")
+      |> render_click()
+
+      view
+      |> element("[phx-click='fetch_full_detail']")
+      |> render_click()
+
+      assert_receive {:fetch_log_detail, 950, "log-950"}, 1_000
     end
   end
 

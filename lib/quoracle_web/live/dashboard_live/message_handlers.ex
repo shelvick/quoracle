@@ -3,6 +3,7 @@ defmodule QuoracleWeb.DashboardLive.MessageHandlers do
 
   alias Phoenix.PubSub
   alias Phoenix.LiveView.Socket
+  alias QuoracleWeb.DashboardLive.LogDetailTruncation
   alias QuoracleWeb.DashboardLive.Subscriptions
   alias QuoracleWeb.DashboardLive.MessageHandlers.Helpers
 
@@ -24,7 +25,6 @@ defmodule QuoracleWeb.DashboardLive.MessageHandlers do
 
     socket = Subscriptions.safe_subscribe(socket, "agents:#{agent_id}:logs")
     socket = Subscriptions.safe_subscribe(socket, "agents:#{agent_id}:todos")
-    socket = Subscriptions.safe_subscribe(socket, "agents:#{agent_id}:costs")
 
     socket =
       if task_id do
@@ -283,8 +283,11 @@ defmodule QuoracleWeb.DashboardLive.MessageHandlers do
     if in_persisted or in_buffer do
       {:noreply, socket}
     else
+      socket = maybe_store_log_detail(socket, log_id, log[:metadata])
+      truncated_log = LogDetailTruncation.truncate_log_metadata(log)
+
       # Buffer the log entry instead of immediately assigning
-      buffer = [log | socket.assigns.log_buffer]
+      buffer = [truncated_log | socket.assigns.log_buffer]
 
       if socket.assigns[:log_refresh_timer] do
         # Timer already pending — just buffer
@@ -426,6 +429,18 @@ defmodule QuoracleWeb.DashboardLive.MessageHandlers do
       )
 
     Phoenix.Component.assign(socket, filtered_logs: filtered_logs)
+  end
+
+  defdelegate truncate_buffered_logs(logs_map), to: LogDetailTruncation
+
+  @spec maybe_store_log_detail(Socket.t(), term(), map() | nil) :: Socket.t()
+  defp maybe_store_log_detail(socket, log_id, metadata) do
+    if is_nil(log_id) or not LogDetailTruncation.has_lazy_load_metadata?(metadata) do
+      socket
+    else
+      details = LogDetailTruncation.store_and_trim(socket.assigns.log_details, log_id, metadata)
+      Phoenix.Component.assign(socket, log_details: details)
+    end
   end
 
   # Best-effort fetch of agent todos (single GenServer.call with short timeout).

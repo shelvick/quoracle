@@ -95,28 +95,53 @@ trap 'rm -rf "$WORKDIR"' EXIT
 # Write starter code to workspace file (avoids shell quoting in Python -c)
 echo "$STARTER_CODE" > "$WORKDIR/starter_code.txt"
 
-# Read the solution and strip markdown fences
+# Read the solution, strip markdown fences, and conditionally prepend starter code
 python3 -c "
 import sys, re, os
 with open(sys.argv[1]) as f:
     code = f.read()
 # Strip <think> tags
 code = re.sub(r'<think>.*?</think>', '', code, flags=re.DOTALL)
-# Extract code from markdown fences
+# Extract code from markdown fences (prefer python-tagged, then generic)
 m = re.search(r'\`\`\`(?:python|py)?\s*\n(.*?)\`\`\`', code, re.DOTALL)
 if m:
     code = m.group(1)
 else:
-    # Try generic fences
     m = re.search(r'\`\`\`\s*\n(.*?)\`\`\`', code, re.DOTALL)
     if m:
         code = m.group(1)
-# Prepend starter code if provided (read from file to avoid shell quoting issues)
+    else:
+        # Strip leading/trailing single backticks (some models use \` instead of \`\`\`)
+        code = re.sub(r'^\`\s*', '', code)
+        code = re.sub(r'\s*\`$', '', code)
+# Prepend starter code ONLY if the extracted code doesn't already contain the
+# class/function definition from the starter. LLMs typically reproduce the full
+# class header in their answer; blindly prepending the stub creates an empty
+# method body that triggers IndentationError.
 starter_path = os.path.join(sys.argv[2], 'starter_code.txt')
 with open(starter_path) as sf:
     starter = sf.read()
 if starter.strip():
-    code = starter.strip() + '\n\n' + code
+    # Extract the class or function name from the starter code
+    starter_stripped = starter.strip()
+    # Check if the model's code already defines the same class or function
+    has_class = re.search(r'^class\s+', code.lstrip(), re.MULTILINE)
+    starter_has_class = re.search(r'^class\s+(\w+)', starter_stripped)
+    starter_has_def = re.search(r'def\s+(\w+)', starter_stripped)
+    already_has_definition = False
+    if starter_has_class and has_class:
+        # Model included a class definition — skip prepend
+        already_has_definition = True
+    elif starter_has_def:
+        # Check if model's code defines the same function at any indentation
+        func_name = starter_has_def.group(1)
+        if re.search(r'def\s+' + re.escape(func_name) + r'\s*\(', code):
+            already_has_definition = True
+    if not already_has_definition:
+        # Prepend common imports needed by starter code type annotations
+        # (e.g., List[int], Optional[str]). The starter code stubs use typing
+        # constructs but never import them; without this the exec() hits NameError.
+        code = 'from typing import *\n' + starter_stripped + '\n\n' + code
 with open(os.path.join(sys.argv[2], 'solution.py'), 'w') as f:
     f.write(code)
 " "$SOLUTION" "$WORKDIR"

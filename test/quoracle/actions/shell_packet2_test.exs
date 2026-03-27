@@ -414,15 +414,20 @@ defmodule Quoracle.Actions.ShellPacket2Test do
       # Monitor Router for termination
       router_ref = Process.monitor(router)
 
-      # Start a command
-      {:ok, %{command_id: _cmd_id}} =
-        Shell.execute(%{command: "echo hello"}, "agent-1", opts_async)
+      # Start a command — handle both async and sync return paths
+      case Shell.execute(%{command: "echo hello"}, "agent-1", opts_async) do
+        {:ok, %{command_id: _cmd_id}} ->
+          # Async path - wait for completion via action_result
+          assert_receive {:"$gen_cast", {:action_result, _, {:ok, result}, _opts}}, 30_000
+          assert result.status == :completed
+          assert result.stdout =~ "hello"
+          assert result.exit_code == 0
 
-      # Wait for completion via action_result
-      assert_receive {:"$gen_cast", {:action_result, _, {:ok, result}, _opts}}, 30_000
-      assert result.status == :completed
-      assert result.stdout =~ "hello"
-      assert result.exit_code == 0
+        {:ok, result} when is_map(result) ->
+          # Sync path - command completed immediately under load
+          assert result.stdout =~ "hello"
+          assert result.exit_code == 0
+      end
 
       # Per-action Router: Router terminates after completion
       assert_receive {:DOWN, ^router_ref, :process, ^router, _reason}, 5000

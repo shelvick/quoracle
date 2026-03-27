@@ -23,8 +23,6 @@ defmodule QuoracleWeb.DashboardLive do
     TestHelpers
   }
 
-  alias Quoracle.Profiles.TableProfiles
-
   @doc "Returns PubSub instance (session-injected for test isolation, global for production)."
   @spec current_pubsub(map()) :: atom()
   def current_pubsub(session \\ %{}) do
@@ -84,6 +82,7 @@ defmodule QuoracleWeb.DashboardLive do
       log_debounce_ms: log_debounce_ms,
       log_buffer: [],
       log_refresh_timer: nil,
+      log_details: %{},
       mailbox_test_pid: mailbox_test_pid,
       grove_skills_path: nil,
       budget_editor_visible: false,
@@ -128,14 +127,19 @@ defmodule QuoracleWeb.DashboardLive do
       # Hydrate cost_data immediately so existing costs don't show N/A until first cost_recorded
       send(self(), :flush_cost_updates)
 
+      # Truncate buffered logs and store full details for lazy-load
+      {truncated_logs, mount_log_details} =
+        MessageHandlers.truncate_buffered_logs(buffered_logs)
+
       connected_assigns = [
         tasks: tasks,
         agents: agents,
-        logs: buffered_logs,
+        logs: truncated_logs,
         messages: buffered_messages,
         subscribed_topics: subscribed_topics,
         agent_alive_map: agent_alive_map,
-        filtered_logs: DataLoader.get_filtered_logs(buffered_logs, nil)
+        filtered_logs: DataLoader.get_filtered_logs(truncated_logs, nil),
+        log_details: mount_log_details
       ]
 
       {:ok, assign(socket, base_assigns ++ connected_assigns)}
@@ -166,19 +170,7 @@ defmodule QuoracleWeb.DashboardLive do
     groves
   end
 
-  defp load_profiles do
-    import Ecto.Query
-
-    Quoracle.Repo.all(from(p in TableProfiles, order_by: p.name))
-    |> Enum.map(fn p ->
-      groups = TableProfiles.capability_groups_as_atoms(p)
-
-      %{
-        name: p.name,
-        capability_groups: groups
-      }
-    end)
-  end
+  defp load_profiles, do: DataLoader.load_profiles()
 
   @impl true
   @spec render(map()) :: Phoenix.LiveView.Rendered.t()
@@ -210,9 +202,10 @@ defmodule QuoracleWeb.DashboardLive do
         <.live_component
           module={QuoracleWeb.UI.LogView}
           id="logs"
-          logs={@filtered_logs}
+          logs={log_view_logs(assigns)}
           agent_id={@selected_agent_id}
           pubsub={@pubsub}
+          root_pid={self()}
         />
       </div>
 
@@ -232,8 +225,18 @@ defmodule QuoracleWeb.DashboardLive do
       </div>
     </div>
 
-    <!-- Budget Editor Modal (R45-R49) -->
-    <%= if @budget_editor_visible do %>
+    <.budget_editor_modal
+      visible={@budget_editor_visible}
+      task_id={@budget_editor_task_id}
+      current={@budget_editor_current}
+      spent={@budget_editor_spent}
+    />
+    """
+  end
+
+  defp budget_editor_modal(assigns) do
+    ~H"""
+    <%= if @visible do %>
       <div id="budget-editor-modal" class="fixed inset-0 z-50">
         <div class="fixed inset-0 bg-gray-500/75" phx-click="cancel_budget_edit"></div>
         <div class="fixed inset-0 overflow-y-auto p-4">
@@ -241,39 +244,21 @@ defmodule QuoracleWeb.DashboardLive do
             <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
               <h3 class="text-lg font-semibold mb-4">Edit Task Budget</h3>
               <form id="budget-editor-form" phx-submit="submit_budget_edit">
-                <input type="hidden" name="task_id" value={@budget_editor_task_id} />
+                <input type="hidden" name="task_id" value={@task_id} />
                 <div class="mb-4">
                   <label class="block text-sm font-medium text-gray-700 mb-1">Current Spent</label>
                   <div class="text-lg font-semibold text-gray-900">
-                    $<%= if @budget_editor_spent, do: Decimal.round(@budget_editor_spent, 2), else: "0.00" %>
+                    $<%= if @spent, do: Decimal.round(@spent, 2), else: "0.00" %>
                   </div>
                 </div>
                 <div class="mb-4">
                   <label class="block text-sm font-medium text-gray-700 mb-1">New Budget</label>
-                  <input
-                    type="text"
-                    name="new_budget"
-                    value={if @budget_editor_current, do: Decimal.to_string(@budget_editor_current), else: ""}
-                    class="w-full px-3 py-2 border border-gray-300 rounded-md"
-                    placeholder="Enter new budget..."
-                  />
+                  <input type="text" name="new_budget" value={if @current, do: Decimal.to_string(@current), else: ""} class="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="Enter new budget..." />
                   <p class="text-xs text-gray-500 mt-1">Must be greater than or equal to spent amount</p>
                 </div>
                 <div class="flex gap-3 justify-end">
-                  <button
-                    type="button"
-                    id="cancel-budget-edit"
-                    class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded"
-                    phx-click="cancel_budget_edit"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded"
-                  >
-                    Save Budget
-                  </button>
+                  <button type="button" id="cancel-budget-edit" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded" phx-click="cancel_budget_edit">Cancel</button>
+                  <button type="submit" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded">Save Budget</button>
                 </div>
               </form>
             </div>
@@ -282,6 +267,17 @@ defmodule QuoracleWeb.DashboardLive do
       </div>
     <% end %>
     """
+  end
+
+  @spec log_view_logs(map()) :: list()
+  defp log_view_logs(assigns) do
+    case {assigns.filtered_logs, assigns.logs} do
+      {[], logs} when is_map(logs) and map_size(logs) > 0 ->
+        DataLoader.get_filtered_logs(logs, assigns.selected_agent_id)
+
+      {filtered_logs, _logs} ->
+        filtered_logs
+    end
   end
 
   @impl true
@@ -362,6 +358,13 @@ defmodule QuoracleWeb.DashboardLive do
 
   def handle_info({:todos_updated, payload}, socket),
     do: MessageHandlers.handle_todos_updated(payload, socket)
+
+  @doc "Handle full log detail requests from LogEntry components."
+  def handle_info({:fetch_log_detail, log_id, component_id}, socket) do
+    detail = Map.get(socket.assigns.log_details, log_id, :not_found)
+    send_update(QuoracleWeb.UI.LogEntry, id: component_id, full_detail: detail)
+    {:noreply, socket}
+  end
 
   @default_cost_debounce_ms 2_000
 

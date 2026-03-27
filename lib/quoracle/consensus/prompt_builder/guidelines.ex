@@ -257,8 +257,8 @@ defmodule Quoracle.Consensus.PromptBuilder.Guidelines do
       ```
 
       **`batch_async`** — Parallel execution, errors isolated, results delivered as messages when each completes.
-      For slow actions: execute_shell, fetch_web, call_api, call_mcp, answer_engine, generate_images (and any other action except wait/batch_sync/batch_async).
-      **Prefer `batch_async` when you have 2+ independent slow actions** — they run simultaneously, so 3 actions taking 10s each complete in ~10s total instead of ~30s. One failure won't block the others:
+      Accepts ALL actions except wait, batch_sync, and batch_async — including fast actions like spawn_child and dismiss_child.
+      **Prefer `batch_async` when you have 2+ independent actions** — they run simultaneously and one failure won't block the others:
 
       ```json
       {

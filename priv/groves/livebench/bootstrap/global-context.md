@@ -15,11 +15,13 @@ content each release.
 Two-tier hierarchy: Coordinator → Solvers.
 
 You dispatch one solver per question directly, using `batch_async` to handle
-dismissals and new spawns per consensus round. Solvers write their own
-answer files directly. This minimizes coordinator overhead — with concurrency
-25, you can process multiple worker completions per round.
+dismissals and new spawns in a continuous replenishment loop. Keep concurrency
+slots full until all questions have been dispatched and no solver children
+remain active. Solvers write their own answer files directly. This minimizes
+coordinator overhead — with concurrency 25, you can process multiple worker
+completions per round.
 
-After all solvers complete, you call `score-run.sh` which scores every
+Only after all solvers complete do you call `score-run.sh`, which scores every
 answer using the appropriate per-category scoring script and produces the
 final report.
 
