@@ -25,9 +25,10 @@ defmodule QuoracleWeb.UI.LogView do
     socket =
       socket
       |> assign(assigns)
-      |> assign_new(:min_level, fn -> :info end)
+      |> assign_new(:min_level, fn -> :debug end)
       |> assign_new(:auto_scroll, fn -> true end)
       |> assign_new(:expanded_logs, fn -> MapSet.new() end)
+      |> assign_new(:root_pid, fn -> nil end)
 
     # Pre-compute level-filtered logs when inputs change
     display = display_logs(socket.assigns.logs || [], socket.assigns.min_level)
@@ -103,9 +104,10 @@ defmodule QuoracleWeb.UI.LogView do
             <.live_component
               module={QuoracleWeb.UI.LogEntry}
               id={"log-#{log_id}"}
-              log={Map.put(log, :id, log_id)}
+              log={Map.put_new(log, :id, log_id)}
               expanded={MapSet.member?(@expanded_logs, log_id)}
               target={@myself}
+              root_pid={@root_pid}
             />
           <% end %>
         <% end %>

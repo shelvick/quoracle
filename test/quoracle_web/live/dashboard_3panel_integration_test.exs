@@ -450,11 +450,14 @@ defmodule QuoracleWeb.Dashboard3PanelIntegrationTest do
       render(view)
 
       task_tree_html = view |> element("#task-tree") |> render()
+      agent_component = agent_node_component!(view, "agent-node-#{agent_id}")
 
       assert task_tree_html =~ task.id
       assert task_tree_html =~ "cost-badge-tasktree-#{agent_id}"
       assert task_tree_html =~ "$0.33"
       refute task_tree_html =~ "$0.99"
+      assert Decimal.equal?(agent_component.assigns.agent_cost, Decimal.new("0.33"))
+      refute Map.has_key?(agent_component.assigns, :cost_data)
     end
 
     test "state_changed does not trigger Mailbox update", %{conn: conn} = context do
@@ -846,6 +849,18 @@ defmodule QuoracleWeb.Dashboard3PanelIntegrationTest do
       "sandbox_owner" => owner
     })
     |> live("/")
+  end
+
+  defp agent_node_component!(view, id) do
+    assert {:ok, components} = Phoenix.LiveView.Debug.live_components(view.pid)
+
+    component =
+      Enum.find(components, fn component ->
+        component.module == QuoracleWeb.UI.AgentNode and component.id == id
+      end)
+
+    assert component, "expected AgentNode component #{id} to be rendered"
+    component
   end
 
   defp flush_mailbox_updates do

@@ -18,12 +18,14 @@ engineering, health, history, law, math, philosophy, physics, psychology, other.
 Two-tier hierarchy: Coordinator → Answerers.
 
 You dispatch one answerer per question directly, using `batch_async` to handle
-dismissals and new spawns per consensus round. Answerers write their own
-answer files directly. This minimizes coordinator overhead — with concurrency
-25, you can process multiple worker completions per round.
+dismissals and new spawns in a continuous replenishment loop. Keep concurrency
+slots full until all questions have been dispatched and no answerer children
+remain active. Answerers write their own answer files directly. This minimizes
+coordinator overhead — with concurrency 25, you can process multiple worker
+completions per round.
 
-After all answerers complete, you call `score-run.sh` which applies 3-tier
-regex letter extraction to every answer and produces the final report.
+Only after all answerers complete do you call `score-run.sh`, which applies
+3-tier regex letter extraction to every answer and produces the final report.
 
 ## Data Preparation
 

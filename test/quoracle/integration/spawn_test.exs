@@ -12,6 +12,8 @@ defmodule Quoracle.Integration.SpawnTest do
   alias Quoracle.Agent.Core
   alias Test.IsolationHelpers
 
+  @call_timeout 30_000
+
   import Test.AgentTestHelpers,
     only: [create_test_profile: 0, spawn_agent_with_cleanup: 3, register_agent_cleanup: 1]
 
@@ -58,20 +60,24 @@ defmodule Quoracle.Integration.SpawnTest do
     } do
       # Parent spawns child
       spawn_result =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Child task",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Child task",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-1"
           },
-          "action-1"
-        })
+          @call_timeout
+        )
 
       assert {:ok, %{agent_id: _child_id, pid: child_pid}} = spawn_result
       assert Process.alive?(child_pid)
@@ -82,20 +88,24 @@ defmodule Quoracle.Integration.SpawnTest do
       # Child executes action
       # TEST-FIX: Orient requires 4 parameters per schema
       child_result =
-        GenServer.call(child_pid, {
-          :process_action,
-          %{
-            action: "orient",
-            params: %{
-              current_situation: "Child spawned",
-              goal_clarity: "Clear",
-              available_resources: "Full",
-              key_challenges: "None",
-              delegation_consideration: "No delegation needed"
-            }
+        GenServer.call(
+          child_pid,
+          {
+            :process_action,
+            %{
+              action: "orient",
+              params: %{
+                current_situation: "Child spawned",
+                goal_clarity: "Clear",
+                available_resources: "Full",
+                key_challenges: "None",
+                delegation_consideration: "No delegation needed"
+              }
+            },
+            "action-2"
           },
-          "action-2"
-        })
+          @call_timeout
+        )
 
       assert {:ok, _} = child_result
 
@@ -110,20 +120,24 @@ defmodule Quoracle.Integration.SpawnTest do
       profile: profile
     } do
       spawn_result =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Inherit test",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Inherit test",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-1"
           },
-          "action-1"
-        })
+          @call_timeout
+        )
 
       {:ok, %{pid: child_pid}} = spawn_result
 
@@ -149,20 +163,24 @@ defmodule Quoracle.Integration.SpawnTest do
       children =
         for i <- 1..3 do
           {:ok, child} =
-            GenServer.call(parent_pid, {
-              :process_action,
-              %{
-                action: "spawn_child",
-                params: %{
-                  task_description: "Child #{i}",
-                  success_criteria: "Complete",
-                  immediate_context: "Test",
-                  approach_guidance: "Standard",
-                  profile: profile.name
-                }
+            GenServer.call(
+              parent_pid,
+              {
+                :process_action,
+                %{
+                  action: "spawn_child",
+                  params: %{
+                    task_description: "Child #{i}",
+                    success_criteria: "Complete",
+                    immediate_context: "Test",
+                    approach_guidance: "Standard",
+                    profile: profile.name
+                  }
+                },
+                "action-#{i}"
               },
-              "action-#{i}"
-            })
+              @call_timeout
+            )
 
           child
         end
@@ -188,20 +206,24 @@ defmodule Quoracle.Integration.SpawnTest do
       profile: profile
     } do
       {:ok, %{agent_id: child_id, pid: child_pid}} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Registry test",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Registry test",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-1"
           },
-          "action-1"
-        })
+          @call_timeout
+        )
 
       # CRITICAL: Add cleanup IMMEDIATELY after spawn to prevent leaks
       register_agent_cleanup(child_pid)
@@ -223,20 +245,24 @@ defmodule Quoracle.Integration.SpawnTest do
       profile: profile
     } do
       {:ok, %{agent_id: _child_id, pid: child_pid}} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "State test",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "State test",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-1"
           },
-          "action-1"
-        })
+          @call_timeout
+        )
 
       # CRITICAL: Add cleanup IMMEDIATELY after spawn to prevent leaks
       register_agent_cleanup(child_pid)
@@ -263,36 +289,44 @@ defmodule Quoracle.Integration.SpawnTest do
     } do
       # Spawn two children
       {:ok, child1} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Child 1",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Child 1",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-1"
           },
-          "action-1"
-        })
+          @call_timeout
+        )
 
       {:ok, child2} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Child 2",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Child 2",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-2"
           },
-          "action-2"
-        })
+          @call_timeout
+        )
 
       # CRITICAL: Add cleanup IMMEDIATELY after spawns to prevent leaks
       register_agent_cleanup(child1.pid)
@@ -300,11 +334,15 @@ defmodule Quoracle.Integration.SpawnTest do
 
       # Parent sends message to all children
       send_result =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{action: "send_message", params: %{to: "children", content: "Hello children"}},
-          "action-3"
-        })
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{action: "send_message", params: %{to: "children", content: "Hello children"}},
+            "action-3"
+          },
+          @call_timeout
+        )
 
       assert {:ok, %{sent_to: sent_list}} = send_result
       assert length(sent_list) == 2
@@ -319,31 +357,39 @@ defmodule Quoracle.Integration.SpawnTest do
       profile: profile
     } do
       {:ok, %{pid: child_pid, agent_id: child_id}} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Communicator",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Communicator",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-1"
           },
-          "action-1"
-        })
+          @call_timeout
+        )
 
       # CRITICAL: Add cleanup IMMEDIATELY after spawn to prevent leaks
       register_agent_cleanup(child_pid)
 
       # Child sends message to parent
       send_result =
-        GenServer.call(child_pid, {
-          :process_action,
-          %{action: "send_message", params: %{to: "parent", content: "Hello parent"}},
-          "action-2"
-        })
+        GenServer.call(
+          child_pid,
+          {
+            :process_action,
+            %{action: "send_message", params: %{to: "parent", content: "Hello parent"}},
+            "action-2"
+          },
+          @call_timeout
+        )
 
       assert {:ok, %{sent_to: [^parent_id]}} = send_result
 
@@ -362,54 +408,70 @@ defmodule Quoracle.Integration.SpawnTest do
     } do
       # Spawn two siblings
       {:ok, %{pid: child1_pid, agent_id: _child1_id}} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Sibling 1",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Sibling 1",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-1"
           },
-          "action-1"
-        })
+          @call_timeout
+        )
 
       {:ok, %{pid: child2_pid, agent_id: _child2_id}} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Sibling 2",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Sibling 2",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-2"
           },
-          "action-2"
-        })
+          @call_timeout
+        )
 
       # CRITICAL: Add cleanup IMMEDIATELY after spawns to prevent leaks
       register_agent_cleanup(child1_pid)
       register_agent_cleanup(child2_pid)
 
       # Child1 sends to parent, parent forwards to child2
-      GenServer.call(child1_pid, {
-        :process_action,
-        %{action: "send_message", params: %{to: "parent", content: "Forward this"}},
-        "action-3"
-      })
+      GenServer.call(
+        child1_pid,
+        {
+          :process_action,
+          %{action: "send_message", params: %{to: "parent", content: "Forward this"}},
+          "action-3"
+        },
+        @call_timeout
+      )
 
       # Parent forwards to all children
-      GenServer.call(parent_pid, {
-        :process_action,
-        %{action: "send_message", params: %{to: "children", content: "Forwarded message"}},
-        "action-4"
-      })
+      GenServer.call(
+        parent_pid,
+        {
+          :process_action,
+          %{action: "send_message", params: %{to: "children", content: "Forwarded message"}},
+          "action-4"
+        },
+        @call_timeout
+      )
 
       # Verify messages delivered by checking state (GenServer.call is synchronous)
       assert {:ok, child1_state} = Quoracle.Agent.Core.get_state(child1_pid)
@@ -425,20 +487,24 @@ defmodule Quoracle.Integration.SpawnTest do
       profile: profile
     } do
       {:ok, %{pid: child_pid}} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Mailbox test",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Mailbox test",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-1"
           },
-          "action-1"
-        })
+          @call_timeout
+        )
 
       # CRITICAL: Add cleanup IMMEDIATELY after spawn to prevent leaks
       register_agent_cleanup(child_pid)
@@ -447,11 +513,15 @@ defmodule Quoracle.Integration.SpawnTest do
       child_messages_before = state_before.messages
 
       # GenServer.call is synchronous - message delivery happens before return
-      GenServer.call(parent_pid, {
-        :process_action,
-        %{action: "send_message", params: %{to: "children", content: "Test message"}},
-        "action-2"
-      })
+      GenServer.call(
+        parent_pid,
+        {
+          :process_action,
+          %{action: "send_message", params: %{to: "children", content: "Test message"}},
+          "action-2"
+        },
+        @call_timeout
+      )
 
       assert {:ok, state_after} = Quoracle.Agent.Core.get_state(child_pid)
       child_messages_after = state_after.messages
@@ -465,20 +535,24 @@ defmodule Quoracle.Integration.SpawnTest do
       profile: profile
     } do
       {:ok, %{pid: child_pid}} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Invalid send test",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Invalid send test",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-1"
           },
-          "action-1"
-        })
+          @call_timeout
+        )
 
       # CRITICAL: Add cleanup IMMEDIATELY after spawn to prevent leaks
       register_agent_cleanup(child_pid)
@@ -488,11 +562,15 @@ defmodule Quoracle.Integration.SpawnTest do
         send(
           self(),
           {:result,
-           GenServer.call(child_pid, {
-             :process_action,
-             %{action: "send_message", params: %{to: "nonexistent", content: "Hello"}},
-             "action-2"
-           })}
+           GenServer.call(
+             child_pid,
+             {
+               :process_action,
+               %{action: "send_message", params: %{to: "nonexistent", content: "Hello"}},
+               "action-2"
+             },
+             @call_timeout
+           )}
         )
       end)
 
@@ -513,40 +591,48 @@ defmodule Quoracle.Integration.SpawnTest do
     } do
       # Parent spawns child
       {:ok, %{pid: child_pid}} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Middle generation",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Middle generation",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-1"
           },
-          "action-1"
-        })
+          @call_timeout
+        )
 
       # CRITICAL: Add cleanup IMMEDIATELY after spawn to prevent leaks
       register_agent_cleanup(child_pid)
 
       # Child spawns grandchild
       {:ok, %{pid: grandchild_pid, agent_id: grandchild_id}} =
-        GenServer.call(child_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Grandchild",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          child_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Grandchild",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-2"
           },
-          "action-2"
-        })
+          @call_timeout
+        )
 
       # CRITICAL: Add cleanup IMMEDIATELY after spawn to prevent leaks
       register_agent_cleanup(grandchild_pid)
@@ -565,36 +651,44 @@ defmodule Quoracle.Integration.SpawnTest do
     } do
       # Build 3-level hierarchy
       {:ok, %{pid: child}} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Level 2",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Level 2",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "a1"
           },
-          "a1"
-        })
+          @call_timeout
+        )
 
       {:ok, %{pid: grandchild}} =
-        GenServer.call(child, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Level 3",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          child,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Level 3",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "a2"
           },
-          "a2"
-        })
+          @call_timeout
+        )
 
       # CRITICAL: Add cleanup IMMEDIATELY after spawns to prevent leaks
       register_agent_cleanup(child)
@@ -602,11 +696,15 @@ defmodule Quoracle.Integration.SpawnTest do
 
       # Parent broadcasts to all descendants
       {:ok, _} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{action: "send_message", params: %{to: "children", content: "Broadcast"}},
-          "a3"
-        })
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{action: "send_message", params: %{to: "children", content: "Broadcast"}},
+            "a3"
+          },
+          @call_timeout
+        )
 
       # Only direct child should receive (children = direct only)
       assert {:ok, child_state} = Quoracle.Agent.Core.get_state(child)
@@ -651,20 +749,24 @@ defmodule Quoracle.Integration.SpawnTest do
       profile: profile
     } do
       {:ok, %{pid: child_pid}} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Orphan test",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Orphan test",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-1"
           },
-          "action-1"
-        })
+          @call_timeout
+        )
 
       # CRITICAL: Add cleanup IMMEDIATELY after spawn to prevent leaks
       register_agent_cleanup(child_pid)
@@ -695,36 +797,44 @@ defmodule Quoracle.Integration.SpawnTest do
     } do
       # Create hierarchy
       {:ok, %{pid: child}} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Child",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Child",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "a1"
           },
-          "a1"
-        })
+          @call_timeout
+        )
 
       {:ok, %{pid: grandchild}} =
-        GenServer.call(child, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Grandchild",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          child,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Grandchild",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "a2"
           },
-          "a2"
-        })
+          @call_timeout
+        )
 
       # CRITICAL: Add cleanup IMMEDIATELY after spawns to prevent leaks
       register_agent_cleanup(child)
@@ -748,36 +858,44 @@ defmodule Quoracle.Integration.SpawnTest do
     } do
       # Spawn two siblings
       {:ok, %{pid: child1_pid}} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Child 1",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Child 1",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-1"
           },
-          "action-1"
-        })
+          @call_timeout
+        )
 
       {:ok, %{pid: child2_pid}} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Child 2",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Child 2",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-2"
           },
-          "action-2"
-        })
+          @call_timeout
+        )
 
       # CRITICAL: Add cleanup IMMEDIATELY after spawns to prevent leaks
       register_agent_cleanup(child1_pid)
@@ -813,20 +931,24 @@ defmodule Quoracle.Integration.SpawnTest do
       Phoenix.PubSub.subscribe(deps.pubsub, "agents:lifecycle")
 
       {:ok, %{agent_id: child_id}} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "UI test",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "UI test",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-1"
           },
-          "action-1"
-        })
+          @call_timeout
+        )
 
       assert_receive {:agent_spawned, event}, 30_000
       assert event.agent_id == child_id
@@ -846,20 +968,24 @@ defmodule Quoracle.Integration.SpawnTest do
       profile: profile
     } do
       {:ok, %{pid: child_pid, agent_id: child_id}} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Action test",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Action test",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-1"
           },
-          "action-1"
-        })
+          @call_timeout
+        )
 
       # CRITICAL: Add cleanup IMMEDIATELY after spawn to prevent leaks
       register_agent_cleanup(child_pid)
@@ -870,20 +996,24 @@ defmodule Quoracle.Integration.SpawnTest do
 
       # Child executes action with required orient params
       # TEST-FIX: Orient requires 5 params per Schema (including delegation_consideration)
-      GenServer.call(child_pid, {
-        :process_action,
-        %{
-          action: "orient",
-          params: %{
-            current_situation: "Test",
-            goal_clarity: "Clear",
-            available_resources: "All",
-            key_challenges: "None",
-            delegation_consideration: "No delegation needed"
-          }
+      GenServer.call(
+        child_pid,
+        {
+          :process_action,
+          %{
+            action: "orient",
+            params: %{
+              current_situation: "Test",
+              goal_clarity: "Clear",
+              available_resources: "All",
+              key_challenges: "None",
+              delegation_consideration: "No delegation needed"
+            }
+          },
+          "action-2"
         },
-        "action-2"
-      })
+        @call_timeout
+      )
 
       # TEST-FIX: Event type is :action_completed, not :action_result
       # Receive messages until we get the child's action (filter out parent's spawn)
@@ -917,20 +1047,24 @@ defmodule Quoracle.Integration.SpawnTest do
       Phoenix.PubSub.subscribe(deps.pubsub, "agents:lifecycle")
 
       {:ok, %{agent_id: child_id, pid: child_pid}} =
-        GenServer.call(parent_pid, {
-          :process_action,
-          %{
-            action: "spawn_child",
-            params: %{
-              task_description: "Metadata test",
-              success_criteria: "Complete",
-              immediate_context: "Test",
-              approach_guidance: "Standard",
-              profile: profile.name
-            }
+        GenServer.call(
+          parent_pid,
+          {
+            :process_action,
+            %{
+              action: "spawn_child",
+              params: %{
+                task_description: "Metadata test",
+                success_criteria: "Complete",
+                immediate_context: "Test",
+                approach_guidance: "Standard",
+                profile: profile.name
+              }
+            },
+            "action-1"
           },
-          "action-1"
-        })
+          @call_timeout
+        )
 
       # CRITICAL: Add cleanup IMMEDIATELY after spawn to prevent leaks
       register_agent_cleanup(child_pid)
@@ -970,7 +1104,7 @@ defmodule Quoracle.Integration.SpawnTest do
         },
         action_id
       },
-      15_000
+      @call_timeout
     )
   end
 

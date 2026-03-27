@@ -3,7 +3,7 @@
 ## DashboardLive (6-module architecture, 3-panel layout)
 
 **Modules:**
-- Main coordinator (493 lines): 3-panel UI (Unified TaskTree 5/12, Logs 1/3, Mailbox 1/4), task persistence, pause/resume, real-time updates, cost debounce, log debounce
+- Main coordinator (498 lines): 3-panel UI (Unified TaskTree 5/12, Logs 1/3, Mailbox 1/4), task persistence, pause/resume, real-time updates, cost debounce, log debounce
 - DataLoader (231 lines): Extracted data loading/merging helpers (2025-12 REFACTOR)
   - load_tasks_from_db/2: Query DB + Registry, merge state
   - merge_task_state/2: Combine persisted tasks with live agents
@@ -12,7 +12,7 @@
   - build_agent_alive_map/1: Build agent_id => alive status map
 - Subscriptions: safe_subscribe with MapSet tracking, auto-subscribe to agent todos topic, task message topics
 - EventHandlers (451 lines): submit_prompt (grove_skills_path forwarding, XML-tagged initial message via PromptFieldManager), pause/resume_task, delete_task, select_agent
-- MessageHandlers: agent_spawned/terminated (v12.0: first-writer-wins root_agent_id guard), log_entry, task_message, agent_message, todos_updated (2025-12), send_direct_message (2025-11), link_orphaned_children (2025-12), grove_skills_path_updated (2026-02)
+- MessageHandlers (461 lines): agent_spawned/terminated (v12.0: first-writer-wins root_agent_id guard), log_entry, task_message, agent_message, todos_updated (2025-12), send_direct_message (2025-11), link_orphaned_children (2025-12), grove_skills_path_updated (2026-02)
 - TestHelpers: Test-specific handlers
 
 ## SecretManagementLive (5-module architecture, 2025-10-24)
@@ -143,3 +143,15 @@ Test coverage: 69 dashboard_live_test, 16 dashboard_delete_integration_test, 20 
 - **LogView v5.0**: Pre-compute `display_logs` in `update/2` instead of inline filtering in render
   - `display_logs/2` private helper: filter_by_level + Enum.take(-100)
   - Render uses `@display_logs` directly
+
+## Dashboard Performance Phase 2 — Per-Node Slicing + Log Detail (2026-03-21, perf-20260321-012101)
+- **DashboardLive v21.0** (498 lines): LogDetailTruncation extraction, budget_editor_modal component, load_profiles moved to DataLoader
+  - `LogDetailTruncation` module: truncate_buffered_logs/1, store_log_detail/2, maybe_truncate_raw_responses/1, maybe_truncate_sent_messages/1
+  - `handle_info({:fetch_log_detail, log_id, component_id})`: lazy-load full log detail via send_update
+  - `log_details` assign: bounded map (500 entries) of full metadata keyed by log_id
+  - Removed duplicate agent-level cost subscription from handle_agent_spawned
+  - Passes `root_pid={self()}` to LogView for LogEntry detail callbacks
+- **MessageHandlers v21.0** (461 lines): truncation + log_details storage integrated into handle_log_entry/2
+- **TaskTree v14.0**: `enrich_display_agents/4` builds enriched display_agents with ui_total_cost, ui_alive, ui_message_form per agent. Passes scalar props (agent_cost, agent_message_form) to AgentNode instead of full maps
+- **LogView v6.0**: Forwards root_pid to LogEntry components
+- **LogEntry v3.0**: effective_metadata/1, metadata_truncated?/1, truncated?/1 helpers. "Show full details..." button with fetch_full_detail event handler

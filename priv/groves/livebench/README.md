@@ -18,10 +18,12 @@ Two-tier tree:
 Coordinator → Solvers (one per question, dispatched via batch_async)
 ```
 
-The coordinator dispatches solvers directly using `batch_async` to handle
-dismissals and new spawns per consensus round. Solvers write their own
-answer files directly. After all solvers complete, a single `score-run.sh`
-call scores everything and produces the report.
+The coordinator dispatches solvers directly using `batch_async` in a
+continuous replenishment loop. As solvers complete, the coordinator combines
+dismissals and replacement spawns in the same round so concurrency stays full
+until all questions are dispatched and no solver children remain. Solvers write
+their own answer files directly. Only then does a single `score-run.sh` call
+score everything and produce the report.
 
 ## How To Run
 

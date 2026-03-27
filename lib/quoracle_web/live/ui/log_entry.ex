@@ -11,13 +11,14 @@ defmodule QuoracleWeb.UI.LogEntry do
   @impl true
   @spec render(map()) :: Phoenix.LiveView.Rendered.t()
   def render(assigns) do
-    # Check if metadata exists for conditional click handler
+    metadata = effective_metadata(assigns)
+
     assigns =
-      assign(
-        assigns,
-        :has_metadata,
-        assigns.log[:metadata] && map_size(assigns.log[:metadata]) > 0
-      )
+      assigns
+      |> assign(:has_metadata, map_size(metadata) > 0)
+      |> assign(:effective_metadata, metadata)
+      |> assign(:metadata_truncated, metadata_truncated?(metadata))
+      |> assign(:full_detail_missing, assigns[:full_detail] == :not_found)
 
     ~H"""
     <div
@@ -90,13 +91,26 @@ defmodule QuoracleWeb.UI.LogEntry do
       </div>
       
       <!-- Metadata (expandable, with word-wrap) -->
-      <%= if @expanded && @log[:metadata] && map_size(@log[:metadata]) > 0 do %>
+      <%= if @expanded && @has_metadata do %>
         <div class="metadata mt-2 ml-8 p-2 bg-gray-100 rounded text-sm">
-          <%= if has_sent_messages?(@log[:metadata]) do %>
-            <!-- Sent Messages Sub-Accordions (outgoing to LLMs) -->
+          <%= if @full_detail_missing do %>
+            <div class="mb-2 text-xs text-gray-400 italic">Full detail no longer available</div>
+          <% end %>
+
+          <%= if @metadata_truncated and is_nil(@full_detail) do %>
+            <button
+              phx-click="fetch_full_detail"
+              phx-target={@myself}
+              class="mb-2 text-xs text-blue-500 hover:underline"
+            >
+              Show full details...
+            </button>
+          <% end %>
+
+          <%= if has_sent_messages?(@effective_metadata) do %>
             <div class="sent-messages space-y-2">
               <div class="text-xs text-gray-600 font-medium mb-1">Messages sent to models:</div>
-              <%= for {model_entry, index} <- Enum.with_index(@log[:metadata][:sent_messages] || @log[:metadata]["sent_messages"] || []) do %>
+              <%= for {model_entry, index} <- Enum.with_index(@effective_metadata[:sent_messages] || @effective_metadata["sent_messages"] || []) do %>
                 <div class="sent-message border border-blue-200 rounded bg-white">
                   <div
                     class="flex items-center justify-between p-2 cursor-pointer hover:bg-blue-50"
@@ -123,14 +137,16 @@ defmodule QuoracleWeb.UI.LogEntry do
                   </div>
                   <%= if MapSet.member?(@expanded_sent_messages, index) do %>
                     <div class="p-2 border-t border-blue-200 bg-blue-50 space-y-1">
-                      <!-- Nested message accordions -->
                       <% messages = get_messages_from_entry(model_entry) %>
                       <%= for {msg, msg_index} <- Enum.with_index(messages) do %>
                         <% msg_key = {index, msg_index} %>
                         <% is_expanded = MapSet.member?(@expanded_sent_message_items, msg_key) %>
                         <% role = get_message_role(msg) %>
                         <% content = get_message_content(msg) %>
-                        <div class={"message-item border rounded #{role_border_class(role)}"}>
+                        <div
+                          class={"message-item border rounded #{role_border_class(role)}"}
+                          data-truncated={to_string(truncated?(msg))}
+                        >
                           <div
                             class={"flex items-center gap-2 p-1.5 cursor-pointer text-xs #{role_hover_class(role)}"}
                             phx-click="toggle_sent_message_item"
@@ -158,31 +174,36 @@ defmodule QuoracleWeb.UI.LogEntry do
                 </div>
               <% end %>
             </div>
-            <!-- Other metadata (excluding sent_messages) -->
-            <% other_metadata = Map.drop(@log[:metadata], [:sent_messages, "sent_messages"]) %>
+
+            <% other_metadata = Map.drop(@effective_metadata, [:sent_messages, "sent_messages"]) %>
             <%= if map_size(other_metadata) > 0 do %>
               <div class="mt-2 pt-2 border-t border-border-subtle">
                 <pre class="text-xs break-words whitespace-pre-wrap overflow-wrap-anywhere select-text"><%= format_metadata(other_metadata) %></pre>
               </div>
             <% end %>
           <% else %>
-            <%= if has_llm_responses?(@log[:metadata]) do %>
-              <!-- LLM Response Sub-Accordions -->
+            <%= if has_llm_responses?(@effective_metadata) do %>
               <div class="llm-responses space-y-2">
-                <%= for {response, index} <- Enum.with_index(@log[:metadata][:raw_responses] || @log[:metadata]["raw_responses"] || []) do %>
-                  <div class="llm-response border border-border-subtle rounded bg-white">
+                <%= for {response, index} <- Enum.with_index(@effective_metadata[:raw_responses] || @effective_metadata["raw_responses"] || []) do %>
+                  <div
+                    class="llm-response border border-border-subtle rounded bg-white"
+                    data-truncated={to_string(truncated?(response))}
+                  >
                     <div
                       class="flex items-center justify-between p-2 cursor-pointer hover:bg-gray-50"
                       phx-click="toggle_response"
                       phx-value-index={index}
                       phx-target={@myself}
                     >
-                      <div class="flex items-center gap-2">
+                      <div class="flex items-center gap-2 flex-1 min-w-0">
                         <span class="text-gray-400">
                           <%= if MapSet.member?(@expanded_responses, index), do: "▼", else: "▶" %>
                         </span>
                         <span class="font-medium text-sm"><%= format_model_name(response) %></span>
                         <span class="text-xs text-gray-500"><%= format_response_stats(response) %></span>
+                        <%= unless MapSet.member?(@expanded_responses, index) do %>
+                          <span class="text-gray-600 truncate flex-1"><%= format_response_content(response) %></span>
+                        <% end %>
                       </div>
                       <button
                         phx-click="copy_response"
@@ -202,15 +223,15 @@ defmodule QuoracleWeb.UI.LogEntry do
                   </div>
                 <% end %>
               </div>
-              <!-- Other metadata (excluding raw_responses) -->
-              <% other_metadata = Map.drop(@log[:metadata], [:raw_responses, "raw_responses"]) %>
+
+              <% other_metadata = Map.drop(@effective_metadata, [:raw_responses, "raw_responses"]) %>
               <%= if map_size(other_metadata) > 0 do %>
                 <div class="mt-2 pt-2 border-t border-border-subtle">
                   <pre class="text-xs break-words whitespace-pre-wrap overflow-wrap-anywhere select-text"><%= format_metadata(other_metadata) %></pre>
                 </div>
               <% end %>
             <% else %>
-              <pre class="text-xs break-words whitespace-pre-wrap overflow-wrap-anywhere select-text"><%= format_metadata(@log[:metadata]) %></pre>
+              <pre class="text-xs break-words whitespace-pre-wrap overflow-wrap-anywhere select-text"><%= format_metadata(@effective_metadata) %></pre>
             <% end %>
           <% end %>
         </div>
@@ -233,6 +254,8 @@ defmodule QuoracleWeb.UI.LogEntry do
       |> assign_new(:expanded_sent_messages, fn -> MapSet.new() end)
       |> assign_new(:expanded_sent_message_items, fn -> MapSet.new() end)
       |> assign_new(:highlight, fn -> nil end)
+      |> assign_new(:root_pid, fn -> nil end)
+      |> assign_new(:full_detail, fn -> nil end)
 
     # Default target to myself if not provided by parent
     # (allows routing toggle events to parent LogView when used in context)
@@ -318,7 +341,8 @@ defmodule QuoracleWeb.UI.LogEntry do
   @impl true
   def handle_event("copy_full", _params, socket) do
     log = socket.assigns.log
-    text = "#{log[:level]}: #{log[:message]}\nMetadata: #{inspect(log[:metadata])}"
+    metadata = effective_metadata(socket.assigns)
+    text = "#{log[:level]}: #{log[:message]}\nMetadata: #{inspect(metadata)}"
     {:noreply, push_event(socket, "copy_to_clipboard", %{text: text})}
   end
 
@@ -326,9 +350,8 @@ defmodule QuoracleWeb.UI.LogEntry do
   def handle_event("copy_response", %{"index" => index_str}, socket) do
     index = String.to_integer(index_str)
 
-    responses =
-      socket.assigns.log[:metadata][:raw_responses] ||
-        socket.assigns.log[:metadata]["raw_responses"] || []
+    metadata = effective_metadata(socket.assigns)
+    responses = metadata[:raw_responses] || metadata["raw_responses"] || []
 
     case Enum.at(responses, index) do
       nil ->
@@ -344,9 +367,8 @@ defmodule QuoracleWeb.UI.LogEntry do
   def handle_event("copy_sent_message", %{"index" => index_str}, socket) do
     index = String.to_integer(index_str)
 
-    sent_messages =
-      socket.assigns.log[:metadata][:sent_messages] ||
-        socket.assigns.log[:metadata]["sent_messages"] || []
+    metadata = effective_metadata(socket.assigns)
+    sent_messages = metadata[:sent_messages] || metadata["sent_messages"] || []
 
     case Enum.at(sent_messages, index) do
       nil ->
@@ -357,6 +379,43 @@ defmodule QuoracleWeb.UI.LogEntry do
         {:noreply, push_event(socket, "copy_to_clipboard", %{text: text})}
     end
   end
+
+  @impl true
+  def handle_event("fetch_full_detail", _params, socket) do
+    if root_pid = socket.assigns[:root_pid] do
+      send(root_pid, {:fetch_log_detail, socket.assigns.log[:id], socket.assigns.id})
+    end
+
+    {:noreply, socket}
+  end
+
+  @spec effective_metadata(map()) :: map()
+  defp effective_metadata(assigns) do
+    case assigns[:full_detail] do
+      detail when is_map(detail) -> detail
+      _ -> assigns.log[:metadata] || %{}
+    end
+  end
+
+  @spec metadata_truncated?(map()) :: boolean()
+  defp metadata_truncated?(metadata) do
+    raw_truncated? =
+      Enum.any?(metadata[:raw_responses] || metadata["raw_responses"] || [], &truncated?/1)
+
+    sent_truncated? =
+      Enum.any?(metadata[:sent_messages] || metadata["sent_messages"] || [], fn model_entry ->
+        Enum.any?(get_messages_from_entry(model_entry), &truncated?/1)
+      end)
+
+    raw_truncated? or sent_truncated?
+  end
+
+  @spec truncated?(map() | term()) :: boolean()
+  defp truncated?(entry) when is_map(entry) do
+    entry[:truncated?] == true or entry["truncated?"] == true
+  end
+
+  defp truncated?(_), do: false
 
   # Helpers imported from QuoracleWeb.UI.LogEntry.Helpers
 end

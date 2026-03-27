@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-03-27
+
+### Changed
+
+- Dashboard per-node scalar extraction: AgentNode only reads the fields it needs from agent state, reducing LiveView diff overhead.
+- Log detail truncation with lazy-load: long log entries are truncated in the list view and expand on click.
+- Removed duplicate agent cost PubSub subscriptions that caused redundant re-renders.
+- Upgraded LLMDB to v2026.3 with new snapshot format.
+
+### Fixed
+
+- Livebench coding category scoring issues.
+- Benchmark grove adherence improvements for more reliable agent behavior.
+
 ## [0.2.2] - 2026-03-18
 
 ### Added

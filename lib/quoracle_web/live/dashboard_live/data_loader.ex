@@ -305,4 +305,17 @@ defmodule QuoracleWeb.DashboardLive.DataLoader do
       nil
     end
   end
+
+  @doc "Load profile list for Dashboard display."
+  @spec load_profiles() :: list(map())
+  def load_profiles do
+    import Ecto.Query
+
+    alias Quoracle.Profiles.TableProfiles
+
+    Quoracle.Repo.all(from(p in TableProfiles, order_by: p.name))
+    |> Enum.map(fn p ->
+      %{name: p.name, capability_groups: TableProfiles.capability_groups_as_atoms(p)}
+    end)
+  end
 end

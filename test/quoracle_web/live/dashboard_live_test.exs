@@ -2666,6 +2666,185 @@ defmodule QuoracleWeb.DashboardLiveTest do
     end
   end
 
+  describe "UI_Dashboard v21.0 packet 1" do
+    test "R55: handle_agent_spawned does not subscribe to agent cost topic", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      task = create_db_only_task("R55 duplicate agent cost subscription")
+      initial_topics = :sys.get_state(view.pid).socket.assigns.subscribed_topics
+      agent_id = "r55-agent-#{System.unique_integer([:positive])}"
+
+      send(
+        view.pid,
+        {:agent_spawned,
+         %{agent_id: agent_id, task_id: task.id, parent_id: nil, timestamp: DateTime.utc_now()}}
+      )
+
+      render(view)
+
+      updated_topics = :sys.get_state(view.pid).socket.assigns.subscribed_topics
+
+      assert MapSet.member?(updated_topics, "tasks:#{task.id}:costs")
+      assert MapSet.member?(updated_topics, "tasks:#{task.id}:messages")
+      refute MapSet.member?(updated_topics, "agents:#{agent_id}:costs")
+      assert MapSet.size(updated_topics) == MapSet.size(initial_topics) + 4
+    end
+
+    test "R56: handle_agent_spawned keeps task cost subscription for child agents", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      {:ok, view, _html} =
+        live_isolated(conn, QuoracleWeb.DashboardLive,
+          session: %{
+            "pubsub" => pubsub,
+            "registry" => registry,
+            "dynsup" => dynsup,
+            "sandbox_owner" => sandbox_owner
+          }
+        )
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      task = create_db_only_task("R56 task cost subscription preserved")
+      initial_topics = :sys.get_state(view.pid).socket.assigns.subscribed_topics
+      agent_id = "r56-child-#{System.unique_integer([:positive])}"
+
+      send(
+        view.pid,
+        {:agent_spawned,
+         %{
+           agent_id: agent_id,
+           task_id: task.id,
+           parent_id: "existing-parent",
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      render(view)
+
+      updated_topics = :sys.get_state(view.pid).socket.assigns.subscribed_topics
+      new_topics = MapSet.difference(updated_topics, initial_topics)
+
+      assert new_topics ==
+               MapSet.new([
+                 "agents:#{agent_id}:logs",
+                 "agents:#{agent_id}:todos",
+                 "tasks:#{task.id}:costs"
+               ])
+    end
+
+    @tag :acceptance
+    test "R57: dashboard route updates cost display via task-level subscription only", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      conn =
+        Plug.Test.init_test_session(conn, %{
+          "pubsub" => pubsub,
+          "registry" => registry,
+          "dynsup" => dynsup,
+          "sandbox_owner" => sandbox_owner,
+          "cost_debounce_ms" => 0
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      {:ok, {task, agent_pid}} =
+        create_task_with_cleanup("R57 task-level-only cost refresh",
+          sandbox_owner: sandbox_owner,
+          dynsup: dynsup,
+          registry: registry,
+          pubsub: pubsub,
+          force_persist: true
+        )
+
+      {:ok, %{agent_id: agent_id}} = GenServer.call(agent_pid, :get_state)
+
+      render(view)
+
+      subscribed_topics = :sys.get_state(view.pid).socket.assigns.subscribed_topics
+
+      assert MapSet.member?(subscribed_topics, "tasks:#{task.id}:costs")
+      refute MapSet.member?(subscribed_topics, "agents:#{agent_id}:costs")
+
+      {:ok, _cost} =
+        Quoracle.Costs.Recorder.record(
+          %{
+            agent_id: agent_id,
+            task_id: task.id,
+            cost_type: "llm_consensus",
+            cost_usd: Decimal.new("0.42"),
+            metadata: %{"model_spec" => "anthropic:claude-sonnet"}
+          },
+          pubsub: pubsub,
+          sandbox_owner: sandbox_owner
+        )
+
+      render(view)
+      render(view)
+
+      task_tree_html = view |> element("#task-tree") |> render()
+      task_cost_html = view |> element("#task-cost-#{task.id}") |> render()
+      agent_cost_html = view |> element("#cost-badge-tasktree-#{agent_id}") |> render()
+
+      assert task_tree_html =~ task.id
+      assert task_cost_html =~ "$0.42"
+      assert agent_cost_html =~ "$0.42"
+      refute task_cost_html =~ "N/A"
+      refute agent_cost_html =~ "N/A"
+      refute task_tree_html =~ "error"
+    end
+  end
+
   # ============================================================
   # R22-R27: Restored Child Agent Visibility Fix (fix-ui-restore-20251219-064003)
   # Tests for link_orphaned_children/2 function and race condition handling
@@ -4593,6 +4772,556 @@ defmodule QuoracleWeb.DashboardLiveTest do
 
       assert Map.has_key?(assigns, :log_buffer),
              "log_buffer assign should exist after v20.0 implementation"
+    end
+  end
+
+  describe "UI_Dashboard v21.0 packet 3" do
+    test "R58: dashboard truncates raw response text and marks it truncated" do
+      alias QuoracleWeb.DashboardLive.MessageHandlers
+
+      full_raw = "RAW-" <> String.duplicate("abcdefghijklmnopqrstuvwxyz", 10)
+
+      log = %{
+        id: 5801,
+        agent_id: "agent-r58",
+        level: :debug,
+        message: "raw response log",
+        metadata: %{
+          raw_responses: [
+            %{
+              model: "claude-3",
+              text: full_raw,
+              usage: %{input_tokens: 10, output_tokens: 5},
+              finish_reason: "stop",
+              latency_ms: 123
+            }
+          ]
+        },
+        timestamp: DateTime.utc_now()
+      }
+
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          __changed__: %{},
+          logs: %{},
+          selected_agent_id: nil,
+          filtered_logs: [],
+          log_buffer: [],
+          log_refresh_timer: nil,
+          log_debounce_ms: 5_000,
+          log_details: %{}
+        }
+      }
+
+      {:noreply, updated_socket} = MessageHandlers.handle_log_entry(log, socket)
+      buffered_log = hd(Map.get(updated_socket.assigns, :log_buffer))
+      metadata = Map.get(buffered_log, :metadata)
+      response = metadata |> Map.get(:raw_responses) |> hd()
+
+      assert Map.get(response, :text) == String.slice(full_raw, 0, 200) <> "..."
+      assert Map.get(response, :truncated?) == true
+      refute Map.get(response, :text) == full_raw
+    end
+
+    test "R59: dashboard truncates sent message content and marks it truncated" do
+      alias QuoracleWeb.DashboardLive.MessageHandlers
+
+      full_prompt = "PROMPT-" <> String.duplicate("1234567890", 25)
+
+      log = %{
+        id: 5901,
+        agent_id: "agent-r59",
+        level: :debug,
+        message: "sent message log",
+        metadata: %{
+          sent_messages: [
+            %{
+              model_id: "gpt-4",
+              messages: [
+                %{role: "system", content: "short system prompt"},
+                %{role: "user", content: full_prompt}
+              ]
+            }
+          ]
+        },
+        timestamp: DateTime.utc_now()
+      }
+
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          __changed__: %{},
+          logs: %{},
+          selected_agent_id: nil,
+          filtered_logs: [],
+          log_buffer: [],
+          log_refresh_timer: nil,
+          log_debounce_ms: 5_000,
+          log_details: %{}
+        }
+      }
+
+      {:noreply, updated_socket} = MessageHandlers.handle_log_entry(log, socket)
+      buffered_log = hd(Map.get(updated_socket.assigns, :log_buffer))
+      metadata = Map.get(buffered_log, :metadata)
+      model_entry = metadata |> Map.get(:sent_messages) |> hd()
+      messages = Map.get(model_entry, :messages)
+      system_message = Enum.at(messages, 0)
+      user_message = Enum.at(messages, 1)
+
+      assert Map.get(system_message, :content) == "short system prompt"
+      assert Map.get(user_message, :content) == String.slice(full_prompt, 0, 200) <> "..."
+      assert Map.get(user_message, :truncated?) == true
+      refute Map.get(user_message, :content) == full_prompt
+    end
+
+    test "R60: full log metadata stored in log_details for raw_responses or sent_messages" do
+      alias QuoracleWeb.DashboardLive.MessageHandlers
+
+      full_raw = "RAW-" <> String.duplicate("store-detail-", 20)
+
+      log = %{
+        id: 6001,
+        agent_id: "agent-r60",
+        level: :debug,
+        message: "store full metadata",
+        metadata: %{
+          raw_responses: [
+            %{model: "claude-3", text: full_raw}
+          ],
+          sent_messages: [
+            %{model_id: "claude-3", messages: [%{role: "user", content: full_raw}]}
+          ]
+        },
+        timestamp: DateTime.utc_now()
+      }
+
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          __changed__: %{},
+          logs: %{},
+          selected_agent_id: nil,
+          filtered_logs: [],
+          log_buffer: [],
+          log_refresh_timer: nil,
+          log_debounce_ms: 5_000,
+          log_details: %{}
+        }
+      }
+
+      {:noreply, updated_socket} = MessageHandlers.handle_log_entry(log, socket)
+      stored_details = Map.get(updated_socket.assigns, :log_details)
+      buffered_log = hd(Map.get(updated_socket.assigns, :log_buffer))
+
+      assert Map.get(stored_details, 6001) == Map.get(log, :metadata)
+      refute Map.get(buffered_log, :metadata) == Map.get(log, :metadata)
+    end
+
+    test "R61: log_details map capped at 500 entries by oldest log id" do
+      alias QuoracleWeb.DashboardLive.MessageHandlers
+
+      existing_details =
+        for id <- 1..500, into: %{} do
+          {id, %{raw_responses: [%{model: "existing", text: "detail-#{id}"}]}}
+        end
+
+      full_raw = "RAW-" <> String.duplicate("bounded-detail-", 20)
+
+      log = %{
+        id: 501,
+        agent_id: "agent-r61",
+        level: :debug,
+        message: "bounded detail log",
+        metadata: %{
+          raw_responses: [
+            %{model: "claude-3", text: full_raw}
+          ]
+        },
+        timestamp: DateTime.utc_now()
+      }
+
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          __changed__: %{},
+          logs: %{},
+          selected_agent_id: nil,
+          filtered_logs: [],
+          log_buffer: [],
+          log_refresh_timer: nil,
+          log_debounce_ms: 5_000,
+          log_details: existing_details
+        }
+      }
+
+      {:noreply, updated_socket} = MessageHandlers.handle_log_entry(log, socket)
+      stored_details = Map.get(updated_socket.assigns, :log_details)
+
+      assert map_size(stored_details) == 500
+      refute Map.has_key?(stored_details, 1)
+      assert Map.has_key?(stored_details, 501)
+    end
+
+    test "R62: dashboard passes root_pid to LogView for log detail callbacks", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      conn =
+        Plug.Test.init_test_session(conn, %{
+          "pubsub" => pubsub,
+          "registry" => registry,
+          "dynsup" => dynsup,
+          "sandbox_owner" => sandbox_owner,
+          "log_debounce_ms" => 0
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+      view_pid = view.pid
+
+      on_exit(fn ->
+        if Process.alive?(view_pid) do
+          :erlang.trace(view_pid, false, [:receive])
+
+          try do
+            GenServer.stop(view_pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      truncated_log = %{
+        id: 6201,
+        agent_id: "agent-r62",
+        level: :debug,
+        message: "root pid forwarding",
+        metadata: %{
+          raw_responses: [
+            %{model: "claude-3", text: String.duplicate("r", 200) <> "...", truncated?: true}
+          ]
+        },
+        timestamp: DateTime.utc_now()
+      }
+
+      # Seed a live agent so Dashboard keeps the log in filtered_logs for the real route
+      send(
+        view.pid,
+        {:agent_spawned,
+         %{
+           agent_id: "agent-r62",
+           task_id: create_db_only_task("R62 log callbacks").id,
+           parent_id: nil,
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      render(view)
+
+      send(view.pid, {:log_entry, truncated_log})
+      render(view)
+      render(view)
+
+      :erlang.trace(view_pid, true, [:receive])
+
+      view
+      |> element("[phx-click='toggle_metadata'][phx-value-log-id='6201']")
+      |> render_click()
+
+      view
+      |> element("[phx-click='fetch_full_detail']")
+      |> render_click()
+
+      assert_receive {:trace, ^view_pid, :receive, {:fetch_log_detail, 6201, "log-6201"}}, 1_000
+    end
+
+    test "R63: fetch_log_detail sends full metadata or not_found to LogEntry component", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      conn =
+        Plug.Test.init_test_session(conn, %{
+          "pubsub" => pubsub,
+          "registry" => registry,
+          "dynsup" => dynsup,
+          "sandbox_owner" => sandbox_owner,
+          "log_debounce_ms" => 0
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      truncated_raw = String.duplicate("t", 200) <> "..."
+      full_raw = "FULL-RAW-" <> String.duplicate("abcdefghijklmnopqrstuvwxyz", 10)
+
+      truncated_log = %{
+        id: 6301,
+        agent_id: "agent-r63",
+        level: :debug,
+        message: "fetch full metadata",
+        metadata: %{
+          raw_responses: [
+            %{model: "claude-3", text: truncated_raw, truncated?: true}
+          ]
+        },
+        timestamp: DateTime.utc_now()
+      }
+
+      # Seed a live agent so Dashboard keeps the log in filtered_logs for the real route
+      send(
+        view.pid,
+        {:agent_spawned,
+         %{
+           agent_id: "agent-r63",
+           task_id: create_db_only_task("R63 fetch full detail").id,
+           parent_id: nil,
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      render(view)
+
+      send(view.pid, {:log_entry, truncated_log})
+      render(view)
+      render(view)
+
+      :sys.replace_state(view.pid, fn state ->
+        updated_socket =
+          state.socket
+          |> Phoenix.Component.assign(
+            log_details: %{6301 => %{raw_responses: [%{model: "claude-3", text: full_raw}]}}
+          )
+
+        %{state | socket: updated_socket}
+      end)
+
+      view
+      |> element("[phx-click='toggle_metadata'][phx-value-log-id='6301']")
+      |> render_click()
+
+      view
+      |> element("[phx-click='toggle_response'][phx-value-index='0']")
+      |> render_click()
+
+      before_html = view |> element("#logs") |> render()
+      assert before_html =~ truncated_raw
+      refute before_html =~ full_raw
+
+      send(view.pid, {:fetch_log_detail, 6301, "log-6301"})
+      render(view)
+      render(view)
+
+      after_html = view |> element("#logs") |> render()
+      assert after_html =~ full_raw
+      refute after_html =~ truncated_raw
+
+      send(view.pid, {:fetch_log_detail, 9999, "log-6301"})
+      render(view)
+      render(view)
+
+      missing_html = view |> element("#logs") |> render()
+      assert missing_html =~ "Full detail no longer available"
+    end
+
+    test "R64: truncation preserves non-text fields" do
+      alias QuoracleWeb.DashboardLive.MessageHandlers
+
+      full_raw = "RAW-" <> String.duplicate("preserve-fields-", 20)
+      full_prompt = "PROMPT-" <> String.duplicate("preserve-fields-", 20)
+
+      log = %{
+        id: 6401,
+        agent_id: "agent-r64",
+        level: :debug,
+        message: "preserve metadata fields",
+        metadata: %{
+          raw_responses: [
+            %{
+              model: "claude-3",
+              text: full_raw,
+              usage: %{input_tokens: 111, output_tokens: 222},
+              finish_reason: "stop",
+              latency_ms: 333
+            }
+          ],
+          sent_messages: [
+            %{
+              model_id: "claude-3",
+              messages: [
+                %{role: "system", content: "short system"},
+                %{role: "user", content: full_prompt}
+              ]
+            }
+          ]
+        },
+        timestamp: DateTime.utc_now()
+      }
+
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          __changed__: %{},
+          logs: %{},
+          selected_agent_id: nil,
+          filtered_logs: [],
+          log_buffer: [],
+          log_refresh_timer: nil,
+          log_debounce_ms: 5_000,
+          log_details: %{}
+        }
+      }
+
+      {:noreply, updated_socket} = MessageHandlers.handle_log_entry(log, socket)
+      buffered_log = hd(Map.get(updated_socket.assigns, :log_buffer))
+      metadata = Map.get(buffered_log, :metadata)
+      response = metadata |> Map.get(:raw_responses) |> hd()
+      model_entry = metadata |> Map.get(:sent_messages) |> hd()
+      messages = Map.get(model_entry, :messages)
+      system_message = Enum.at(messages, 0)
+      user_message = Enum.at(messages, 1)
+
+      assert Map.get(response, :model) == "claude-3"
+      assert Map.get(response, :usage) == %{input_tokens: 111, output_tokens: 222}
+      assert Map.get(response, :finish_reason) == "stop"
+      assert Map.get(response, :latency_ms) == 333
+      assert Map.get(system_message, :content) == "short system"
+      assert Map.get(user_message, :content) == String.slice(full_prompt, 0, 200) <> "..."
+    end
+
+    test "R65: logs without lazy-load metadata are stored unchanged", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      conn =
+        Plug.Test.init_test_session(conn, %{
+          "pubsub" => pubsub,
+          "registry" => registry,
+          "dynsup" => dynsup,
+          "sandbox_owner" => sandbox_owner,
+          "log_debounce_ms" => 0
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      initial_assigns = :sys.get_state(view.pid).socket.assigns
+      assert Map.get(initial_assigns, :log_details, %{}) == %{}
+
+      plain_log = %{
+        id: 6501,
+        agent_id: "agent-r65",
+        level: :info,
+        message: "plain dashboard log",
+        metadata: %{action: "wait", wait_ms: 100},
+        timestamp: DateTime.utc_now()
+      }
+
+      send(view.pid, {:log_entry, plain_log})
+      render(view)
+      render(view)
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert Map.get(assigns, :log_details) == %{}
+      assert Enum.any?(Map.get(assigns, :filtered_logs), &(&1[:id] == 6501))
+    end
+
+    @tag :acceptance
+    test "user can view full log details via show full details button", %{
+      conn: conn,
+      pubsub: pubsub,
+      registry: registry,
+      dynsup: dynsup,
+      sandbox_owner: sandbox_owner
+    } do
+      conn =
+        Plug.Test.init_test_session(conn, %{
+          "pubsub" => pubsub,
+          "registry" => registry,
+          "dynsup" => dynsup,
+          "sandbox_owner" => sandbox_owner,
+          "log_debounce_ms" => 0
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+
+      on_exit(fn ->
+        if Process.alive?(view.pid) do
+          try do
+            GenServer.stop(view.pid, :normal, :infinity)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
+      full_raw = "FULL-RAW-" <> String.duplicate("abcdefghijklmnopqrstuvwxyz", 10)
+      truncated_raw = String.slice(full_raw, 0, 200) <> "..."
+
+      send(
+        view.pid,
+        {:log_entry,
+         %{
+           id: 6601,
+           agent_id: "agent-r66",
+           level: :debug,
+           message: "Acceptance lazy-load detail",
+           metadata: %{
+             raw_responses: [
+               %{model: "claude-3", text: full_raw}
+             ]
+           },
+           timestamp: DateTime.utc_now()
+         }}
+      )
+
+      render(view)
+      render(view)
+
+      view
+      |> element("[phx-click='toggle_metadata'][phx-value-log-id='6601']")
+      |> render_click()
+
+      logs_html = view |> element("#logs") |> render()
+      assert logs_html =~ "Acceptance lazy-load detail"
+      assert logs_html =~ truncated_raw
+      assert logs_html =~ "Show full details..."
+      refute logs_html =~ full_raw
+      refute logs_html =~ "Full detail no longer available"
+      refute logs_html =~ "FunctionClauseError"
+
+      # Complete the user journey: click "Show full details..." to load full text
+      view
+      |> element("[phx-click='fetch_full_detail']")
+      |> render_click()
+
+      # Dashboard handles the fetch and sends full detail back to LogEntry
+      # After the round-trip, full raw text should appear
+      after_fetch_html = view |> element("#logs") |> render()
+      assert after_fetch_html =~ full_raw
+      refute after_fetch_html =~ "Show full details..."
     end
   end
 end
