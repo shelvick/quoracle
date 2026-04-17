@@ -644,6 +644,203 @@ defmodule QuoracleWeb.UI.MessageTest do
     end
   end
 
+  describe "markdown rendering in expanded view" do
+    test "renders bold and italic markdown as HTML", %{conn: conn, pubsub: pubsub} do
+      message = create_agent_message(%{content: "This is **bold** and *italic* text"})
+
+      assigns = %{
+        message: message,
+        expanded: true,
+        reply_form_visible: false,
+        agent_alive: true,
+        target: self(),
+        pubsub: pubsub
+      }
+
+      {:ok, _view, html} = render_isolated(conn, assigns)
+
+      assert html =~ "<strong>bold</strong>"
+      assert html =~ "<em>italic</em>"
+    end
+
+    test "renders markdown headers as HTML", %{conn: conn, pubsub: pubsub} do
+      message = create_agent_message(%{content: "## Analysis Results\n\nSome findings."})
+
+      assigns = %{
+        message: message,
+        expanded: true,
+        reply_form_visible: false,
+        agent_alive: true,
+        target: self(),
+        pubsub: pubsub
+      }
+
+      {:ok, _view, html} = render_isolated(conn, assigns)
+
+      assert html =~ "<h2>"
+      assert html =~ "Analysis Results"
+    end
+
+    test "renders markdown code blocks", %{conn: conn, pubsub: pubsub} do
+      message = create_agent_message(%{content: "Run this:\n```\nmix test\n```"})
+
+      assigns = %{
+        message: message,
+        expanded: true,
+        reply_form_visible: false,
+        agent_alive: true,
+        target: self(),
+        pubsub: pubsub
+      }
+
+      {:ok, _view, html} = render_isolated(conn, assigns)
+
+      assert html =~ "<code"
+      assert html =~ "mix test"
+    end
+
+    test "renders markdown lists", %{conn: conn, pubsub: pubsub} do
+      message = create_agent_message(%{content: "Steps:\n- First\n- Second\n- Third"})
+
+      assigns = %{
+        message: message,
+        expanded: true,
+        reply_form_visible: false,
+        agent_alive: true,
+        target: self(),
+        pubsub: pubsub
+      }
+
+      {:ok, _view, html} = render_isolated(conn, assigns)
+
+      assert html =~ "<li>"
+      assert html =~ "First"
+    end
+
+    test "renders inline code", %{conn: conn, pubsub: pubsub} do
+      message = create_agent_message(%{content: "Use `mix test` to run tests"})
+
+      assigns = %{
+        message: message,
+        expanded: true,
+        reply_form_visible: false,
+        agent_alive: true,
+        target: self(),
+        pubsub: pubsub
+      }
+
+      {:ok, _view, html} = render_isolated(conn, assigns)
+
+      assert html =~ "<code"
+      assert html =~ "mix test"
+    end
+
+    test "collapsed preview shows raw markdown text, not HTML", %{conn: conn, pubsub: pubsub} do
+      message = create_agent_message(%{content: "This is **bold** and *italic* text"})
+
+      assigns = %{
+        message: message,
+        expanded: false,
+        reply_form_visible: false,
+        agent_alive: true,
+        target: self(),
+        pubsub: pubsub
+      }
+
+      {:ok, _view, html} = render_isolated(conn, assigns)
+
+      # Preview should show raw markdown syntax, not rendered HTML
+      assert html =~ "**bold**"
+      refute html =~ "<strong>"
+    end
+  end
+
+  describe "markdown XSS sanitization" do
+    test "strips script tags from content", %{conn: conn, pubsub: pubsub} do
+      # Block-level script tag (Earmark passes HTML blocks through, so sanitizer must strip)
+      message =
+        create_agent_message(%{
+          content: "Hello\n\n<script>alert('xss')</script>\n\nworld"
+        })
+
+      assigns = %{
+        message: message,
+        expanded: true,
+        reply_form_visible: false,
+        agent_alive: true,
+        target: self(),
+        pubsub: pubsub
+      }
+
+      {:ok, _view, html} = render_isolated(conn, assigns)
+
+      refute html =~ "<script"
+      assert html =~ "Hello"
+      assert html =~ "world"
+    end
+
+    test "strips iframe tags from content", %{conn: conn, pubsub: pubsub} do
+      message =
+        create_agent_message(%{
+          content: "Check this: <iframe src=\"https://evil.com\"></iframe>"
+        })
+
+      assigns = %{
+        message: message,
+        expanded: true,
+        reply_form_visible: false,
+        agent_alive: true,
+        target: self(),
+        pubsub: pubsub
+      }
+
+      {:ok, _view, html} = render_isolated(conn, assigns)
+
+      refute html =~ "<iframe"
+    end
+
+    test "strips on-event handlers from tags", %{conn: conn, pubsub: pubsub} do
+      message =
+        create_agent_message(%{
+          content: "<div onmouseover=\"alert('xss')\">hover me</div>"
+        })
+
+      assigns = %{
+        message: message,
+        expanded: true,
+        reply_form_visible: false,
+        agent_alive: true,
+        target: self(),
+        pubsub: pubsub
+      }
+
+      {:ok, _view, html} = render_isolated(conn, assigns)
+
+      refute html =~ "onmouseover"
+      refute html =~ "alert("
+    end
+
+    test "neutralizes javascript: URLs in links", %{conn: conn, pubsub: pubsub} do
+      message =
+        create_agent_message(%{
+          content: "[click me](javascript:alert('xss'))"
+        })
+
+      assigns = %{
+        message: message,
+        expanded: true,
+        reply_form_visible: false,
+        agent_alive: true,
+        target: self(),
+        pubsub: pubsub
+      }
+
+      {:ok, _view, html} = render_isolated(conn, assigns)
+
+      refute html =~ "javascript:"
+    end
+  end
+
   describe "Packet 2: edge cases" do
     test "handles empty reply content gracefully", %{conn: conn, pubsub: pubsub} do
       message = create_agent_message()

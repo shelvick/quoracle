@@ -3,7 +3,7 @@
 ## DashboardLive (6-module architecture, 3-panel layout)
 
 **Modules:**
-- Main coordinator (498 lines): 3-panel UI (Unified TaskTree 5/12, Logs 1/3, Mailbox 1/4), task persistence, pause/resume, real-time updates, cost debounce, log debounce
+- Main coordinator (498 lines): 3-panel UI (Unified TaskTree 5/12, Logs 1/3, Mailbox 1/4), task persistence, pause/resume, real-time updates, cost debounce, log debounce, monotonic cost guard via CostGuard module
 - DataLoader (231 lines): Extracted data loading/merging helpers (2025-12 REFACTOR)
   - load_tasks_from_db/2: Query DB + Registry, merge state
   - merge_task_state/2: Combine persisted tasks with live agents

@@ -6,10 +6,12 @@
 - MessageHandlers (~500 lines): PubSub message handlers — agent_spawned/terminated, log_entry, task_message, todos_updated, grove handlers, recompute_filtered_logs
 - Subscriptions: PubSub subscription management with MapSet tracking
 - TestHelpers: Test-specific handlers
+- CostGuard (50 lines): Monotonic cost guard helpers — parse_monotonic_guard/1, apply_monotonic_guard/2 (extracted v22.0 REFACTOR)
 
 ## Subdirectories
 - message_handlers/helpers.ex: Shared helper functions for MessageHandlers
 - log_detail_truncation.ex: LogDetailTruncation module — truncate_buffered_logs/1, store_log_detail/2, maybe_truncate_raw_responses/1, maybe_truncate_sent_messages/1 (extracted in v21.0, perf-20260321-012101)
+- cost_guard.ex: CostGuard module — parse_monotonic_guard/1, apply_monotonic_guard/2, session flag parsing for both boolean and string "false" (extracted in v22.0 REFACTOR, fix-20260411-dismiss-atomic-cost-txn)
 
 ## Extracted Grove Handlers (fix-20260311-211553 REFACTOR)
 4 grove-related `handle_info` handlers extracted from `dashboard_live.ex` to `message_handlers.ex` for 500-line limit compliance:

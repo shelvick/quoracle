@@ -166,7 +166,8 @@ defmodule Quoracle.Agent.MessageHandler.ActionResultHandler do
     # later with the same action_id. We must keep the entry so Phase 2 finds it.
     new_state =
       if async_shell_phase1?(result) do
-        new_state
+        updated = Map.update!(new_state.pending_actions, action_id, &Map.put(&1, :acked, true))
+        %{new_state | pending_actions: updated}
       else
         %{new_state | pending_actions: Map.delete(new_state.pending_actions, action_id)}
       end

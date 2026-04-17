@@ -111,12 +111,6 @@ defmodule Quoracle.Actions.Router do
   end
 
   @doc """
-  Interrupts a timed wait for an action.
-  Causes the action to continue immediately by sending a continue_consensus message.
-  """
-  defdelegate interrupt_wait(task_ref), to: ClientHelpers
-
-  @doc """
   Cancels a running action task.
   """
   defdelegate cancel_action(task_ref), to: ClientHelpers
@@ -383,10 +377,6 @@ defmodule Quoracle.Actions.Router do
   end
 
   @impl true
-  def handle_cast({:interrupt_wait, task_ref}, state) do
-    WaitHandlers.handle_interrupt_wait(task_ref, state)
-  end
-
   def handle_cast({:cancel_action, task_ref}, state) do
     WaitHandlers.handle_cancel_action(task_ref, state)
   end

@@ -9,9 +9,10 @@ defmodule Quoracle.Actions.DismissChild do
   require Logger
 
   alias Ecto.Adapters.SQL.Sandbox
-  alias Quoracle.Agent.Core
+  alias Quoracle.Actions.DismissChild.CostTransaction
+  alias Quoracle.Agent.{Core, RegistryQueries}
   alias Quoracle.Agent.TreeTerminator
-  alias Quoracle.Costs.{AgentCost, Aggregator, Recorder}
+  alias Quoracle.Costs.Recorder
   alias Quoracle.Repo
 
   @doc """
@@ -120,11 +121,6 @@ defmodule Quoracle.Actions.DismissChild do
       end
     )
 
-    # Notify parent to remove child from tracking (R13-R16)
-    if parent_pid && Process.alive?(parent_pid) do
-      GenServer.cast(parent_pid, {:child_dismissed, child_id})
-    end
-
     {:ok,
      %{
        action: "dismiss_child",
@@ -133,38 +129,52 @@ defmodule Quoracle.Actions.DismissChild do
      }}
   end
 
-  # Background task body for dismissal: DB setup, budget snapshot, terminate, reconcile.
-  # Wrapped in try/catch to handle sandbox owner exit race condition
-  # (test process dies before Task completes).
+  # Background task body for dismissal: DB setup, atomic cost transaction,
+  # process termination, and post-commit escrow release.
   defp do_background_dismissal(child_id, parent_id, parent_pid, reason, deps, task_id, notify_pid) do
     try do
       if deps.sandbox_owner do
         Sandbox.allow(Repo, deps.sandbox_owner, self())
       end
 
-      # Snapshot budget state BEFORE termination (TreeTerminator v2.0 deletes cost records)
       child_budget_data = get_child_budget_data(child_id, deps.registry)
-      {tree_spent, per_model} = query_child_tree_by_model(child_id)
 
-      TreeTerminator.terminate_tree(child_id, parent_id, reason, deps)
+      # Quiesce currently known subtree agents before the transaction.
+      mark_subtree_dismissing(child_id, deps.registry)
 
-      # Reconcile budget: create per-model absorption records, release escrow (v5.0)
       absorption_ctx = %{
-        child_id: child_id,
         task_id: task_id,
-        tree_spent: tree_spent,
-        per_model: per_model,
-        pubsub: deps.pubsub
+        child_budget_data: child_budget_data
       }
 
-      reconcile_child_budget(parent_id, parent_pid, child_budget_data, absorption_ctx)
+      case CostTransaction.absorb_subtree(parent_id, child_id, absorption_ctx) do
+        {:ok, inserted_rows} ->
+          if deps.pubsub do
+            Enum.each(inserted_rows, &Recorder.broadcast_cost_recorded(&1, deps.pubsub))
+          end
 
-      if notify_pid, do: send(notify_pid, {:dismiss_complete, child_id})
+          TreeTerminator.terminate_tree(child_id, parent_id, reason, deps)
+          maybe_release_escrow(parent_pid, child_budget_data, inserted_rows)
+
+          # Parent child-tracking mutation happens only after successful dismissal.
+          if parent_pid && Process.alive?(parent_pid) do
+            GenServer.cast(parent_pid, {:child_dismissed, child_id})
+          end
+
+          if notify_pid, do: send(notify_pid, {:dismiss_complete, child_id})
+
+        {:error, tx_reason} ->
+          Logger.error(
+            "DismissChild: Cost transaction rolled back for child #{child_id}: " <>
+              "#{inspect(tx_reason)}. Cost rows preserved; child not terminated."
+          )
+
+          if notify_pid, do: send(notify_pid, {:dismiss_failed, child_id, tx_reason})
+      end
     catch
-      # Handle sandbox owner exit - various exit formats from DBConnection
-      :exit, {:stop, _reason} -> :ok
-      :exit, {:shutdown, _reason} -> :ok
-      :exit, :killed -> :ok
+      # Only absorb sandbox teardown exits.
+      :exit, {:shutdown, :sandbox_stop} -> :ok
+      :exit, {:shutdown, {:killed, _}} -> :ok
     end
   end
 
@@ -192,43 +202,75 @@ defmodule Quoracle.Actions.DismissChild do
     end
   end
 
-  # Query per-model tree costs before termination deletes records (v5.0)
-  # Returns {total_tree_spent, per_model_breakdown} for absorption record creation.
-  @spec query_child_tree_by_model(String.t()) :: {Decimal.t(), [map()]}
-  defp query_child_tree_by_model(child_id) do
-    per_model = Aggregator.by_agent_tree_and_model_detailed(child_id)
-    tree_spent = sum_tree_costs(per_model)
-    {tree_spent, per_model}
-  end
-
-  @spec sum_tree_costs([map()]) :: Decimal.t()
-  defp sum_tree_costs(per_model) do
-    Enum.reduce(per_model, Decimal.new("0"), fn row, acc ->
-      if row.total_cost, do: Decimal.add(acc, row.total_cost), else: acc
-    end)
-  end
-
-  # Reconcile budget with per-model breakdown (after tree termination) (v5.0)
-  # Creates per-model absorption records to preserve model attribution in Cost Details UI.
-  # Uses parent_id string directly (no Core.get_state call needed).
-  @spec reconcile_child_budget(String.t(), pid() | nil, map() | nil, map()) :: :ok
-  defp reconcile_child_budget(parent_id, parent_pid, child_budget_data, absorption_ctx) do
-    # Step 1: Release escrow FIRST for allocated children (requires live parent).
-    # This is the volatile operation -- if parent crashes between escrow release and
-    # absorption, the committed budget is already freed (no leak). Absorption records
-    # are durable DB inserts that can be retried or created even with a dead parent.
-    maybe_release_escrow(parent_pid, child_budget_data, absorption_ctx.tree_spent)
-
-    # Step 2: Create per-model absorption records (no process liveness needed)
-    create_absorption_records(parent_id, child_budget_data, absorption_ctx)
-
+  @spec mark_subtree_dismissing(String.t(), atom()) :: :ok
+  defp mark_subtree_dismissing(root_id, registry) do
+    # Traverse subtree through the same registry relationships used by TreeTerminator.
+    mark_subtree_dismissing_bfs([root_id], MapSet.new(), registry)
     :ok
   end
 
+  @spec mark_subtree_dismissing_bfs([String.t()], MapSet.t(String.t()), atom()) :: :ok
+  defp mark_subtree_dismissing_bfs([], _seen, _registry), do: :ok
+
+  defp mark_subtree_dismissing_bfs([agent_id | rest], seen, registry) do
+    if MapSet.member?(seen, agent_id) do
+      mark_subtree_dismissing_bfs(rest, seen, registry)
+    else
+      set_agent_dismissing(agent_id, registry)
+
+      child_ids =
+        case get_agent_pid(agent_id, registry) do
+          {:ok, pid} ->
+            by_parent_pid =
+              RegistryQueries.find_children_by_parent(pid, registry)
+              |> Enum.map(fn {_child_pid, composite} -> composite.agent_id end)
+
+            # Fallback keeps traversal robust if parent_pid linkage is temporarily stale.
+            by_parent_id =
+              Registry.select(registry, [
+                {{{:agent, :"$1"}, :"$2", :"$3"},
+                 [{:==, {:map_get, :parent_id, :"$3"}, agent_id}], [:"$1"]}
+              ])
+
+            Enum.uniq(by_parent_pid ++ by_parent_id)
+
+          :error ->
+            []
+        end
+
+      mark_subtree_dismissing_bfs(rest ++ child_ids, MapSet.put(seen, agent_id), registry)
+    end
+  end
+
+  @spec set_agent_dismissing(String.t(), atom()) :: :ok
+  defp set_agent_dismissing(agent_id, registry) do
+    case get_agent_pid(agent_id, registry) do
+      {:ok, pid} ->
+        try do
+          Core.set_dismissing(pid, true)
+        catch
+          :exit, _ -> :ok
+        end
+
+      :error ->
+        :ok
+    end
+  end
+
+  @spec get_agent_pid(String.t(), atom()) :: {:ok, pid()} | :error
+  defp get_agent_pid(agent_id, registry) do
+    case Registry.lookup(registry, {:agent, agent_id}) do
+      [{pid, _composite}] -> {:ok, pid}
+      [] -> :error
+    end
+  end
+
   # Release escrow budget back to parent for allocated children with a live parent process.
-  @spec maybe_release_escrow(pid() | nil, map() | nil, Decimal.t()) :: :ok
-  defp maybe_release_escrow(parent_pid, %{mode: :allocated, allocated: allocated}, tree_spent)
+  @spec maybe_release_escrow(pid() | nil, map() | nil, [map()]) :: :ok
+  defp maybe_release_escrow(parent_pid, %{mode: :allocated, allocated: allocated}, inserted_rows)
        when not is_nil(allocated) do
+    tree_spent = sum_absorbed_costs(inserted_rows)
+
     if parent_pid && Process.alive?(parent_pid) do
       try do
         Core.release_child_budget(parent_pid, allocated, tree_spent)
@@ -240,139 +282,15 @@ defmodule Quoracle.Actions.DismissChild do
     :ok
   end
 
-  defp maybe_release_escrow(_parent_pid, _child_budget_data, _tree_spent), do: :ok
+  defp maybe_release_escrow(_parent_pid, _child_budget_data, _inserted_rows), do: :ok
 
-  # Create per-model absorption cost records under parent to preserve task-level totals
-  # and model attribution. TreeTerminator deletes the child's original cost records,
-  # so these records ensure costs remain visible in both task-level and per-model queries.
-  # Uses parent_id string directly -- no process liveness check or Core.get_state needed.
-  @spec create_absorption_records(String.t(), map() | nil, map()) :: :ok
-  defp create_absorption_records(_parent_id, _budget_data, %{per_model: []}), do: :ok
-
-  defp create_absorption_records(parent_id, budget_data, absorption_ctx) do
-    %{child_id: child_id, task_id: task_id, tree_spent: tree_spent, pubsub: pubsub} =
-      absorption_ctx
-
-    allocated = if budget_data, do: budget_data[:allocated], else: nil
-
-    records_to_insert =
-      absorption_ctx.per_model
-      |> Enum.filter(fn model_row ->
-        model_row.total_cost && !Decimal.equal?(model_row.total_cost, 0)
-      end)
-      |> Enum.map(fn model_row ->
-        %{
-          agent_id: parent_id,
-          task_id: task_id,
-          cost_type: "child_budget_absorbed",
-          cost_usd: model_row.total_cost,
-          metadata: build_absorption_metadata(model_row, child_id, allocated, tree_spent)
-        }
-      end)
-
-    case records_to_insert do
-      [] ->
-        :ok
-
-      _ when is_nil(task_id) ->
-        log_absorption_batch_warning(child_id, length(records_to_insert), :invalid_task_id)
-        :ok
-
-      _ ->
-        case record_absorption_batch(records_to_insert, pubsub) do
-          {:ok, _inserted} ->
-            :ok
-
-          {:error, reason} ->
-            log_absorption_batch_warning(child_id, length(records_to_insert), reason)
-            :ok
-        end
-    end
-  end
-
-  # Build absorption metadata for a per-model record.
-  # External/non-model rows use the "(external)" sentinel model_spec so
-  # detailed model aggregation can include them after child dismissal.
-  @spec build_absorption_metadata(map(), String.t(), Decimal.t() | nil, Decimal.t()) :: map()
-  defp build_absorption_metadata(model_row, child_id, allocated, tree_spent) do
-    %{
-      "child_agent_id" => child_id,
-      "child_allocated" => format_allocated(allocated),
-      "child_tree_spent" => decimal_to_string(tree_spent),
-      "unspent_returned" => format_unspent(allocated, tree_spent),
-      "dismissed_at" => DateTime.to_iso8601(DateTime.utc_now()),
-      "model_spec" => model_row.model_spec || "(external)",
-      "input_tokens" => to_string(model_row.input_tokens || 0),
-      "output_tokens" => to_string(model_row.output_tokens || 0),
-      "reasoning_tokens" => to_string(model_row.reasoning_tokens || 0),
-      "cached_tokens" => to_string(model_row.cached_tokens || 0),
-      "cache_creation_tokens" => to_string(model_row.cache_creation_tokens || 0),
-      "input_cost" => decimal_to_string(model_row.input_cost || Decimal.new("0")),
-      "output_cost" => decimal_to_string(model_row.output_cost || Decimal.new("0"))
-    }
-  end
-
-  @spec record_absorption_batch([map()], atom() | nil) ::
-          {:ok, [AgentCost.t()]} | {:error, term()}
-  defp record_absorption_batch(records_to_insert, pubsub)
-       when is_atom(pubsub) and not is_nil(pubsub) do
-    with :ok <- validate_absorption_batch(records_to_insert) do
-      Recorder.record_batch(records_to_insert, pubsub: pubsub)
-    end
-  end
-
-  defp record_absorption_batch(records_to_insert, _pubsub) do
-    with :ok <- validate_absorption_batch(records_to_insert) do
-      Recorder.record_silent_batch(records_to_insert)
-    end
-  end
-
-  @spec validate_absorption_batch([map()]) :: :ok | {:error, atom()}
-  defp validate_absorption_batch(records_to_insert) do
-    if Enum.all?(records_to_insert, &valid_absorption_record?/1) do
-      :ok
-    else
-      {:error, :invalid_task_id}
-    end
-  end
-
-  @spec valid_absorption_record?(map()) :: boolean()
-  defp valid_absorption_record?(%{task_id: task_id}) when is_binary(task_id), do: true
-  defp valid_absorption_record?(_record), do: false
-
-  @spec log_absorption_batch_warning(String.t(), non_neg_integer(), term()) :: :ok
-  defp log_absorption_batch_warning(child_id, row_count, reason) do
-    message =
-      "Failed to create child budget absorption records for #{child_id} " <>
-        "(#{row_count} rows): #{inspect(reason)}"
-
-    # Log at both levels: warning for production visibility, error for test
-    # capture_log observability (test env logger level is :error).
-    Logger.warning(message)
-    Logger.error(message)
-    :ok
-  end
-
-  # Format allocated for absorption metadata
-  @spec format_allocated(Decimal.t() | nil) :: String.t()
-  defp format_allocated(nil), do: "N/A"
-  defp format_allocated(allocated), do: decimal_to_string(allocated)
-
-  # Format unspent returned for absorption metadata
-  @spec format_unspent(Decimal.t() | nil, Decimal.t()) :: String.t()
-  defp format_unspent(nil, _tree_spent), do: "0"
-
-  defp format_unspent(allocated, tree_spent) do
-    decimal_to_string(Decimal.max(Decimal.sub(allocated, tree_spent), Decimal.new("0")))
-  end
-
-  # Convert Decimal to human-readable string for metadata (strips DB trailing zeros)
-  @spec decimal_to_string(Decimal.t()) :: String.t()
-  defp decimal_to_string(decimal) do
-    if Decimal.equal?(decimal, 0) do
-      "0"
-    else
-      decimal |> Decimal.round(2) |> Decimal.to_string()
-    end
+  @spec sum_absorbed_costs([map()]) :: Decimal.t()
+  defp sum_absorbed_costs(inserted_rows) do
+    Enum.reduce(inserted_rows, Decimal.new("0"), fn row, acc ->
+      case Map.get(row, :cost_usd) || Map.get(row, "cost_usd") do
+        nil -> acc
+        cost -> Decimal.add(acc, cost)
+      end
+    end)
   end
 end

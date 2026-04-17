@@ -434,29 +434,27 @@ defmodule Quoracle.Agent.ConsensusStalenessTest do
              "wait_flow.ex should not send {:continue_consensus} (old pattern)"
     end
 
-    test "wait_handlers sends :trigger_consensus" do
-      # Additional verification for wait_handlers.ex
+    test "wait_handlers does not send consensus triggers (dead code removed)" do
+      # interrupt_wait was dead code (references non-existent state.wait_timers,
+      # zero callers) — removed. Only handle_cancel_action remains.
       wait_handlers_path = "lib/quoracle/actions/router/wait_handlers.ex"
       {:ok, source} = File.read(wait_handlers_path)
 
-      has_trigger_consensus = String.contains?(source, ":trigger_consensus")
-
-      assert has_trigger_consensus,
-             "wait_handlers.ex should send :trigger_consensus"
+      refute String.contains?(source, ":trigger_consensus"),
+             "wait_handlers.ex should not send :trigger_consensus (dead code removed)"
 
       refute String.contains?(source, "{:continue_consensus}"),
              "wait_handlers.ex should not send {:continue_consensus} (old pattern)"
     end
 
-    test "client_helpers sends :trigger_consensus" do
-      # Additional verification for client_helpers.ex
+    test "client_helpers does not send consensus triggers (dead code removed)" do
+      # interrupt_wait was dead code (mock that sent to self(), zero callers)
+      # — removed. Only cancel_action, task_status, await_result remain.
       client_helpers_path = "lib/quoracle/actions/router/client_helpers.ex"
       {:ok, source} = File.read(client_helpers_path)
 
-      has_trigger_consensus = String.contains?(source, ":trigger_consensus")
-
-      assert has_trigger_consensus,
-             "client_helpers.ex should send :trigger_consensus"
+      refute String.contains?(source, ":trigger_consensus"),
+             "client_helpers.ex should not send :trigger_consensus (dead code removed)"
 
       refute String.contains?(source, "{:continue_consensus}"),
              "client_helpers.ex should not send {:continue_consensus} (old pattern)"

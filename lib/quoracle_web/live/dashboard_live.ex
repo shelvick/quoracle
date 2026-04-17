@@ -1,14 +1,6 @@
 defmodule QuoracleWeb.DashboardLive do
   @moduledoc """
-  Main LiveView dashboard page with 3-panel layout.
-  Displays task tree, logs, and mailbox for agent orchestration.
-
-  Implementation is split across modules to maintain code organization:
-  - Subscriptions: PubSub subscription management
-  - EventHandlers: User event handling (handle_event callbacks)
-  - MessageHandlers: Incoming message handling (handle_info callbacks)
-  - TestHelpers: Test-specific message handlers
-  - DataLoader: Task/agent loading and merging from DB/Registry
+  Main LiveView dashboard page with a 3-panel layout and delegated handlers.
   """
 
   use QuoracleWeb, :live_view
@@ -16,6 +8,7 @@ defmodule QuoracleWeb.DashboardLive do
   alias Phoenix.PubSub
 
   alias QuoracleWeb.DashboardLive.{
+    CostGuard,
     DataLoader,
     EventHandlers,
     MessageHandlers,
@@ -63,6 +56,7 @@ defmodule QuoracleWeb.DashboardLive do
     cost_debounce_ms = session["cost_debounce_ms"] || session[:cost_debounce_ms]
     log_debounce_ms = session["log_debounce_ms"] || session[:log_debounce_ms]
     mailbox_test_pid = session["mailbox_test_pid"] || session[:mailbox_test_pid]
+    cost_monotonic_guard? = CostGuard.parse_monotonic_guard(session)
 
     base_assigns = [
       pubsub: pubsub,
@@ -77,6 +71,7 @@ defmodule QuoracleWeb.DashboardLive do
       task_manager_test_opts: task_manager_test_opts,
       selected_agent_id: nil,
       selected_grove: nil,
+      cost_monotonic_guard?: cost_monotonic_guard?,
       cost_data: %{agents: %{}, tasks: %{}},
       cost_debounce_ms: cost_debounce_ms,
       log_debounce_ms: log_debounce_ms,
@@ -382,7 +377,14 @@ defmodule QuoracleWeb.DashboardLive do
   def handle_info(:flush_cost_updates, socket) do
     agent_ids = Map.keys(socket.assigns.agents)
     task_ids = Map.keys(socket.assigns.tasks)
-    cost_data = Quoracle.Costs.Aggregator.batch_totals(agent_ids, task_ids)
+    fresh_cost_data = Quoracle.Costs.Aggregator.batch_totals(agent_ids, task_ids)
+
+    cost_data =
+      if socket.assigns[:cost_monotonic_guard?] do
+        CostGuard.apply_monotonic_guard(socket.assigns[:cost_data], fresh_cost_data)
+      else
+        fresh_cost_data
+      end
 
     {:noreply,
      socket
@@ -485,12 +487,12 @@ defmodule QuoracleWeb.DashboardLive do
     do: MessageHandlers.handle_unknown_message(message, socket)
 
   @spec schedule_cost_flush(non_neg_integer()) :: reference() | :immediate
-  defp schedule_cost_flush(0) do
-    send(self(), :flush_cost_updates)
-    :immediate
-  end
+  defp schedule_cost_flush(0),
+    do:
+      (
+        send(self(), :flush_cost_updates)
+        :immediate
+      )
 
-  defp schedule_cost_flush(ms) do
-    Process.send_after(self(), :flush_cost_updates, ms)
-  end
+  defp schedule_cost_flush(ms), do: Process.send_after(self(), :flush_cost_updates, ms)
 end

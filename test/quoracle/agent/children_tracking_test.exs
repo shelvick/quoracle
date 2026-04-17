@@ -151,6 +151,30 @@ defmodule Quoracle.Agent.ChildrenTrackingTest do
     wait_loop.(wait_loop)
   end
 
+  # Helper to wait for parent children list to reflect a child dismissal cast.
+  defp wait_for_child_removed(parent_pid, child_id, timeout \\ 5000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+
+    wait_loop = fn wait_loop ->
+      {:ok, state} = Core.get_state(parent_pid)
+
+      if Enum.any?(state.children, &(&1.agent_id == child_id)) do
+        if System.monotonic_time(:millisecond) < deadline do
+          receive do
+          after
+            10 -> wait_loop.(wait_loop)
+          end
+        else
+          {:error, :timeout}
+        end
+      else
+        :ok
+      end
+    end
+
+    wait_loop.(wait_loop)
+  end
+
   defp register_registry_child(registry, child_id, parent_pid) do
     Registry.register(registry, {:agent, child_id}, %{
       pid: self(),
@@ -354,9 +378,10 @@ defmodule Quoracle.Agent.ChildrenTrackingTest do
           action_opts(deps, parent_pid)
         )
 
-      # Wait for async termination
+      # Wait for async termination and parent-state reconciliation
       assert_receive {:agent_terminated, _}, 30_000
       :ok = wait_for_agent_gone(child_id, deps.registry)
+      :ok = wait_for_child_removed(parent_pid, child_id)
 
       # Assert: Child removed from list
       {:ok, state_after} = Core.get_state(parent_pid)

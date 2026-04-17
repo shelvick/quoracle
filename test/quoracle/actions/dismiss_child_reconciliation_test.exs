@@ -127,6 +127,23 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
     end
   end
 
+  defp wait_for_dismiss_failed(child_id, timeout \\ 5_000) do
+    receive do
+      {:dismiss_failed, ^child_id, reason} -> {:ok, reason}
+    after
+      timeout -> {:error, :timeout}
+    end
+  end
+
+  defp wait_for_any_dismiss_signal(child_id, timeout \\ 2_000) do
+    receive do
+      {:dismiss_complete, ^child_id} -> :ok
+      {:dismiss_failed, ^child_id, _reason} -> :ok
+    after
+      timeout -> {:error, :timeout}
+    end
+  end
+
   # Helper to insert a cost record
   defp insert_cost(agent_id, task_id, cost_usd, cost_type \\ "llm_consensus") do
     {:ok, cost} =
@@ -183,6 +200,13 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
       nested when is_tuple(nested) -> nested |> Tuple.to_list() |> params_include?(value)
       _ -> false
     end)
+  end
+
+  defp occurrences(haystack, needle) do
+    haystack
+    |> String.split(needle)
+    |> length()
+    |> Kernel.-(1)
   end
 
   # ==========================================================================
@@ -1473,10 +1497,10 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
   # was attempted first (blocking), not absorption (non-blocking DB writes).
   # ==========================================================================
 
-  describe "escrow-first ordering (R42)" do
+  describe "transaction-first ordering (R42 v7.0)" do
     @tag :r42
     @tag :integration
-    test "R42: escrow release attempted before absorption record creation",
+    test "R42: absorption commits before blocked escrow call",
          %{deps: deps, task: task} do
       parent_id = "parent-R42-#{System.unique_integer([:positive])}"
       child_id = "child-R42-#{System.unique_integer([:positive])}"
@@ -1501,93 +1525,30 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
           parent_pid: parent_pid
         )
 
-      # Child has costs that will need absorption
       insert_model_cost(child_id, task.id,
         cost_usd: Decimal.new("20.00"),
         model_spec: "anthropic/claude-sonnet-4"
       )
 
-      # Verify the cost record exists before dismissal
-      child_costs_before =
-        Repo.aggregate(
-          from(c in AgentCost, where: c.agent_id == ^child_id),
-          :count
-        )
+      Phoenix.PubSub.subscribe(deps.pubsub, "agents:#{child_id}")
 
-      assert child_costs_before == 1
-
-      # Suspend the parent GenServer. This blocks any GenServer.call to it,
-      # including Core.release_child_budget. Pure DB operations (Recorder.record)
-      # are unaffected by the suspension.
       :sys.suspend(parent_pid)
 
-      # Trigger dismiss — background task starts
+      on_exit(fn ->
+        if Process.alive?(parent_pid) do
+          try do
+            :sys.resume(parent_pid)
+          catch
+            :exit, _ -> :ok
+          end
+        end
+      end)
+
       {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, action_opts(deps, task))
 
-      # EVENT-BASED SYNC: Poll until TreeTerminator has deleted the child's
-      # cost records. This proves TreeTerminator completed and the background
-      # task has moved on to reconcile_child_budget.
-      :ok =
-        IsolationHelpers.poll_until(
-          fn ->
-            Repo.aggregate(
-              from(c in AgentCost, where: c.agent_id == ^child_id),
-              :count
-            ) == 0
-          end,
-          10_000
-        )
+      assert_receive {:agent_terminated, %{agent_id: ^child_id}}, 30_000
 
-      # At this point, TreeTerminator is done and reconcile_child_budget has
-      # started (or is about to start). The first operation in reconcile will
-      # either complete instantly (DB insert) or block (GenServer.call to
-      # suspended parent).
-      #
-      # EVENT-BASED SYNC: Poll briefly for absorption records. If they appear,
-      # absorption happened first (current buggy ordering). If they don't appear
-      # within a reasonable window, the background task is blocked on the
-      # GenServer.call (correct escrow-first ordering).
-      #
-      # We poll for absorption records with a bounded timeout. With absorption-
-      # first ordering, records appear almost instantly after TreeTerminator
-      # finishes (pure DB insert, <50ms). With escrow-first ordering, the task
-      # is blocked on the suspended parent and records never appear.
-      absorption_appeared =
-        case IsolationHelpers.poll_until(
-               fn ->
-                 Repo.aggregate(
-                   from(c in AgentCost,
-                     where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
-                   ),
-                   :count
-                 ) > 0
-               end,
-               500
-             ) do
-          :ok -> true
-          {:error, :timeout} -> false
-        end
-
-      # KEY ASSERTION: With escrow-first ordering, Core.release_child_budget
-      # (GenServer.call to suspended parent) blocks BEFORE absorption records
-      # are created. Absorption records should NOT appear within 500ms.
-      #
-      # With current code (absorption first), absorption records are pure DB
-      # writes that complete instantly (~10ms), so they DO appear.
-      refute absorption_appeared,
-             "With escrow-first ordering, absorption records should NOT exist yet " <>
-               "while parent is suspended (escrow GenServer.call should block first). " <>
-               "Records appeared — this means absorption happened before escrow " <>
-               "release (wrong ordering, budget leak risk)."
-
-      # Resume parent so the blocked GenServer.call completes
-      :sys.resume(parent_pid)
-
-      # Now wait for the full dismiss to complete
-      :ok = wait_for_dismiss_complete(child_id)
-
-      # After resuming, both operations should complete successfully
-      final_absorption_count =
+      absorption_count =
         Repo.aggregate(
           from(c in AgentCost,
             where: c.agent_id == ^parent_id and c.cost_type == "child_budget_absorbed"
@@ -1595,13 +1556,543 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
           :count
         )
 
-      assert final_absorption_count > 0,
-             "After resume, absorption records should be created"
+      assert absorption_count > 0,
+             "With v7.0 transaction-first ordering, absorption rows must commit " <>
+               "before the blocked escrow call."
+
+      refute_receive {:dismiss_complete, ^child_id}, 250
+
+      :sys.resume(parent_pid)
+      :ok = wait_for_dismiss_complete(child_id)
+    end
+  end
+
+  describe "v7.0 rewire to CostTransaction (R53-R60, R63-R65)" do
+    @tag :r53
+    @tag :integration
+    test "R53: rollback path routes through transaction and preserves parent tracking", %{
+      deps: deps,
+      task: task
+    } do
+      parent_id = "parent-R53-#{System.unique_integer([:positive])}"
+      child_id = "child-R53-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      GenServer.cast(
+        parent_pid,
+        {:child_spawned,
+         %{
+           agent_id: child_id,
+           spawned_at: DateTime.utc_now()
+         }}
+      )
+
+      {:ok, parent_state_before} = Core.get_state(parent_pid)
+      assert Enum.any?(parent_state_before.children, &(&1.agent_id == child_id))
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("14.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      failing_opts = action_opts(deps, task) |> Keyword.put(:task_id, nil)
+
+      capture_log(fn ->
+        {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, failing_opts)
+
+        assert {:ok, reason} = wait_for_dismiss_failed(child_id)
+        assert reason != nil
+      end)
+
+      assert Process.alive?(child_pid)
+      refute_receive {:dismiss_complete, ^child_id}, 250
+
+      {:ok, parent_state_after} = Core.get_state(parent_pid)
+      assert Enum.any?(parent_state_after.children, &(&1.agent_id == child_id))
+    end
+
+    @tag :r54
+    @tag :integration
+    test "R54: rollback prevents tree termination", %{deps: deps, task: task} do
+      parent_id = "parent-R54-#{System.unique_integer([:positive])}"
+      child_id = "child-R54-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("12.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      Phoenix.PubSub.subscribe(deps.pubsub, "agents:#{child_id}")
+
+      failing_opts = action_opts(deps, task) |> Keyword.put(:task_id, nil)
+
+      capture_log(fn ->
+        {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, failing_opts)
+        assert {:ok, _reason} = wait_for_dismiss_failed(child_id)
+      end)
+
+      refute_receive {:agent_terminated, %{agent_id: ^child_id}}, 500
+      assert Process.alive?(child_pid)
+    end
+
+    @tag :r55
+    @tag :integration
+    test "R55: rollback does not release escrow", %{deps: deps, task: task} do
+      parent_id = "parent-R55-#{System.unique_integer([:positive])}"
+      child_id = "child-R55-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("9.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      failing_opts = action_opts(deps, task) |> Keyword.put(:task_id, nil)
+
+      capture_log(fn ->
+        {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, failing_opts)
+        assert {:ok, _reason} = wait_for_dismiss_failed(child_id)
+      end)
 
       {:ok, parent_state} = Core.get_state(parent_pid)
 
-      assert Decimal.equal?(parent_state.budget_data.committed, Decimal.new("0")),
-             "After resume, escrow should be released (committed = 0)"
+      assert Decimal.equal?(parent_state.budget_data.committed, Decimal.new("50.00")),
+             "Rollback must preserve committed escrow when absorption fails"
+    end
+
+    @tag :r56
+    @tag :integration
+    test "R56: transaction rollback leaves child alive with costs preserved", %{
+      deps: deps,
+      task: task
+    } do
+      parent_id = "parent-R56-#{System.unique_integer([:positive])}"
+      child_id = "child-R56-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("16.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      failing_opts = action_opts(deps, task) |> Keyword.put(:task_id, nil)
+
+      capture_log(fn ->
+        {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, failing_opts)
+        :ok = wait_for_any_dismiss_signal(child_id)
+      end)
+
+      assert Process.alive?(child_pid),
+             "Child should stay alive when cost transaction rolls back"
+
+      child_cost_count =
+        Repo.aggregate(from(c in AgentCost, where: c.agent_id == ^child_id), :count)
+
+      assert child_cost_count > 0
+    end
+
+    @tag :r57
+    @tag :unit
+    test "R57: rollback branch emits error log with child and reason", %{deps: deps, task: task} do
+      parent_id = "parent-R57-#{System.unique_integer([:positive])}"
+      child_id = "child-R57-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("11.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      failing_opts = action_opts(deps, task) |> Keyword.put(:task_id, nil)
+
+      log =
+        capture_log(fn ->
+          {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, failing_opts)
+          assert {:ok, _reason} = wait_for_dismiss_failed(child_id)
+        end)
+
+      assert log =~ "Cost transaction rolled back"
+      assert log =~ child_id
+    end
+
+    @tag :r58
+    @tag :integration
+    test "R58: rollback notifies caller with dismiss_failed", %{deps: deps, task: task} do
+      parent_id = "parent-R58-#{System.unique_integer([:positive])}"
+      child_id = "child-R58-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("18.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      failing_opts = action_opts(deps, task) |> Keyword.put(:task_id, nil)
+
+      capture_log(fn ->
+        {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, failing_opts)
+
+        assert {:ok, reason} = wait_for_dismiss_failed(child_id)
+        assert reason != nil
+      end)
+    end
+
+    @tag :r59
+    @tag :integration
+    test "R59: sandbox-stop failures are absorbed into dismiss_failed path", %{
+      deps: deps,
+      task: task
+    } do
+      parent_id = "parent-R59-#{System.unique_integer([:positive])}"
+      child_id = "child-R59-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("7.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      failing_opts = action_opts(deps, task) |> Keyword.put(:task_id, nil)
+
+      capture_log(fn ->
+        {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, failing_opts)
+
+        assert {:ok, _reason} = wait_for_dismiss_failed(child_id)
+      end)
+
+      assert Process.alive?(child_pid)
+    end
+
+    @tag :r60
+    @tag :unit
+    test "R60: non-sandbox rollback reason propagates to dismiss_failed", %{
+      deps: deps,
+      task: task
+    } do
+      parent_id = "parent-R60-#{System.unique_integer([:positive])}"
+      child_id = "child-R60-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("7.50"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      missing_task_opts = action_opts(deps, task) |> Keyword.put(:task_id, Ecto.UUID.generate())
+
+      capture_log(fn ->
+        {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, missing_task_opts)
+
+        assert {:ok, reason} = wait_for_dismiss_failed(child_id)
+        assert reason != nil
+        refute_receive {:dismiss_complete, ^child_id}, 250
+      end)
+    end
+
+    @tag :r63
+    @tag :integration
+    test "R63: background rollback emits one error log with child and reason", %{
+      deps: deps,
+      task: task
+    } do
+      parent_id = "parent-R63-#{System.unique_integer([:positive])}"
+      child_id = "child-R63-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, _child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("10.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      failing_opts = action_opts(deps, task) |> Keyword.put(:task_id, nil)
+
+      log =
+        capture_log(fn ->
+          {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, failing_opts)
+          assert {:ok, _reason} = wait_for_dismiss_failed(child_id)
+        end)
+
+      assert occurrences(log, "Cost transaction rolled back") == 1
+      assert log =~ child_id
+    end
+
+    @tag :r64
+    @tag :integration
+    test "R64: child root marked dismissing before rollback notification", %{
+      deps: deps,
+      task: task
+    } do
+      parent_id = "parent-R64-#{System.unique_integer([:positive])}"
+      child_id = "child-R64-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("8.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      failing_opts = action_opts(deps, task) |> Keyword.put(:task_id, nil)
+
+      capture_log(fn ->
+        {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, failing_opts)
+
+        assert {:ok, _reason} = wait_for_dismiss_failed(child_id)
+      end)
+
+      {:ok, child_state} = Core.get_state(child_pid)
+      assert child_state.dismissing == true
+    end
+
+    @tag :r65
+    @tag :integration
+    test "R65: subtree descendants are marked dismissing before rollback notification", %{
+      deps: deps,
+      task: task
+    } do
+      parent_id = "parent-R65-#{System.unique_integer([:positive])}"
+      child_id = "child-R65-#{System.unique_integer([:positive])}"
+      grandchild_id = "grandchild-R65-#{System.unique_integer([:positive])}"
+
+      parent_budget = %{
+        mode: :root,
+        allocated: Decimal.new("100.00"),
+        committed: Decimal.new("50.00")
+      }
+
+      child_budget = %{
+        mode: :allocated,
+        allocated: Decimal.new("50.00"),
+        committed: Decimal.new("0")
+      }
+
+      {:ok, parent_pid} = spawn_agent_with_budget(parent_id, deps, task, parent_budget)
+
+      {:ok, child_pid} =
+        spawn_agent_with_budget(child_id, deps, task, child_budget,
+          parent_id: parent_id,
+          parent_pid: parent_pid
+        )
+
+      {:ok, grandchild_pid} =
+        spawn_agent_with_budget(grandchild_id, deps, task, child_budget,
+          parent_id: child_id,
+          parent_pid: child_pid
+        )
+
+      insert_model_cost(child_id, task.id,
+        cost_usd: Decimal.new("5.00"),
+        model_spec: "anthropic/claude-sonnet-4"
+      )
+
+      insert_model_cost(grandchild_id, task.id,
+        cost_usd: Decimal.new("3.00"),
+        model_spec: "openai/gpt-4o"
+      )
+
+      failing_opts = action_opts(deps, task) |> Keyword.put(:task_id, nil)
+
+      capture_log(fn ->
+        {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, failing_opts)
+
+        assert {:ok, _reason} = wait_for_dismiss_failed(child_id)
+      end)
+
+      {:ok, child_state} = Core.get_state(child_pid)
+      {:ok, grandchild_state} = Core.get_state(grandchild_pid)
+
+      assert child_state.dismissing == true
+      assert grandchild_state.dismissing == true
     end
   end
 
@@ -1870,19 +2361,16 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
       log =
         capture_log(fn ->
           {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, failing_opts)
-          :ok = wait_for_dismiss_complete(child_id)
+          assert {:ok, _reason} = wait_for_dismiss_failed(child_id)
         end)
 
-      # v6.0 spec: Logger.warning with child_id and record count on batch failure.
-      # Current v5.0 uses per-row Recorder.record, which silently skips via debug-level
-      # "invalid task_id" log. No warning-level log contains the batch context.
-      assert log =~ child_id and log =~ "2",
-             "Batch failure warning should include child_id and record count (2). Log: #{log}"
+      assert log =~ "Cost transaction rolled back"
+      assert log =~ child_id
     end
 
     @tag :r48
     @tag :integration
-    test "R48: absorption insert failure logs warning and dismissal continues",
+    test "R48: absorption insert failure logs rollback and emits dismiss_failed",
          %{deps: deps, task: task} do
       parent_id = "parent-R48-#{System.unique_integer([:positive])}"
       child_id = "child-R48-#{System.unique_integer([:positive])}"
@@ -1919,13 +2407,13 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
           assert {:ok, %{status: "terminating"}} =
                    DismissChild.execute(%{child_id: child_id}, parent_id, failing_opts)
 
-          assert :ok = wait_for_dismiss_complete(child_id)
+          assert {:ok, _reason} = wait_for_dismiss_failed(child_id)
         end)
 
-      assert log =~ child_id,
-             "Failure path should emit warning with child context. Log: #{log}"
+      assert log =~ "Cost transaction rolled back"
+      assert log =~ child_id
 
-      # Reconciliation failure must not kill parent process.
+      # Rollback failure must not kill parent process.
       assert Process.alive?(parent_pid)
     end
 
@@ -1970,12 +2458,11 @@ defmodule Quoracle.Actions.DismissChildReconciliationTest do
       log =
         capture_log(fn ->
           {:ok, _} = DismissChild.execute(%{child_id: child_id}, parent_id, failing_opts)
-          :ok = wait_for_dismiss_complete(child_id)
+          assert {:ok, _reason} = wait_for_dismiss_failed(child_id)
         end)
 
-      # v6.0 warning should report filtered batch size (1), not raw rows (2).
-      assert log =~ child_id and log =~ "1",
-             "Filtered batch failure warning should include child_id and record count (1). Log: #{log}"
+      assert log =~ "Cost transaction rolled back"
+      assert log =~ child_id
     end
 
     @tag :r50
