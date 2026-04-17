@@ -47,7 +47,7 @@ defmodule QuoracleWeb.UI.Message do
 
         <%= if @expanded do %>
           <div class="full-content flex-1 ml-3">
-            <div class="text-gray-800 whitespace-pre-wrap"><%= content_text(@message.content) %></div>
+            <div class="text-gray-800 prose prose-sm max-w-none"><%= render_markdown(@message.content) %></div>
             <div class="timestamp text-xs text-gray-500 mt-1">
               <%= format_timestamp(@message.timestamp) %>
             </div>
@@ -214,10 +214,28 @@ defmodule QuoracleWeb.UI.Message do
 
   defp preview_content(_), do: "(empty message)"
 
-  defp content_text(nil), do: "(empty message)"
-  defp content_text(""), do: "(empty message)"
-  defp content_text(content) when is_binary(content), do: content
-  defp content_text(_), do: "(empty message)"
+  defp render_markdown(nil), do: "(empty message)"
+  defp render_markdown(""), do: "(empty message)"
+
+  defp render_markdown(content) when is_binary(content) do
+    case Earmark.as_html(content, compact_output: true) do
+      {:ok, html, _} -> Phoenix.HTML.raw(sanitize_html(html))
+      {:error, html, _} -> Phoenix.HTML.raw(sanitize_html(html))
+    end
+  end
+
+  defp render_markdown(_), do: "(empty message)"
+
+  defp sanitize_html(html) do
+    html
+    |> String.replace(~r/<script[\s>].*?<\/script>/is, "")
+    |> String.replace(~r/<iframe[\s>].*?<\/iframe>/is, "")
+    |> String.replace(~r/<object[\s>].*?<\/object>/is, "")
+    |> String.replace(~r/<embed[^>]*\/?>/is, "")
+    |> String.replace(~r/\s+on\w+=\s*"[^"]*"/i, "")
+    |> String.replace(~r/\s+on\w+=\s*'[^']*'/i, "")
+    |> String.replace(~r/href\s*=\s*"javascript:[^"]*"/i, "href=\"#\"")
+  end
 
   defp format_timestamp(nil), do: "No timestamp"
 

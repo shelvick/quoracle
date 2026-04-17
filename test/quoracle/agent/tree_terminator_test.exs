@@ -43,6 +43,7 @@ defmodule Quoracle.Agent.TreeTerminatorTest do
       task_id: Keyword.get(opts, :task_id, Ecto.UUID.generate()),
       test_mode: true,
       skip_auto_consensus: true,
+      force_persist: Keyword.get(opts, :force_persist, false),
       sandbox_owner: deps.sandbox_owner
     }
 
@@ -742,35 +743,32 @@ defmodule Quoracle.Agent.TreeTerminatorTest do
   end
 
   # ==========================================================================
-  # Agent Costs Deletion Tests (R15-R17) - v2.0
-  # WorkGroupID: fix-20260211-budget-enforcement
-  # Packet: 2 (Dismissal Reconciliation)
+  # Cost Lifecycle Removal Tests (R21-R23) - v4.0
+  # WorkGroupID: fix-20260411-dismiss-atomic-cost-txn
+  # Packet: 2 (DismissChild Rewire + TreeTerminator Cleanup)
   # ==========================================================================
 
-  describe "agent costs cleanup (v2.0)" do
+  describe "cost lifecycle ownership (v4.0)" do
     alias Quoracle.Costs.AgentCost
 
-    @tag :r15
+    @tag :r21
     @tag :integration
-    test "R15: agent cost records deleted on termination", %{deps: deps} do
-      # Arrange: Create task (required foreign key for costs)
+    test "R21: tree_terminator no longer deletes agent_costs", %{deps: deps} do
       task_id = Ecto.UUID.generate()
 
       {:ok, task} =
         Repo.insert(%TaskSchema{
           id: task_id,
-          prompt: "test task R15",
+          prompt: "test task R21",
           status: "active"
         })
 
-      agent_id = "cost-delete-#{System.unique_integer([:positive])}"
+      agent_id = "cost-keep-#{System.unique_integer([:positive])}"
 
-      # Create agent
-      {:ok, _agent_pid} = spawn_test_agent(agent_id, deps, task_id: task.id)
-      assert agent_exists?(agent_id, deps.registry)
+      {:ok, _agent_pid} =
+        spawn_test_agent(agent_id, deps, task_id: task.id, force_persist: true)
 
-      # Insert cost records for this agent
-      {:ok, _cost1} =
+      {:ok, _cost} =
         Repo.insert(
           AgentCost.changeset(%AgentCost{}, %{
             agent_id: agent_id,
@@ -780,188 +778,70 @@ defmodule Quoracle.Agent.TreeTerminatorTest do
           })
         )
 
-      {:ok, _cost2} =
-        Repo.insert(
-          AgentCost.changeset(%AgentCost{}, %{
-            agent_id: agent_id,
-            task_id: task.id,
-            cost_type: "llm_answer",
-            cost_usd: Decimal.new("0.03")
-          })
-        )
-
-      # Verify costs exist
-      costs_before =
-        Repo.all(from(c in AgentCost, where: c.agent_id == ^agent_id))
-
-      assert length(costs_before) == 2
-
-      # Act: Terminate tree
       TreeTerminator.terminate_tree(agent_id, "parent", "test", terminator_deps(deps))
+      :ok = wait_for_registry_cleanup(agent_id, deps.registry)
 
-      # Assert: Cost records deleted
-      costs_after =
-        Repo.all(from(c in AgentCost, where: c.agent_id == ^agent_id))
-
-      assert costs_after == [],
-             "Agent cost records should be deleted by TreeTerminator"
+      assert Repo.exists?(from(c in AgentCost, where: c.agent_id == ^agent_id)),
+             "TreeTerminator must not delete agent_costs; cost rows are owned by CostTransaction"
     end
 
-    @tag :r16
+    @tag :r22
     @tag :integration
-    test "R16: all cost records deleted for entire terminated tree", %{deps: deps} do
-      # Arrange: Create task
+    test "R22: tree_terminator deletes messages, logs, and agent row", %{deps: deps} do
       task_id = Ecto.UUID.generate()
 
       {:ok, task} =
         Repo.insert(%TaskSchema{
           id: task_id,
-          prompt: "test task R16",
+          prompt: "test task R22",
           status: "active"
         })
 
-      parent_id = "tree-cost-parent-#{System.unique_integer([:positive])}"
-      child_id = "tree-cost-child-#{System.unique_integer([:positive])}"
+      agent_id = "cleanup-#{System.unique_integer([:positive])}"
 
-      # Create parent-child hierarchy
-      {:ok, parent_pid} = spawn_test_agent(parent_id, deps, task_id: task.id)
+      {:ok, _agent_pid} =
+        spawn_test_agent(agent_id, deps, task_id: task.id, force_persist: true)
 
-      {:ok, _child_pid} =
-        spawn_test_agent(child_id, deps,
-          parent_id: parent_id,
-          parent_pid: parent_pid,
-          task_id: task.id
-        )
+      {:ok, _log} =
+        Repo.insert(%Log{
+          agent_id: agent_id,
+          task_id: task.id,
+          action_type: "test_action",
+          params: %{"key" => "value"},
+          result: %{"status" => "ok"},
+          status: "success"
+        })
 
-      # Insert costs for parent
-      {:ok, _} =
-        Repo.insert(
-          AgentCost.changeset(%AgentCost{}, %{
-            agent_id: parent_id,
-            task_id: task.id,
-            cost_type: "llm_consensus",
-            cost_usd: Decimal.new("0.10")
-          })
-        )
+      {:ok, _msg} =
+        Repo.insert(%Message{
+          from_agent_id: agent_id,
+          to_agent_id: "other-agent",
+          task_id: task.id,
+          content: "test message"
+        })
 
-      # Insert costs for child
-      {:ok, _} =
-        Repo.insert(
-          AgentCost.changeset(%AgentCost{}, %{
-            agent_id: child_id,
-            task_id: task.id,
-            cost_type: "llm_consensus",
-            cost_usd: Decimal.new("0.20")
-          })
-        )
+      assert Repo.exists?(from(l in Log, where: l.agent_id == ^agent_id))
+      assert Repo.exists?(from(m in Message, where: m.from_agent_id == ^agent_id))
+      assert Repo.get_by(AgentSchema, agent_id: agent_id)
 
-      # Verify costs exist for both
-      assert Repo.exists?(from(c in AgentCost, where: c.agent_id == ^parent_id))
-      assert Repo.exists?(from(c in AgentCost, where: c.agent_id == ^child_id))
+      TreeTerminator.terminate_tree(agent_id, "parent", "test", terminator_deps(deps))
+      :ok = wait_for_registry_cleanup(agent_id, deps.registry)
 
-      # Subscribe to wait for completion
-      Phoenix.PubSub.subscribe(deps.pubsub, "agents:#{parent_id}")
-
-      # Act: Terminate entire tree from parent
-      TreeTerminator.terminate_tree(parent_id, "external", "test", terminator_deps(deps))
-
-      # Wait for parent termination (last in bottom-up order)
-      assert_receive {:agent_terminated, %{agent_id: ^parent_id}}, 30_000
-
-      # Assert: ALL cost records deleted for both parent and child
-      refute Repo.exists?(from(c in AgentCost, where: c.agent_id == ^parent_id)),
-             "Parent cost records should be deleted"
-
-      refute Repo.exists?(from(c in AgentCost, where: c.agent_id == ^child_id)),
-             "Child cost records should be deleted"
+      refute Repo.exists?(from(l in Log, where: l.agent_id == ^agent_id))
+      refute Repo.exists?(from(m in Message, where: m.from_agent_id == ^agent_id))
+      refute Repo.get_by(AgentSchema, agent_id: agent_id)
     end
 
-    @tag :r17
-    @tag :integration
-    test "R17: task costs reflect absorption only, no double counting", %{deps: deps} do
-      # Arrange: Create task
-      task_id = Ecto.UUID.generate()
+    @tag :r23
+    @tag :unit
+    test "R23: tree_terminator source contains no AgentCost references" do
+      source =
+        "../../../lib/quoracle/agent/tree_terminator.ex"
+        |> Path.expand(__DIR__)
+        |> File.read!()
 
-      {:ok, task} =
-        Repo.insert(%TaskSchema{
-          id: task_id,
-          prompt: "test task R17",
-          status: "active"
-        })
-
-      parent_id = "absorb-parent-#{System.unique_integer([:positive])}"
-      child_id = "absorb-child-#{System.unique_integer([:positive])}"
-
-      # Create parent-child hierarchy
-      {:ok, parent_pid} = spawn_test_agent(parent_id, deps, task_id: task.id)
-
-      {:ok, _child_pid} =
-        spawn_test_agent(child_id, deps,
-          parent_id: parent_id,
-          parent_pid: parent_pid,
-          task_id: task.id
-        )
-
-      # Insert child's original cost (will be deleted by TreeTerminator)
-      {:ok, _} =
-        Repo.insert(
-          AgentCost.changeset(%AgentCost{}, %{
-            agent_id: child_id,
-            task_id: task.id,
-            cost_type: "llm_consensus",
-            cost_usd: Decimal.new("30.00")
-          })
-        )
-
-      # Create absorption record under parent (this simulates what DismissChild v4.0 does
-      # BEFORE TreeTerminator deletes the original records)
-      {:ok, _} =
-        Repo.insert(
-          AgentCost.changeset(%AgentCost{}, %{
-            agent_id: parent_id,
-            task_id: task.id,
-            cost_type: "child_budget_absorbed",
-            cost_usd: Decimal.new("30.00"),
-            metadata: %{
-              "child_agent_id" => child_id,
-              "child_allocated" => "50.00",
-              "child_tree_spent" => "30.00",
-              "unspent_returned" => "20.00"
-            }
-          })
-        )
-
-      # Subscribe to wait for completion
-      Phoenix.PubSub.subscribe(deps.pubsub, "agents:#{child_id}")
-
-      # Act: Terminate child tree (simulates TreeTerminator deleting child's original costs)
-      TreeTerminator.terminate_tree(child_id, parent_id, "dismissed", terminator_deps(deps))
-
-      # Wait for child termination
-      assert_receive {:agent_terminated, %{agent_id: ^child_id}}, 30_000
-
-      # Assert: Child's original cost records are deleted
-      refute Repo.exists?(from(c in AgentCost, where: c.agent_id == ^child_id)),
-             "Child's original cost records should be deleted"
-
-      # Assert: Parent's absorption record still exists (parent was not terminated)
-      parent_costs = Repo.all(from(c in AgentCost, where: c.agent_id == ^parent_id))
-      assert length(parent_costs) == 1
-      assert hd(parent_costs).cost_type == "child_budget_absorbed"
-      assert Decimal.equal?(hd(parent_costs).cost_usd, Decimal.new("30.00"))
-
-      # Assert: Task-level total reflects only the absorption (not original + absorption)
-      task_costs =
-        Repo.all(from(c in AgentCost, where: c.task_id == ^task.id))
-
-      total =
-        task_costs
-        |> Enum.map(& &1.cost_usd)
-        |> Enum.reject(&is_nil/1)
-        |> Enum.reduce(Decimal.new("0"), &Decimal.add/2)
-
-      assert Decimal.equal?(total, Decimal.new("30.00")),
-             "Task total should be 30.00 (absorption only), not 60.00 (double-counted)"
+      refute source =~ "alias Quoracle.Costs.AgentCost"
+      refute source =~ "Repo.delete_all(from(c in AgentCost"
     end
   end
 end

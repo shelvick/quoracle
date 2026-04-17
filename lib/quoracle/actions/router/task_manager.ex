@@ -40,30 +40,6 @@ defmodule Quoracle.Actions.Router.TaskManager do
   end
 
   @doc """
-  Handles interrupting a wait for a task.
-  """
-  @spec interrupt_wait(map(), reference()) :: map()
-  def interrupt_wait(state, task_ref) do
-    case Map.get(state.active_tasks, task_ref) do
-      %{wait_timer: timer_ref} = task_info when timer_ref != nil ->
-        Process.cancel_timer(timer_ref)
-
-        # Send immediate continue message to the agent
-        if agent_pid = Map.get(task_info, :agent_pid) do
-          send(agent_pid, :trigger_consensus)
-        end
-
-        # Clear the timer from the task info
-        updated_task = Map.put(task_info, :wait_timer, nil)
-        new_tasks = Map.put(state.active_tasks, task_ref, updated_task)
-        %{state | active_tasks: new_tasks}
-
-      _ ->
-        state
-    end
-  end
-
-  @doc """
   Cleans up after task completion.
   """
   @spec cleanup_task(map(), reference()) :: map()

@@ -17,7 +17,6 @@ defmodule Quoracle.Agent.TreeTerminator do
 
   alias Quoracle.Agent.{Core, DynSup, RegistryQueries}
   alias Quoracle.Agents.Agent, as: AgentSchema
-  alias Quoracle.Costs.AgentCost
   alias Quoracle.Logs.Log
   alias Quoracle.Messages.Message
   alias Quoracle.Repo
@@ -161,31 +160,26 @@ defmodule Quoracle.Agent.TreeTerminator do
     end
   end
 
-  # Delete all database records for an agent
-  # Wrapped in try/catch to handle test sandbox cleanup race (sandbox owner exits before Task completes)
+  # Delete non-cost database records for an agent.
+  # Cost rows are handled atomically by DismissChild.CostTransaction.
   @spec delete_agent_records(String.t()) :: :ok
   defp delete_agent_records(agent_id) do
     try do
-      # Delete in order respecting foreign keys
-      # 1. Delete agent cost records (prevents double-counting after budget absorption)
-      Repo.delete_all(from(c in AgentCost, where: c.agent_id == ^agent_id))
-
-      # 2. Delete messages (both sent and received)
+      # Delete in order respecting foreign keys.
+      # 1. Delete messages (both sent and received)
       Repo.delete_all(
         from(m in Message, where: m.from_agent_id == ^agent_id or m.to_agent_id == ^agent_id)
       )
 
-      # 3. Delete logs
+      # 2. Delete logs
       Repo.delete_all(from(l in Log, where: l.agent_id == ^agent_id))
 
-      # 4. Delete agent record
+      # 3. Delete agent record
       Repo.delete_all(from(a in AgentSchema, where: a.agent_id == ^agent_id))
 
       :ok
     catch
-      # Handle sandbox owner exit race condition in tests
-      # This happens when test exits before TreeTerminator Task completes
-      # Catch all exit patterns - cleanup is best-effort, agent is already terminated
+      # Handle sandbox owner exit race condition in tests.
       :exit, _ -> :ok
     end
   end

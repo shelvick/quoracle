@@ -4,7 +4,7 @@ defmodule Quoracle.MixProject do
   def project do
     [
       app: :quoracle,
-      version: "0.2.3",
+      version: "0.2.4",
       elixir: "~> 1.18",
       listeners: [Phoenix.CodeReloader],
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -159,7 +159,10 @@ defmodule Quoracle.MixProject do
       {:req_cassette, "~> 0.5", only: :test},
 
       # Image resizing
-      {:image, "~> 0.54"}
+      {:image, "~> 0.54"},
+
+      # Markdown rendering
+      {:earmark, "~> 1.4"}
     ]
   end
 end

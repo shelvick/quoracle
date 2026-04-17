@@ -7,17 +7,6 @@ defmodule Quoracle.Actions.Router.ClientHelpers do
   @default_timeout 5000
 
   @doc """
-  Interrupts a timed wait for an action.
-  Causes the action to continue immediately by sending a continue_consensus message.
-  """
-  @spec interrupt_wait(reference()) :: :ok
-  def interrupt_wait(task_ref) when is_reference(task_ref) do
-    # In the mock implementation, we just need to send continue_consensus immediately
-    send(self(), :trigger_consensus)
-    :ok
-  end
-
-  @doc """
   Cancels a running action task.
   """
   @spec cancel_action(reference()) :: :ok

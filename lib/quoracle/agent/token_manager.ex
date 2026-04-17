@@ -4,6 +4,8 @@ defmodule Quoracle.Agent.TokenManager do
   Handles token estimation, usage tracking, and context percentage calculations.
   """
 
+  alias Quoracle.Models.CredentialManager
+
   @default_context_limit 128_000
 
   @doc """
@@ -333,12 +335,37 @@ defmodule Quoracle.Agent.TokenManager do
   # Find a model in LLMDB by its spec string.
   # Uses LLMDB.model/1 which normalizes provider names (e.g., "google-vertex" → :google_vertex)
   # preventing mismatches between hyphenated credential specs and underscored LLMDB atoms.
+  #
+  # Credential-alias fallback: when the given string is a user-assigned credential
+  # model_id (e.g., "gemini-3-flash-preview2" aliasing the same underlying model as
+  # another credential) rather than a provider:model spec, retry the LLMDB lookup
+  # using the credential's model_spec column. This ensures profiles containing
+  # multiple credentials that share one underlying model report the real model's
+  # context/output limits instead of silently defaulting.
   defp find_model_by_spec(model_spec) when is_binary(model_spec) do
     case LLMDB.model(model_spec) do
-      {:ok, model} -> {:ok, Map.from_struct(model)}
-      {:error, _} -> :error
+      {:ok, model} ->
+        {:ok, Map.from_struct(model)}
+
+      {:error, _} ->
+        resolve_via_credential(model_spec)
     end
   end
 
   defp find_model_by_spec(_), do: :error
+
+  defp resolve_via_credential(model_id) do
+    with {:ok, %{model_spec: spec}} when is_binary(spec) <-
+           CredentialManager.get_credentials(model_id),
+         true <- spec != model_id,
+         {:ok, model} <- LLMDB.model(spec) do
+      {:ok, Map.from_struct(model)}
+    else
+      _ -> :error
+    end
+  rescue
+    # DB may be unavailable in tests that don't use DataCase, and we must not
+    # fail a pure token-limit lookup because of that. Fall through to default.
+    DBConnection.OwnershipError -> :error
+  end
 end

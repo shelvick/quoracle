@@ -718,7 +718,17 @@ defmodule Quoracle.PersistenceResilienceTest do
         with_log(fn ->
           pause_task =
             Elixir.Task.async(fn ->
-              GenServer.stop(pid, :normal, :infinity)
+              if Process.alive?(pid) do
+                try do
+                  GenServer.stop(pid, :normal, :infinity)
+                catch
+                  :exit, :normal -> :ok
+                  :exit, {:normal, _} -> :ok
+                  :exit, _ -> :ok
+                end
+              else
+                :ok
+              end
             end)
 
           restore_task =

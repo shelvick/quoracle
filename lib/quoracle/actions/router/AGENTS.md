@@ -32,7 +32,6 @@
 - ClientAPI.validate_action_hard_rules/2 (private): Extracts grove_hard_rules from opts[:parent_config], delegates to HardRuleEnforcer.check_action/3
 - ClientAPI.parent_config_value/2 (private): Dual atom/string key lookup on parent_config maps
 - ClientHelpers.await_result/3: Wait for async action completion (default 5s timeout)
-- ClientHelpers.interrupt_wait/1: Interrupt pending wait
 - ClientHelpers.cancel_action/1: Cancel action execution
 - ClientHelpers.task_status/2: Query task status
 - Security.resolve_secrets/1: Replace {{SECRET:name}} templates

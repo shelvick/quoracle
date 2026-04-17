@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-04-17
+
+### Added
+
+- Markdown rendering for Mailbox messages via Earmark: headings, bold/italic, code blocks, and lists render formatted instead of as raw text. Includes XSS sanitization that strips script/iframe/object/embed tags, event handlers, and `javascript:` URLs.
+
+### Fixed
+
+- Credential-alias token limits: profiles containing multiple credentials that share one underlying model (e.g., the same Gemini model registered under two credential names) now use the real model's context/output limits instead of silently defaulting to 128K. Previously this caused Vertex/Gemini to reject requests whose `maxOutputTokens` exceeded the true model cap.
+- Child-dismiss cost decrease bug: cost absorption on child dismiss now runs inside a single `Repo.transaction` (delete + insert), eliminating the read-committed gap where dashboard totals briefly decreased. Defense-in-depth monotonic guard added to the dashboard as a fallback. Fifth and final fix for this recurring regression.
+- Async shell Phase 1 results no longer leave pending_actions without `acked: true`, which previously caused incoming messages to silently queue during shell execution.
+
+### Removed
+
+- Dead `interrupt_wait` code paths from Router, ClientHelpers, WaitHandlers, and TaskManager (zero callers; would have crashed if invoked due to references to a non-existent state field).
+
 ## [0.2.3] - 2026-03-27
 
 ### Changed

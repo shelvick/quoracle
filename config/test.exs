@@ -18,9 +18,9 @@ config :quoracle, Quoracle.Repo,
   database: "quoracle_test#{System.get_env("MIX_TEST_PARTITION")}",
   pool: Ecto.Adapters.SQL.Sandbox,
   # Must exceed max_cases (16) + headroom for spawned processes.
-  # Capped at 40 to stay within PostgreSQL max_connections (100) when
-  # dev server is also running (dev pool_size 10 + test 40 + overhead).
-  pool_size: min(System.schedulers_online() * 4, 40),
+  # Keep this conservative to avoid transient `too_many_connections`
+  # errors when other local services also hold DB connections.
+  pool_size: 20,
   # Increase queue timeouts for CI/heavy parallel load scenarios
   queue_target: 5000,
   queue_interval: 30_000

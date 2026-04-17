@@ -104,6 +104,30 @@ defmodule Quoracle.Actions.DismissChildTest do
     end
   end
 
+  # Wait for parent children state to reflect asynchronous child_dismissed cast.
+  defp wait_for_child_removed(parent_pid, child_id, timeout \\ 1000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+
+    wait_loop = fn wait_loop ->
+      {:ok, parent_state} = Core.get_state(parent_pid)
+
+      if Enum.any?(parent_state.children, &(&1.agent_id == child_id)) do
+        if System.monotonic_time(:millisecond) < deadline do
+          receive do
+          after
+            5 -> wait_loop.(wait_loop)
+          end
+        else
+          {:error, :timeout}
+        end
+      else
+        :ok
+      end
+    end
+
+    wait_loop.(wait_loop)
+  end
+
   # Build opts for DismissChild.execute/3
   defp action_opts(deps) do
     [
@@ -459,9 +483,10 @@ defmodule Quoracle.Actions.DismissChildTest do
       # Act: Parent dismisses child (should cast child_dismissed to parent)
       {:ok, _} = DismissChild.execute(%{child_id: "child-R13"}, "parent-R13", action_opts(deps))
 
-      # Wait for termination
+      # Wait for termination and parent-state reconciliation
       assert_receive {:agent_terminated, _}, 30_000
       :ok = wait_for_registry_cleanup("child-R13", deps.registry)
+      :ok = wait_for_child_removed(parent_pid, "child-R13")
 
       # Assert: Parent should have removed the child from children list
       {:ok, state_after} = Core.get_state(parent_pid)
@@ -505,9 +530,10 @@ defmodule Quoracle.Actions.DismissChildTest do
       # Act: Parent dismisses child
       {:ok, _} = DismissChild.execute(%{child_id: child_id}, "parent-R14", action_opts(deps))
 
-      # Wait for termination
+      # Wait for termination and parent-state reconciliation
       assert_receive {:agent_terminated, _}, 30_000
       :ok = wait_for_registry_cleanup(child_id, deps.registry)
+      :ok = wait_for_child_removed(parent_pid, child_id)
 
       # Assert: The correct child was removed (by child_id)
       {:ok, state_after} = Core.get_state(parent_pid)
